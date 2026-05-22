@@ -5,6 +5,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSettings } from './composables/useSettings.js';
 import { useLogs } from './composables/useLogs.js';
+import BrowseTab from './components/BrowseTab.vue';
 
 const { settings, setTheme, setDoodleTheme, setCandleEnabled, THEMES, DOODLE_THEMES } = useSettings();
 const { log: logInfo, warn: logWarn, error: logError, formatExport: formatLogsExport } = useLogs();
@@ -36,6 +37,14 @@ const conflictsModalRef = ref(null);
 const mergedModalRef = ref(null);
 const policy = ref('last_wins');
 const overrides = ref(new Map());
+
+// Top-level tab. 'merge' is the original view; 'browse' is the VPK file
+// browser (auto-loads the local Deadlock install).
+const activeTab = ref('merge');
+const TABS = [
+  { key: 'merge', label: 'Merge' },
+  { key: 'browse', label: 'Browse' },
+];
 
 // Texture preview cache. Keyed by `${vpkPath}::${entry}`. Values are one of:
 //   { state: 'loading' }
@@ -495,10 +504,30 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- Tab strip: top-level routes inside the app shell. -->
+      <div
+        role="tablist"
+        aria-label="Sections"
+        class="flex items-center gap-1 px-3 pt-1 pb-0 border-b border-surface-200 dark:border-surface-800 relative z-10"
+      >
+        <button
+          v-for="t in TABS"
+          :key="t.key"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === t.key"
+          @click="activeTab = t.key"
+          class="text-xs font-serif tracking-wide px-3 py-1.5 rounded-t-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-700/45 dark:focus-visible:ring-accent-300/45"
+          :class="activeTab === t.key
+            ? 'text-accent-700 dark:text-accent-300 bg-surface-100/70 dark:bg-surface-800/40 border-b-2 border-accent-600 dark:border-accent-300 -mb-px'
+            : 'text-ink-500 dark:text-ink-300 hover:text-ink-800 dark:hover:text-ink-100 border-b-2 border-transparent -mb-px'"
+        >{{ t.label }}</button>
+      </div>
+
       <!-- Content + footer share a single doodle overlay so the whole sheet
            below the title bar carries the same tiled doodles. -->
       <div class="doodle-overlay flex-1 min-h-0 flex flex-col">
-      <div class="flex-1 min-h-0 overflow-y-auto">
+      <div v-if="activeTab === 'merge'" class="flex-1 min-h-0 overflow-y-auto">
         <div class="min-h-full flex flex-col p-3 sm:p-4 md:p-8">
 
           <!-- Empty state -->
@@ -708,6 +737,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <BrowseTab v-else-if="activeTab === 'browse'" class="flex-1 min-h-0" />
       </div>
 
       <!-- Warm vignette: a soft candle-light glow. Toggled by html[data-candle="on"]. -->

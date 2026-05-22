@@ -128,6 +128,41 @@ async fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+/// Best-effort resolution of the local Deadlock `pak01_dir.vpk`. Checks the
+/// standard Steam install roots on Linux and Windows. Returns `None` if no
+/// candidate exists; the frontend then falls back to asking the user.
+#[tauri::command]
+async fn default_deadlock_vpk_path() -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if cfg!(target_os = "linux") {
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(
+                format!("{home}/.steam/steam/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk")
+                    .into(),
+            );
+            candidates.push(
+                format!(
+                    "{home}/.local/share/Steam/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk"
+                )
+                .into(),
+            );
+        }
+    } else if cfg!(target_os = "windows") {
+        candidates.push(
+            "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Deadlock\\game\\citadel\\pak01_dir.vpk"
+                .into(),
+        );
+        candidates.push(
+            "C:\\Program Files\\Steam\\steamapps\\common\\Deadlock\\game\\citadel\\pak01_dir.vpk"
+                .into(),
+        );
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 #[derive(Serialize)]
 struct TexturePreview {
     /// `data:image/png;base64,...` URL, ready to drop into `<img :src>`.
@@ -360,7 +395,8 @@ pub fn run() {
             path_exists,
             reveal_in_folder,
             preview_texture,
-            save_text_file
+            save_text_file,
+            default_deadlock_vpk_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

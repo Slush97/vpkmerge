@@ -19,7 +19,7 @@ mod kv3;
 mod resource;
 mod texture;
 
-pub use edit::{replace_face0_mip0, replace_face_mip};
+pub use edit::{replace_face0_mip0, replace_face_mip, replace_face_mip_chain, replace_mip_chain};
 pub use error::{DecodeError, EncodeError};
 pub use texture::{
     decode::decode_image,

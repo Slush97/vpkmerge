@@ -4,10 +4,11 @@ Pure-Rust Source 2 `.vtex_c` texture decoder. Built for the vpkmerge GUI's
 conflict-modal texture preview so two mods that touch the same texture can be
 compared visually without shipping a .NET runtime.
 
-Status: M1-M7, M9, partial M10 (cubemap faces), M11 (PNG/JPEG path) are in.
-Morphic decodes RGBA8888, BGRA8888, DXT1, DXT5, ATI1N, ATI2N, BC7, BC6H
-(Rgba16F output), and inline PNG_RGBA8888 / PNG_DXT5 / JPEG_DXT5, covering
-~86% of Deadlock's `.vtex_c` corpus by count. `DecodeOptions` exposes
+Status: M1-M7, M9, partial M10 (cubemap faces), M11 (PNG/JPEG path), and
+encoder phases E1-E3 are in. Morphic decodes RGBA8888, BGRA8888, DXT1,
+DXT5, ATI1N, ATI2N, BC7, BC6H (Rgba16F output), and inline
+PNG_RGBA8888 / PNG_DXT5 / JPEG_DXT5, covering ~86% of Deadlock's
+`.vtex_c` corpus by count. `DecodeOptions` exposes
 `mip` (any level in `0..mip_count`) and `face` (0..=5 for cubemaps). 3D
 depth slices and texture arrays are still pending. RGBA16161616F and
 inline WebP return `DecodeError::Unimplemented`. The golden harness diffs
@@ -34,31 +35,37 @@ let img = morphic::decode_at(&bytes, &DecodeOptions { mip: 0, slice: 0, face: 0 
 `Image::data` is either `Rgba8(Vec<u8>)` for LDR formats or `Rgba16F(Vec<f16>)`
 for HDR formats (BC6H, RGBA16161616F). Top-left origin, row-major.
 
-### Edit (Phase 1)
+### Edit
 
 `morphic::encode_image` is the inverse of `decode_image`, producing wire
-bytes for one face/mip of a chosen format. `morphic::replace_face0_mip0`
-splices those bytes back into an existing `.vtex_c`, returning a fresh
-owned copy.
+bytes for one face/mip of a chosen format. Three splice entry points sit
+on top of it:
+
+- `replace_face0_mip0` / `replace_face_mip`: narrow, single-slot. Replace
+  exactly one face/mip with newly-encoded bytes of the same length. Use
+  when you only need to touch one mip and want to leave the rest of the
+  file byte-exact.
+- `replace_mip_chain` / `replace_face_mip_chain`: regenerate the full
+  per-face mip pyramid from a new mip-0 [`Image`]. Downsamples 2x2 (box
+  filter) at each level, re-encodes in the texture's format, and splices
+  every mip. For cubemaps, other faces remain byte-exact.
 
 ```rust
-use morphic::{decode, encode_image, inspect, replace_face0_mip0};
+use morphic::{decode, inspect, replace_mip_chain};
 
 let bytes = std::fs::read("hero_albedo.vtex_c")?;
 let info = inspect(&bytes)?;
 
-// Decode mip 0 face 0, hand the pixels off to an external editor, then:
+// Decode mip 0 face 0, hand the pixels off to an external editor, then
+// regenerate the whole mip chain from the edited result.
 let img = decode(&bytes)?;
-let new_payload = encode_image(&img, info.format)?;
-let modified = replace_face0_mip0(&bytes, &new_payload)?;
+let modified = replace_mip_chain(&bytes, &img)?;
 std::fs::write("hero_albedo.modified.vtex_c", &modified)?;
 ```
 
-Phase 1 keeps the splice deliberately narrow: same dimensions, same format,
-same byte length. Only the uncompressed formats (`Rgba8888`, `Bgra8888`)
-encode today, and inline `PngRgba8888` can be encoded but not spliced
-(re-encoded PNG payloads almost never match the original length). Block
-compression and full mip-chain regeneration land in Phase 2.
+Constraints: same dimensions and same format as the original (no
+resize or format conversion yet), and no support for inline `PNG_*` /
+`JPEG_*` formats (no on-wire mip chain to regenerate).
 
 ## Layout
 
@@ -137,7 +144,7 @@ recolor workflows ("decode → edit externally → re-encode → repack into VPK
 | E1    | `replace_face_mip` splice (same length, same format) | Done |
 | E2    | Block-compressed LDR encoders (DXT1/DXT5, BC4/5, BC7) | Done (via `intel_tex_2`) |
 | E2    | BC6H HDR encoder (unsigned UF16, matches decoder) | Done (via `intel_tex_2`) |
-| E3    | Mip-chain regeneration on splice         | Pending |
+| E3    | Mip-chain regeneration on splice         | Done (`replace_mip_chain` / `replace_face_mip_chain`; 2x2 box downsample, re-encode each level, isolated per face) |
 | E3    | VPK entry replace (in vpkmerge-cli/GUI)  | Pending |
 
 `intel_tex_2` (Intel ISPC texture compressor) handles all the BCn encoders.
@@ -146,11 +153,17 @@ The ASTC kernel in those objects depends on C++ exception handling
 (`__gxx_personality_v0`), so `morphic/build.rs` links libstdc++ on Linux
 and libc++ on macOS to satisfy that.
 
-The Phase 2 splice is still deliberately narrow: same dimensions, same
-format, same byte length, and only the one face/mip slot. Multi-mip
-textures retain stale mips after splicing mip 0; multi-face cubemaps
-retain stale faces. Mip-chain regeneration (re-resize + re-encode each
-level) and same-resource-different-bytes-region rewriting come in Phase 3.
+`replace_mip_chain` regenerates the full per-face mip pyramid by 2x2 box
+downsampling from a new mip-0 image and re-encoding each level. For
+cubemaps, only the targeted face's pyramid is touched; the other five
+faces remain byte-exact. Sub-block mip tails (e.g. 2x2, 1x1) are encoded
+by padding to the next 4x4 multiple via edge replication, then taking the
+encoder's first block; the decoder's matching scratch-buffer path lifts
+those bytes back into the smaller mip dims.
+
+Still pending: same-resource-different-format / different-dim rewrites,
+3D texture arrays, and VPK entry replacement (so a re-encoded `.vtex_c`
+can flow back into a `.vpk` from the CLI / GUI).
 
 ## Attribution
 

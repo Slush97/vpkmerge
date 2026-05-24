@@ -35,7 +35,7 @@ const lastReport = ref(null);
 const lastFocused = ref(null);
 const conflictsModalRef = ref(null);
 const mergedModalRef = ref(null);
-const policy = ref('last_wins');
+const policy = ref('first_wins');
 const overrides = ref(new Map());
 
 // Top-level tab. 'merge' is the original view; 'browse' is the VPK file
@@ -108,8 +108,8 @@ function prefetchPreviewsForConflicts() {
 }
 
 const POLICY_LABELS = {
-  last_wins: 'Last wins',
-  first_wins: 'First wins',
+  first_wins: 'Top wins',
+  last_wins: 'Bottom wins',
   strict: 'Refuse',
 };
 
@@ -135,7 +135,7 @@ const conflicts = computed(() => {
   const out = [];
   for (const [path, idxs] of owners) {
     if (idxs.length > 1) {
-      out.push({ path, winner: idxs[idxs.length - 1], owners: idxs });
+      out.push({ path, winner: idxs[0], owners: idxs });
     }
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
@@ -620,7 +620,7 @@ onBeforeUnmount(() => {
             </div>
 
             <p class="text-xs font-serif italic text-ink-500 dark:text-ink-300 text-center">
-              Drag to reorder. Mods lower in the list win on conflict.
+              Drag to reorder. Mods higher in the list win on conflict.
             </p>
 
             <!-- Output -->
@@ -651,12 +651,12 @@ onBeforeUnmount(() => {
                   On conflict
                 </h4>
                 <span class="text-[10px] italic font-serif text-ink-500 dark:text-ink-300">
-                  Default: later mod in the list wins
+                  Default: higher mod in the list wins
                 </span>
               </div>
               <div role="radiogroup" aria-label="Collision policy" class="flex gap-1 p-1 bg-surface-100/70 dark:bg-surface-800/40 rounded-md">
                 <button
-                  v-for="key in ['last_wins', 'first_wins', 'strict']"
+                  v-for="key in ['first_wins', 'last_wins', 'strict']"
                   :key="key"
                   type="button"
                   role="radio"
@@ -669,8 +669,8 @@ onBeforeUnmount(() => {
                 >{{ POLICY_LABELS[key] }}</button>
               </div>
               <p class="text-[11px] font-serif italic text-ink-500 dark:text-ink-300 mt-2">
-                <span v-if="policy === 'last_wins'">Later mods in the list override earlier ones on collision.</span>
-                <span v-else-if="policy === 'first_wins'">Earlier mods in the list win; later duplicates are dropped.</span>
+                <span v-if="policy === 'first_wins'">Higher mods in the list override lower ones on collision.</span>
+                <span v-else-if="policy === 'last_wins'">Lower mods in the list win; higher duplicates are dropped.</span>
                 <span v-else>Refuse to merge if any path collides. Resolve manually via "view conflicts".</span>
               </p>
             </div>

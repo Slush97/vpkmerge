@@ -75,6 +75,8 @@ Chunked inputs (`*_dir.vpk` + `*_000.vpk`, `*_001.vpk`, ...): pass only the `_di
 
 Tauri v2 desktop app: drag-and-drop file input, visual conflict resolver, reorderable mod priority, custom title bar (`decorations: false`).
 
+GUI default is **top of the list wins** (highest priority overrides), which maps to core `FirstWins` since the list is sent top-to-bottom. This intentionally differs from the core/CLI default (`LastWins`); the GUI exposes both as "Top wins" / "Bottom wins" plus "Refuse" (strict).
+
 ```bash
 cd gui
 pnpm install

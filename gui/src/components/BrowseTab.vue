@@ -283,36 +283,39 @@ const fileCount = computed(() =>
               <span v-else>{{ visibleRows.length }} match{{ visibleRows.length === 1 ? '' : 'es' }}</span>
             </p>
           </div>
-          <div class="flex-1 min-h-0 overflow-y-auto">
-            <ul class="py-1">
+          <div class="flex-1 min-h-0 overflow-auto">
+            <ul class="py-1 min-w-max">
               <li
                 v-for="row in visibleRows"
                 :key="`${row.type}:${row.path}`"
-                class="font-mono text-[11px] leading-snug"
+                class="font-mono text-xs leading-snug whitespace-nowrap"
               >
                 <button
                   v-if="row.type === 'folder'"
                   type="button"
                   @click="toggleFolder(row.path)"
-                  class="w-full flex items-center gap-1 text-left px-2 py-0.5 hover:bg-surface-100/70 dark:hover:bg-surface-800/50 focus-visible:outline-none focus-visible:bg-surface-100/70 dark:focus-visible:bg-surface-800/50 rounded-sm text-ink-800 dark:text-ink-100"
-                  :style="{ paddingLeft: `${0.5 + row.depth * 0.9}rem` }"
+                  class="w-full flex items-center gap-1.5 text-left pr-3 py-1 hover:bg-surface-100/70 dark:hover:bg-surface-800/50 focus-visible:outline-none focus-visible:bg-surface-100/70 dark:focus-visible:bg-surface-800/50 rounded-sm text-ink-800 dark:text-ink-100 font-medium"
+                  :style="{ paddingLeft: `${0.5 + row.depth * 0.75}rem` }"
                 >
-                  <span class="text-ink-500 dark:text-ink-300 w-3 inline-block">{{ row.expanded ? '▾' : '▸' }}</span>
-                  <span class="truncate">{{ row.name }}/</span>
+                  <span class="text-ink-700 dark:text-ink-200 w-3 inline-block tabular-nums">{{ row.expanded ? '▾' : '▸' }}</span>
+                  <span class="text-accent-700/80 dark:text-accent-300/80">{{ row.name }}</span><span class="text-ink-500 dark:text-ink-300">/</span>
                 </button>
                 <button
                   v-else
                   type="button"
                   @click="selectFile(row.path)"
-                  class="w-full flex items-center gap-1 text-left px-2 py-0.5 rounded-sm focus-visible:outline-none truncate"
+                  class="w-full flex items-center gap-1.5 text-left pr-3 py-1 rounded-sm focus-visible:outline-none"
                   :class="selected === row.path
-                    ? 'bg-accent-600/15 dark:bg-accent-300/15 text-accent-700 dark:text-accent-300'
-                    : 'text-ink-700 dark:text-ink-200 hover:bg-surface-100/70 dark:hover:bg-surface-800/50'"
-                  :style="{ paddingLeft: `${0.5 + (row.depth + 1) * 0.9}rem` }"
+                    ? 'bg-accent-600/15 dark:bg-accent-300/15 text-accent-700 dark:text-accent-300 font-medium'
+                    : 'text-ink-800 dark:text-ink-100 hover:bg-surface-100/70 dark:hover:bg-surface-800/50'"
+                  :style="{ paddingLeft: `${0.5 + (row.depth + 1) * 0.75}rem` }"
                   :title="row.path"
                 >
-                  <span class="text-ink-500 dark:text-ink-300 w-3 inline-block">·</span>
-                  <span class="truncate">{{ row.name }}</span>
+                  <span
+                    class="w-3 inline-block"
+                    :class="selected === row.path ? 'text-accent-700 dark:text-accent-300' : 'text-ink-500 dark:text-ink-300'"
+                  >·</span>
+                  <span>{{ row.name }}</span>
                 </button>
               </li>
             </ul>

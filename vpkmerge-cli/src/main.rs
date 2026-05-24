@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use vpkmerge_core::{
-    merge, split, CollisionPolicy, MergeOptions, OverlapPolicy, PathPredicate, SplitOptions,
-    SplitOutput,
+    extract_portraits, merge, split, CollisionPolicy, MergeOptions, OverlapPolicy, PathPredicate,
+    PortraitInfo, SplitOptions, SplitOutput,
 };
 
 #[derive(Parser)]
@@ -45,6 +45,28 @@ struct Cli {
 enum Command {
     /// Route entries from one VPK into N output VPKs by path predicate.
     Split(SplitCmd),
+
+    /// Extract and decode hero portrait/card art from a VPK to PNG.
+    Portrait(PortraitCmd),
+}
+
+#[derive(Args)]
+struct PortraitCmd {
+    /// Input VPK to read portraits from.
+    input: PathBuf,
+
+    /// Directory to write decoded PNGs into (created if missing).
+    #[arg(long, value_name = "DIR")]
+    out: PathBuf,
+
+    /// Only extract portraits for this hero codename (e.g. "hornet").
+    /// Omit to extract every hero in the VPK.
+    #[arg(long, value_name = "CODENAME")]
+    hero: Option<String>,
+
+    /// Write the JSON manifest to this file instead of stdout.
+    #[arg(long, value_name = "FILE")]
+    manifest: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -86,10 +108,46 @@ struct PlanOutput {
     prefixes: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+struct Manifest {
+    input: String,
+    portraits: Vec<ManifestEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct ManifestEntry {
+    source_path: String,
+    hero_codename: String,
+    variant: String,
+    width: u32,
+    height: u32,
+    format_name: String,
+    /// Absolute path to the decoded PNG, or null if not decoded.
+    output_path: Option<String>,
+    /// Why the texture was skipped (null when decoded).
+    skipped_reason: Option<String>,
+}
+
+impl From<PortraitInfo> for ManifestEntry {
+    fn from(p: PortraitInfo) -> Self {
+        Self {
+            source_path: p.source_path,
+            hero_codename: p.hero_codename,
+            variant: p.variant.as_str().to_string(),
+            width: p.width,
+            height: p.height,
+            format_name: p.format_name.to_string(),
+            output_path: p.output_path.map(|p| p.display().to_string()),
+            skipped_reason: p.skipped_reason,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Some(Command::Split(args)) => run_split(args),
+        Some(Command::Portrait(args)) => run_portrait(args),
         None => run_merge(cli),
     }
 }
@@ -190,6 +248,56 @@ fn run_split(args: SplitCmd) -> Result<()> {
             "  {:<6} (dropped, no residual configured)  {} entries",
             "drop", report.unmatched
         );
+    }
+    Ok(())
+}
+
+fn run_portrait(args: PortraitCmd) -> Result<()> {
+    let PortraitCmd {
+        input,
+        out,
+        hero,
+        manifest,
+    } = args;
+    let portraits = extract_portraits(&input, hero.as_deref(), &out)?;
+
+    let decoded = portraits.iter().filter(|p| p.output_path.is_some()).count();
+    let skipped = portraits.len() - decoded;
+    eprintln!(
+        "{}: {} portrait{} found, {decoded} decoded, {skipped} skipped",
+        input.display(),
+        portraits.len(),
+        if portraits.len() == 1 { "" } else { "s" },
+    );
+    for p in &portraits {
+        match (&p.output_path, &p.skipped_reason) {
+            (Some(out), _) => eprintln!(
+                "  {:<13} {:>4}x{:<4} {:<12} -> {}",
+                p.hero_codename,
+                p.width,
+                p.height,
+                p.variant.as_str(),
+                out.display()
+            ),
+            (None, Some(reason)) => eprintln!(
+                "  {:<13} {:<12} skipped: {reason}",
+                p.hero_codename,
+                p.variant.as_str()
+            ),
+            (None, None) => {}
+        }
+    }
+
+    let manifest_data = Manifest {
+        input: input.display().to_string(),
+        portraits: portraits.into_iter().map(ManifestEntry::from).collect(),
+    };
+    let json = serde_json::to_string_pretty(&manifest_data).context("serializing manifest")?;
+    if let Some(path) = &manifest {
+        std::fs::write(path, &json).with_context(|| format!("writing {}", path.display()))?;
+        eprintln!("manifest: {}", path.display());
+    } else {
+        println!("{json}");
     }
     Ok(())
 }

@@ -12,6 +12,9 @@ categories = ["game-development", "filesystem"]
 anyhow = "1"
 valve_pak = "0.1"
 tempfile = "3"
+# Source 2 .vtex_c decoder (same workspace). Used to turn extracted portrait
+# textures into PNGs; covers the uncompressed, embedded-PNG, and BCn formats.
+morphic = { path = "../morphic", version = "0.0.1" }
 
 [lints]
 workspace = true

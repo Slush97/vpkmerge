@@ -4061,6 +4061,7 @@ name = "vpkmerge-core"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "morphic",
  "tempfile",
  "valve_pak",
 ]

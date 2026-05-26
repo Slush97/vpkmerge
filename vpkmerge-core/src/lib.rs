@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 pub mod portrait;
 pub use portrait::{extract_portraits, PortraitInfo, PortraitVariant};
 
+pub mod soundevents;
+pub use soundevents::{EventSummary, SoundEvents};
+
 #[derive(Debug, Clone)]
 pub struct ModInfo {
     pub path: PathBuf,

@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use vpkmerge_core::{
     extract_portraits, merge, split, CollisionPolicy, MergeOptions, OverlapPolicy, PathPredicate,
-    PortraitInfo, SplitOptions, SplitOutput,
+    PortraitInfo, SoundEvents, SplitOptions, SplitOutput,
 };
 
 #[derive(Parser)]
@@ -48,6 +48,34 @@ enum Command {
 
     /// Extract and decode hero portrait/card art from a VPK to PNG.
     Portrait(PortraitCmd),
+
+    /// Decode a soundevents (`.vsndevts_c`) file to JSON, optionally edit clip
+    /// paths / params and re-emit an uncompressed (loadable) file.
+    Soundevents(SoundeventsCmd),
+}
+
+#[derive(Args)]
+struct SoundeventsCmd {
+    /// Path to a `.vsndevts_c` file, or (with --from-vpk) an entry path inside a VPK.
+    input: PathBuf,
+
+    /// Read INPUT as an entry path inside this VPK instead of a file on disk
+    /// (e.g. `--from-vpk pak01_dir.vpk soundevents/hero/gigawatt.vsndevts_c`).
+    #[arg(long, value_name = "VPK")]
+    from_vpk: Option<PathBuf>,
+
+    /// After applying edits, re-encode (uncompressed v4) to this path.
+    #[arg(long, value_name = "FILE")]
+    encode: Option<PathBuf>,
+
+    /// Replace a clip path everywhere in the tree: --swap-vsnd OLD=NEW (repeatable).
+    #[arg(long = "swap-vsnd", value_name = "OLD=NEW")]
+    swap_vsnd: Vec<String>,
+
+    /// Set a numeric field on one event: --set EVENT/FIELD=NUMBER (repeatable),
+    /// e.g. --set "Seven.Wpn.Fire/volume=0.25".
+    #[arg(long = "set", value_name = "EVENT/FIELD=NUMBER")]
+    set: Vec<String>,
 }
 
 #[derive(Args)]
@@ -148,6 +176,7 @@ fn main() -> Result<()> {
     match cli.cmd {
         Some(Command::Split(args)) => run_split(args),
         Some(Command::Portrait(args)) => run_portrait(args),
+        Some(Command::Soundevents(args)) => run_soundevents(args),
         None => run_merge(cli),
     }
 }
@@ -297,6 +326,87 @@ fn run_portrait(args: PortraitCmd) -> Result<()> {
         std::fs::write(path, &json).with_context(|| format!("writing {}", path.display()))?;
         eprintln!("manifest: {}", path.display());
     } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+fn run_soundevents(args: SoundeventsCmd) -> Result<()> {
+    let SoundeventsCmd {
+        input,
+        from_vpk,
+        encode,
+        swap_vsnd,
+        set,
+    } = args;
+
+    let label = match &from_vpk {
+        Some(vpk) => format!("{} @ {}", input.display(), vpk.display()),
+        None => input.display().to_string(),
+    };
+
+    let mut se = match &from_vpk {
+        Some(vpk) => SoundEvents::from_vpk(vpk, &input.to_string_lossy())?,
+        None => SoundEvents::from_file(&input)?,
+    };
+
+    // Apply edits (Phase 2). All edits log to stderr.
+    for spec in &swap_vsnd {
+        let (from, to) = spec
+            .split_once('=')
+            .with_context(|| format!("--swap-vsnd expects OLD=NEW, got {spec:?}"))?;
+        let n = se.swap_vsnd(from, to);
+        eprintln!("swap-vsnd: {n} path(s) rewritten {from} -> {to}");
+    }
+    for spec in &set {
+        let (lhs, num) = spec
+            .rsplit_once('=')
+            .with_context(|| format!("--set expects EVENT/FIELD=NUMBER, got {spec:?}"))?;
+        let (event, field) = lhs
+            .rsplit_once('/')
+            .with_context(|| format!("--set expects EVENT/FIELD=NUMBER, got {spec:?}"))?;
+        let value: f64 = num
+            .parse()
+            .with_context(|| format!("--set value must be a number, got {num:?}"))?;
+        if !se.set_event_field(event, field, value) {
+            anyhow::bail!("--set: no event named {event:?} in {label}");
+        }
+        eprintln!("set: {event}/{field} = {value}");
+    }
+
+    // Human-readable summary to stderr.
+    let summaries = se.summaries();
+    eprintln!(
+        "{label}: {} event{}",
+        summaries.len(),
+        if summaries.len() == 1 { "" } else { "s" }
+    );
+    for s in &summaries {
+        let base = s
+            .base
+            .as_deref()
+            .map_or(String::new(), |b| format!("  base={b}"));
+        let vol = s.volume.map_or(String::new(), |v| format!("  volume={v}"));
+        eprintln!(
+            "  {:<34} {} sound{}{base}{vol}",
+            s.name,
+            s.vsnd_count,
+            if s.vsnd_count == 1 { "" } else { "s" }
+        );
+    }
+
+    // Either re-emit a file (encode path) or dump JSON to stdout.
+    if let Some(out) = &encode {
+        let bytes = se.encode()?;
+        std::fs::write(out, &bytes).with_context(|| format!("writing {}", out.display()))?;
+        eprintln!(
+            "wrote {}: {} bytes uncompressed (original was {} bytes)",
+            out.display(),
+            bytes.len(),
+            se.original_len()
+        );
+    } else {
+        let json = serde_json::to_string_pretty(&se.to_json()).context("serializing JSON")?;
         println!("{json}");
     }
     Ok(())

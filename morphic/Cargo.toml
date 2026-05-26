@@ -13,6 +13,9 @@ workspace = true
 bitflags = "2"
 byteorder = "1"
 thiserror = "1"
+# Pure-Rust LZ4 block codec. Source 2 ships binary KV3 (.vsndevts_c et al.)
+# with LZ4-compressed buffers; we only need the single-shot block decoder.
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 half = { version = "2", features = ["bytemuck"] }
 bytemuck = "1"
 # Safe, pure-Rust port of bcdec.h. Covers BC1..BC5, BC6H, BC7.

@@ -15,7 +15,7 @@ use std::path::Path;
 
 mod edit;
 mod error;
-mod kv3;
+pub mod kv3;
 mod resource;
 mod texture;
 
@@ -61,4 +61,23 @@ pub fn decode_at(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, DecodeErro
 /// Open a VPK and decode the given entry. Convenience for the GUI preview path.
 pub fn decode_from_vpk<P: AsRef<Path>>(_vpk: P, _entry: &str) -> Result<Image, DecodeError> {
     Err(DecodeError::Unimplemented(TextureFormat::Unknown))
+}
+
+/// Decode the binary KV3 `DATA` block of a Source 2 resource file (e.g.
+/// `.vsndevts_c`) into a [`kv3::Value`] tree.
+pub fn decode_kv3_resource(file_bytes: &[u8]) -> Result<kv3::Value, DecodeError> {
+    let resource = resource::Resource::parse(file_bytes)?;
+    let data = resource.data_block()?;
+    kv3::decode(data)
+}
+
+/// Re-encode `value` into the `DATA` block of `original`, keeping the original
+/// KV3 format GUID and every non-DATA block (e.g. `RED2`) byte-for-byte. The new
+/// `DATA` is uncompressed KV3 v4. Returns a complete, loadable resource file.
+pub fn encode_kv3_resource(original: &[u8], value: &kv3::Value) -> Result<Vec<u8>, DecodeError> {
+    let resource = resource::Resource::parse(original)?;
+    let data = resource.data_block()?;
+    let format = kv3::Format::from_payload(data)?;
+    let new_data = kv3::encode(value, &format);
+    resource.rebuild_with_data(&new_data)
 }

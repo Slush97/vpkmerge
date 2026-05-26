@@ -1,11 +1,17 @@
-// Stub types fleshed out as M1 lands. Dead-code allow keeps clippy pedantic
-// quiet until the parser starts producing values.
-#![allow(dead_code)]
-
-use std::collections::BTreeMap;
+//! The decoded `KeyValues3` value tree.
+//!
+//! Objects keep insertion order (a `Vec` of pairs, not a map) because Source 2
+//! soundevents rely on key order for `base` template inheritance, and because a
+//! faithful decode -> encode round-trip must not reshuffle keys. Lookups are a
+//! linear scan, which is fine for the small trees these files hold.
+//!
+//! Numeric values are folded to three kinds (`Int`/`UInt`/`Double`). The binary
+//! KV3 reader emits narrower tags (`INT32`, `FLOAT`, `INT16`, ...) but widening
+//! to i64/u64/f64 is value-preserving, and the encoder re-emits the wide tags;
+//! KV3 consumers coerce numbers by key, so the game reads them identically.
 
 /// A decoded KV3 value tree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -13,53 +19,86 @@ pub enum Value {
     UInt(u64),
     Double(f64),
     String(String),
+    /// A binary blob (KV3 `BINARY_BLOB`). Not produced by soundevents, but
+    /// modelled so the codec stays format-generic.
     Binary(Vec<u8>),
     Array(Vec<Value>),
-    Object(BTreeMap<String, Value>),
-}
-
-/// Borrowing view into a KV3 [`Value`]. Helpful for cheap lookups inside the
-/// texture header without cloning.
-#[derive(Debug, Clone, Copy)]
-pub enum ValueRef<'a> {
-    Null,
-    Bool(bool),
-    Int(i64),
-    UInt(u64),
-    Double(f64),
-    String(&'a str),
-    Binary(&'a [u8]),
-    Array(&'a [Value]),
-    Object(&'a BTreeMap<String, Value>),
+    /// Insertion-ordered key/value pairs.
+    Object(Vec<(String, Value)>),
 }
 
 impl Value {
-    pub fn as_ref(&self) -> ValueRef<'_> {
-        match self {
-            Self::Null => ValueRef::Null,
-            Self::Bool(b) => ValueRef::Bool(*b),
-            Self::Int(i) => ValueRef::Int(*i),
-            Self::UInt(u) => ValueRef::UInt(*u),
-            Self::Double(d) => ValueRef::Double(*d),
-            Self::String(s) => ValueRef::String(s.as_str()),
-            Self::Binary(b) => ValueRef::Binary(b.as_slice()),
-            Self::Array(a) => ValueRef::Array(a.as_slice()),
-            Self::Object(o) => ValueRef::Object(o),
-        }
-    }
-
+    /// Look up a child by key. Returns the first match (KV3 objects do not
+    /// normally repeat keys).
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&Value> {
         match self {
-            Self::Object(o) => o.get(key),
+            Self::Object(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
 
-    pub fn as_int(&self) -> Option<i64> {
+    /// Mutable sibling of [`get`](Self::get), for in-place edits.
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         match self {
-            Self::Int(i) => Some(*i),
-            Self::UInt(u) => i64::try_from(*u).ok(),
+            Self::Object(pairs) => pairs.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Double(d) => Some(*d),
+            #[allow(clippy::cast_precision_loss)]
+            Self::Int(i) => Some(*i as f64),
+            #[allow(clippy::cast_precision_loss)]
+            Self::UInt(u) => Some(*u as f64),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_array(&self) -> Option<&[Value]> {
+        match self {
+            Self::Array(a) => Some(a.as_slice()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_object(&self) -> Option<&[(String, Value)]> {
+        match self {
+            Self::Object(o) => Some(o.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Visit every string in the tree (depth-first), letting `f` rewrite it in
+    /// place. Used to swap `.vsnd` paths across a whole soundevents file
+    /// without caring where in the tree they sit.
+    pub fn for_each_string_mut(&mut self, f: &mut impl FnMut(&mut String)) {
+        match self {
+            Self::String(s) => f(s),
+            Self::Array(items) => {
+                for v in items {
+                    v.for_each_string_mut(f);
+                }
+            }
+            Self::Object(pairs) => {
+                for (_, v) in pairs {
+                    v.for_each_string_mut(f);
+                }
+            }
+            _ => {}
         }
     }
 }

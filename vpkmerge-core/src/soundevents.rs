@@ -1,0 +1,232 @@
+//! Read, modify, and re-emit Deadlock soundevents (`.vsndevts_c`).
+//!
+//! A soundevents file is a Source 2 compiled resource whose `DATA` block is
+//! binary KV3: a tree of named events, each typically carrying a `base`
+//! (inherited template), a `vsnd_files` list (the `.vsnd_c` clips it can play),
+//! and params like `volume` / `pitch`. The KV3 codec lives in `morphic`; this
+//! module is the soundevents-aware layer the CLI and (eventually) Grimoire use:
+//! load from a file or VPK, project to JSON, swap clip paths, tweak params, and
+//! re-emit a loadable (uncompressed) file.
+//!
+//! Re-emitting keeps the original bytes around so the format GUID and the `RED2`
+//! block survive unchanged; only the `DATA` block is rewritten.
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use morphic::kv3::Value;
+
+/// Conventional keys inside a soundevent.
+const KEY_VSND_FILES: &str = "vsnd_files";
+const KEY_BASE: &str = "base";
+const KEY_VOLUME: &str = "volume";
+
+/// A decoded soundevents resource, plus the original file bytes needed to
+/// re-encode without disturbing the `RED2` block or format GUID.
+pub struct SoundEvents {
+    original: Vec<u8>,
+    /// The decoded root: an object mapping event name -> event object.
+    pub root: Value,
+}
+
+/// One event's at-a-glance shape, for the human-readable summary.
+#[derive(Debug, Clone)]
+pub struct EventSummary {
+    pub name: String,
+    pub base: Option<String>,
+    pub vsnd_count: usize,
+    pub volume: Option<f64>,
+}
+
+impl SoundEvents {
+    /// Decode a standalone `.vsndevts_c` file from disk.
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        Self::from_bytes(bytes)
+    }
+
+    /// Decode a `.vsndevts_c` entry out of a VPK (chunked VPKs are transparent;
+    /// pass the `_dir.vpk`).
+    pub fn from_vpk(vpk_path: impl AsRef<Path>, entry: &str) -> Result<Self> {
+        let vpk_path = vpk_path.as_ref();
+        let vpk =
+            valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+        let mut file = vpk
+            .get_file(entry)
+            .with_context(|| format!("locating {entry} in {}", vpk_path.display()))?;
+        let bytes = file
+            .read_all()
+            .with_context(|| format!("reading {entry}"))?;
+        Self::from_bytes(bytes)
+    }
+
+    /// Decode from raw resource bytes already in memory.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let root = morphic::decode_kv3_resource(&bytes).context("decoding KV3 DATA block")?;
+        Ok(Self {
+            original: bytes,
+            root,
+        })
+    }
+
+    /// Event names in file order.
+    #[must_use]
+    pub fn event_names(&self) -> Vec<&str> {
+        match &self.root {
+            Value::Object(pairs) => pairs.iter().map(|(k, _)| k.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// One [`EventSummary`] per top-level event, in file order.
+    #[must_use]
+    pub fn summaries(&self) -> Vec<EventSummary> {
+        let Value::Object(pairs) = &self.root else {
+            return Vec::new();
+        };
+        pairs
+            .iter()
+            .map(|(name, event)| EventSummary {
+                name: name.clone(),
+                base: event
+                    .get(KEY_BASE)
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                vsnd_count: event
+                    .get(KEY_VSND_FILES)
+                    .and_then(Value::as_array)
+                    .map_or(0, <[Value]>::len),
+                volume: event.get(KEY_VOLUME).and_then(Value::as_f64),
+            })
+            .collect()
+    }
+
+    /// Project the decoded tree to JSON (for stdout / Grimoire).
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        value_to_json(&self.root)
+    }
+
+    /// Replace every clip path equal to `from` with `to`, anywhere in the tree.
+    /// Returns the number of strings rewritten.
+    pub fn swap_vsnd(&mut self, from: &str, to: &str) -> usize {
+        let mut count = 0;
+        self.root.for_each_string_mut(&mut |s| {
+            if s == from {
+                to.clone_into(s);
+                count += 1;
+            }
+        });
+        count
+    }
+
+    /// Set a numeric field (e.g. `volume`, `pitch`) on one event to a double.
+    /// Replaces the field if present, inserts it otherwise. Returns false if the
+    /// named event does not exist.
+    pub fn set_event_field(&mut self, event: &str, field: &str, value: f64) -> bool {
+        let Some(event_val) = self.root.get_mut(event) else {
+            return false;
+        };
+        let Value::Object(pairs) = event_val else {
+            return false;
+        };
+        if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == field) {
+            *v = Value::Double(value);
+        } else {
+            pairs.push((field.to_owned(), Value::Double(value)));
+        }
+        true
+    }
+
+    /// Re-encode to a complete resource file: uncompressed KV3 v4 `DATA`, the
+    /// original format GUID, and the original `RED2` block, ready to pack into
+    /// an addon VPK.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        morphic::encode_kv3_resource(&self.original, &self.root)
+            .context("re-encoding soundevents resource")
+    }
+
+    /// Size in bytes of the original (LZ4-packed) file.
+    #[must_use]
+    pub fn original_len(&self) -> usize {
+        self.original.len()
+    }
+}
+
+fn value_to_json(v: &Value) -> serde_json::Value {
+    use serde_json::Value as J;
+    match v {
+        Value::Null => J::Null,
+        Value::Bool(b) => J::Bool(*b),
+        Value::Int(i) => J::Number((*i).into()),
+        Value::UInt(u) => J::Number((*u).into()),
+        Value::Double(d) => serde_json::Number::from_f64(*d).map_or(J::Null, J::Number),
+        Value::String(s) => J::String(s.clone()),
+        // Soundevents never carry binary blobs; model them as a byte array so
+        // the projection stays total.
+        Value::Binary(bytes) => J::Array(bytes.iter().map(|b| J::Number((*b).into())).collect()),
+        Value::Array(items) => J::Array(items.iter().map(value_to_json).collect()),
+        Value::Object(pairs) => {
+            let mut map = serde_json::Map::new();
+            for (k, child) in pairs {
+                map.insert(k.clone(), value_to_json(child));
+            }
+            J::Object(map)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../morphic/fixtures/kv3/gigawatt.vsndevts_c"
+    );
+
+    #[test]
+    fn loads_summarizes_edits_and_reencodes() {
+        let mut se = SoundEvents::from_file(FIXTURE).expect("load fixture");
+
+        let summaries = se.summaries();
+        assert_eq!(summaries.len(), 44);
+        let fire = summaries
+            .iter()
+            .find(|s| s.name == "Seven.Wpn.Fire")
+            .expect("Seven.Wpn.Fire summary");
+        assert_eq!(fire.base.as_deref(), Some("Base.Weapon.Pistol"));
+        assert_eq!(fire.vsnd_count, 7);
+
+        // Edits.
+        let swapped = se.swap_vsnd(
+            "sounds/weapons/gigawatt/gigawatt_weapon_fire_01.vsnd",
+            "sounds/custom/my_fire.vsnd",
+        );
+        assert_eq!(swapped, 1);
+        assert!(se.set_event_field("Seven.Wpn.Fire", "volume", 0.25));
+        assert!(!se.set_event_field("No.Such.Event", "volume", 0.5));
+
+        // Re-encode and reload; edits must survive the compiled round-trip.
+        let bytes = se.encode().expect("encode");
+        let back = SoundEvents::from_bytes(bytes).expect("reload");
+        let fire = back.root.get("Seven.Wpn.Fire").unwrap();
+        assert_eq!(fire.get("volume").and_then(Value::as_f64), Some(0.25));
+        assert_eq!(
+            fire.get("vsnd_files").and_then(Value::as_array).unwrap()[0].as_str(),
+            Some("sounds/custom/my_fire.vsnd")
+        );
+    }
+
+    #[test]
+    fn json_projection_is_ordered_and_typed() {
+        let se = SoundEvents::from_file(FIXTURE).expect("load fixture");
+        let json = se.to_json();
+        let fire = &json["Seven.Wpn.Fire"];
+        // `base` is the first key (KV3 order preserved by serde_json preserve_order).
+        let first_key = fire.as_object().unwrap().keys().next().unwrap();
+        assert_eq!(first_key, "base");
+        assert!(fire["vsnd_files"].is_array());
+    }
+}

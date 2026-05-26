@@ -15,10 +15,12 @@ vpkmerge-cli/         CLI binary `vpkmerge` on top of core (v0.2.0)
 gui/
   src/                Vue 3 + Vite + Tailwind 4 frontend
   src-tauri/          Tauri v2 desktop app wrapping the same engine
-morphic/              pure-Rust Source 2 .vtex_c decoder (lib, v0.0.1)
+morphic/              pure-Rust Source 2 .vtex_c decoder + KV3 codec (lib, v0.0.1)
   src/                resource / kv3 / texture modules
-  fixtures/           committed canonical corpus (.vtex_c + .png + .meta.json)
+  src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed)
+  fixtures/           committed canonical corpus (.vtex_c + .png + .meta.json; kv3/ holds .vsndevts_c)
   tests/golden.rs     diffs morphic's decode against oracle PNGs
+  tests/kv3.rs        decode + uncompressed-v4 round-trip against gigawatt.vsndevts_c
 
 tools/morphic-oracle/   dev-time C# harness that generates the goldens
   Program.cs            wraps ValveResourceFormat; subcommands: generate/extract/survey
@@ -128,6 +130,21 @@ just            # regenerate goldens via oracle, then run cargo test -p morphic
 just survey     # resurvey Deadlock pak01; writes tools/format-counts.csv
 just fixture materials/foo.vtex_c bc7   # add one fixture from local Deadlock
 ```
+
+## Soundevents / KV3 (`.vsndevts_c`)
+
+`morphic::kv3` is a generic binary KeyValues3 codec ported from ValveResourceFormat:
+reads v1..=5 (incl. v5 two-buffer/LZ4), writes **v4 uncompressed** (no LZ4 *encoder*
+needed; the engine reads either). `morphic::{decode_kv3_resource, encode_kv3_resource}`
+wrap the resource envelope, preserving the format GUID and `RED2` on re-encode.
+
+`vpkmerge-core::soundevents::SoundEvents` is the soundevents-aware layer (load from
+file/VPK, JSON projection, `swap_vsnd`, `set_event_field`, re-encode). Exposed as
+`vpkmerge soundevents <file> [--from-vpk <vpk>] [--swap-vsnd OLD=NEW] [--set EVENT/FIELD=N] [--encode OUT]`.
+
+Built for a Grimoire per-ability sound picker (control `volume`/`pitch`/clip choice, not
+just swap the audio). Full writeup + the pending in-game verification step:
+[docs/spike-vsndevts-kv3.md](./docs/spike-vsndevts-kv3.md).
 
 ## Related
 

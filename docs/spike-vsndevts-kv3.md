@@ -1,6 +1,7 @@
 # Spike: read/write Deadlock `.vsndevts_c` (compiled KV3)
 
-Status: **Phases 1-3 done and tested. Phase 4 (in-game) pending a manual launch.**
+Status: **All phases done. In-game verified: the engine loads our uncompressed v4
+KV3 and honors edited params. Param control is viable; GO for the Grimoire picker.**
 
 ## Goal
 
@@ -91,10 +92,34 @@ vpkmerge soundevents gigawatt.vsndevts_c \
   them.
 - Zstd-compressed payloads (`compressionMethod = 2`) error out; Deadlock ships LZ4.
 
-## Phase 4: in-game verification (THE crux risk, pending)
+## Independent validation (besides the self-round-trip)
 
-The one thing automated tests cannot prove: **does the engine actually load our
-uncompressed v4 KV3?** A ready-to-test addon is staged:
+The round-trip test only proves morphic's decoder and encoder agree with each other.
+Two external checks confirm the output is genuinely spec-valid:
+
+- **ValveResourceFormat reads our re-encode.** `tools/morphic-oracle kv3dump --file X`
+  loads a file with VRF; it parses both the identity and edited uncompressed re-encodes
+  as `BinaryKV3`, preserving the original format GUID. (Independent decoder, not ours.)
+- **Corpus decode.** morphic's decoder reads **148 of 149** `.vsndevts_c` files in the
+  base `pak01` (the lone failure is the documented flag/blob case).
+
+Also confirmed offline: `soundevents/hero/gigawatt.vsndevts_c` is the *only* base file
+defining `Seven.Wpn.Fire` / referencing the gun clips, so it is the correct edit target.
+
+## Phase 4: in-game verification (THE crux risk) - PASSED
+
+**Result: the engine loads our uncompressed v4 KV3 addon and applies edited params.**
+Confirmed by setting `Seven.Wpn.Fire`'s `volume` to -96 dB and observing gigawatt's
+primary fire go silent in-game. So `volume`/`pitch` control (not just audio-file swaps)
+is viable; proceed to wire Grimoire.
+
+**Gotcha that cost two test rounds:** Deadlock mounts addon VPKs only at **process
+start**. Returning to the menu or reloading does *not* remount a changed
+`addons/pakNN_dir.vpk`. Always fully quit to desktop and relaunch between edits.
+(Earlier clip-swap tests read as "normal sound" purely because the game had not been
+cold-restarted.)
+
+The staged addon and procedure used:
 
 - `~/gigawatt_soundtest_dir.vpk` - an addon VPK containing
   `soundevents/hero/gigawatt.vsndevts_c`, edited so `Seven.Wpn.Fire` (gigawatt's basic

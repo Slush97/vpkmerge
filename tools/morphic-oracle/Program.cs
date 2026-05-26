@@ -43,6 +43,7 @@ internal static class Program
                 "generate" => Generate(args[1..]),
                 "extract"  => Extract(args[1..]),
                 "survey"   => Survey(args[1..]),
+                "kv3dump"  => Kv3Dump(args[1..]),
                 "--help" or "-h" => PrintUsage(),
                 _ => Fail($"unknown subcommand: {args[0]}"),
             };
@@ -277,6 +278,49 @@ internal static class Program
     }
 
     // ---------- helpers ----------
+
+    // ---------- kv3dump ----------
+    //
+    // Independent validation: load a resource file with VRF and confirm the
+    // DATA block parses as binary KV3. Used to check that morphic's
+    // uncompressed re-encode is spec-valid (not just self-consistent).
+    private static int Kv3Dump(string[] args)
+    {
+        string? file = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--file": file = args[++i]; break;
+                default: return Fail($"kv3dump: unknown flag {args[i]}");
+            }
+        }
+        if (file is null)
+        {
+            return Fail("kv3dump: --file is required");
+        }
+
+        using var resource = new Resource();
+        resource.Read(file);
+
+        var blockTypes = new List<string>();
+        foreach (var b in resource.Blocks)
+        {
+            blockTypes.Add(b.Type.ToString());
+        }
+        Console.Error.WriteLine($"loaded {file}: blocks=[{string.Join(",", blockTypes)}]");
+
+        var data = resource.DataBlock;
+        if (data is BinaryKV3 kv3)
+        {
+            Console.Error.WriteLine("OK: DataBlock parsed as BinaryKV3");
+            Console.WriteLine(kv3.ToString());
+            return 0;
+        }
+
+        Console.Error.WriteLine($"FAIL: DataBlock is {data?.GetType().Name ?? "null"}, not BinaryKV3");
+        return 1;
+    }
 
     private static string TryReadKv3Magic(byte[] resourceBytes, Resource resource)
     {

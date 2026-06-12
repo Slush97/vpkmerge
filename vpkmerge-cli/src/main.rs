@@ -508,6 +508,12 @@ struct VmatCmd {
     #[arg(long = "set-vec", value_name = "NAME=X,Y,Z[,W]")]
     set_vec: Vec<String>,
 
+    /// Dynamic-expression param edit `NAME=EXPR`, compiled to engine bytecode
+    /// (e.g. `g_vColorTint1=$ent_health<.4?float3(1,.1,.1):float3(1,1,1)`).
+    /// Attributes the expression reads are auto-registered. Repeatable.
+    #[arg(long = "set-expr", value_name = "NAME=EXPR")]
+    set_expr: Vec<String>,
+
     /// Target set for hero discovery: all, body, or weapons.
     #[arg(long, value_name = "TARGETS", default_value = "all")]
     targets: String,
@@ -2273,6 +2279,13 @@ fn vmat_edits(args: &VmatCmd) -> Result<Vec<vpkmerge_core::VmatEdit>> {
             value,
         });
     }
+    for spec in &args.set_expr {
+        let (name, src) = parse_name_eq(spec, "--set-expr")?;
+        edits.push(
+            vpkmerge_core::VmatEdit::expr(name, src)
+                .with_context(|| format!("--set-expr {spec:?}"))?,
+        );
+    }
     Ok(edits)
 }
 
@@ -2326,7 +2339,7 @@ fn run_vmat(args: &VmatCmd) -> Result<()> {
     let edits = vmat_edits(args)?;
     anyhow::ensure!(
         !edits.is_empty(),
-        "nothing to do: pass --preset and/or --set-int/--set-float/--set-vec (or --list)"
+        "nothing to do: pass --preset and/or --set-int/--set-float/--set-vec/--set-expr (or --list)"
     );
     let Some(out) = &args.encode_vpk else {
         anyhow::bail!("--encode-vpk OUT_dir.vpk is required when patching");

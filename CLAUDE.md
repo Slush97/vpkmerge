@@ -255,14 +255,28 @@ non-blobbed materials) and packs an addon VPK.
 
 `vpkmerge vmat --vpk <VPK> [--base <VPK>] (--hero CODENAME | --entry PATH...)
 [--list] [--preset gem|glass|pbr|unlit|ink] [--tint COLOR] [--set-int NAME=V]
-[--set-float NAME=V] [--set-vec NAME=X,Y,Z[,W]] [--targets all|body|weapons]
-[--encode-vpk OUT_dir.vpk]`. `--list` surveys shader/flags/texture channels.
-Presets are modeled on shipped Valve materials (gem sheen =
-`xmas_vindicta_dress`, glass = `viscous_body`); `pbr` turns NPR lighting OFF
-for real reflections. Material paths use hero display names (`vindicta`), not
-model codenames (`hornet`). Survey + probe plan:
+[--set-float NAME=V] [--set-vec NAME=X,Y,Z[,W]] [--set-expr NAME=EXPR]
+[--targets all|body|weapons] [--encode-vpk OUT_dir.vpk]`. `--list` surveys
+shader/flags/texture channels. Presets are modeled on shipped Valve materials
+(gem sheen = `xmas_vindicta_dress`, glass = `viscous_body`); `pbr` turns NPR
+lighting OFF for real reflections. Material paths use hero display names
+(`vindicta`), not model codenames (`hornet`). Survey + probe plan:
 [docs/spike-npr-toon-shading.md](docs/spike-npr-toon-shading.md); survey tool
 `vpkmerge-core/examples/npr_vmat_survey.rs`.
+
+`--set-expr` injects a **dynamic expression**: a per-frame snippet compiled by
+`morphic::vfx_expr` to the engine's stack bytecode (`m_dynamicParams`), e.g.
+`--set-expr 'g_vColorTint1=$ent_health<.4?float3(1,.1,.1):float3(1,1,1)'`.
+Grammar: floats, `$attribute` reads (auto-registered in
+`m_renderAttributesUsed`), the fixed builtin table (`sin`..`RemapValClamped`,
+incl. `time()`, `lerp`, `float2/3/4`), arithmetic/comparisons, `?:`, `&&`/`||`,
+swizzles, `exists()`. Verified byte-identical to Valve's compiler on shipped
+blobs; round-trip gate = `tools/morphic-oracle dynexpr decompile` (VRF) must
+print the source back. 480 shipped pak01 materials use these (430 on
+`pbr.vfx`); engine-supplied entity attributes (`$ent_health`, `$ent_age`,
+`$ent_origin`, ... + scene-side `$camera_origin`) enumerate from `strings` over
+`game/citadel/bin/win64/client.dll`. `oracle dynexpr hash|brute` reverses
+attribute tokens (murmur2, seed 0x31415926, lowercased, `$` included).
 
 ## Related
 

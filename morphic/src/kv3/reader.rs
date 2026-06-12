@@ -7,8 +7,8 @@
 //! Two simplifications vs the reference, neither reached by soundevents data:
 //! - KV3 value flags (`Resource`, `SoundEvent`, ...) are consumed but discarded;
 //!   the [`Value`](super::Value) tree has no slot for them.
-//! - Binary blobs (`countBlocks > 0`) are rejected. No soundevents file ships
-//!   them, and our encoder never emits them for these trees.
+//! - Binary blobs (`countBlocks > 0`) decode for v5 and for uncompressed v4
+//!   (our own writer's output); other blob-bearing combinations are rejected.
 
 // The KV3 wire format reinterprets the same bytes as signed/unsigned of various
 // widths; these casts are the intended bit-for-bit reinterpretations.
@@ -126,8 +126,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
         size_comp_buf1 = size_comp_total;
     }
 
-    // Binary blobs only occur in v5 (model `ANIM`); reject them elsewhere.
-    if count_blocks > 0 && version < 5 {
+    // Binary blobs ship in v5 (model `ANIM`) and in our own writer's
+    // uncompressed v4 output (re-encoded materials carrying dynamic
+    // expressions). Other combinations stay rejected.
+    if count_blocks > 0 && version < 5 && (version != 4 || compression != 0) {
         return Err(DecodeError::Kv3("binary blobs require KV3 v5"));
     }
 
@@ -178,7 +180,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
             next_blob: 0,
         }
     } else {
-        layout_single(
+        let (mut ctx, blob_lengths) = layout_single(
             &buf1,
             version,
             count_b1,
@@ -187,7 +189,24 @@ pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
             count_b8,
             count_types,
             size_unc_total,
-        )?
+            count_blocks,
+        )?;
+        // Uncompressed v4 blob data follows the main buffer in the stream.
+        if !blob_lengths.is_empty() {
+            let blob_buf = h.bytes(usize_of(size_blobs)?)?;
+            let mut p = 0usize;
+            for len in blob_lengths {
+                let end = p
+                    .checked_add(len)
+                    .ok_or(DecodeError::Kv3("blob slice overflow"))?;
+                let bytes = blob_buf
+                    .get(p..end)
+                    .ok_or(DecodeError::Kv3("blob region underrun"))?;
+                ctx.blobs.push(bytes.to_vec());
+                p = end;
+            }
+        }
+        ctx
     };
 
     let (root_type, _flag) = read_type(&mut ctx)?;
@@ -463,7 +482,8 @@ fn layout_single(
     count_b8: i64,
     count_types: i64,
     size_unc_total: i64,
-) -> Result<Ctx<'_>, DecodeError> {
+    count_blocks: i64,
+) -> Result<(Ctx<'_>, Vec<usize>), DecodeError> {
     let mut off = 0usize;
     let b1_start = off;
     off += usize_of(count_b1)?;
@@ -496,6 +516,23 @@ fn layout_single(
     };
     let types = slice(buf, off, types_len)?;
     off += types_len;
+    // v4 blob lengths (i32 each) sit between the type stream and the trailer.
+    let mut blob_lengths = Vec::new();
+    if count_blocks > 0 {
+        let lengths_region = slice(
+            buf,
+            off,
+            usize_of(count_blocks)?
+                .checked_mul(4)
+                .ok_or(DecodeError::Kv3("blob length table overflow"))?,
+        )?;
+        for b in lengths_region.chunks_exact(4) {
+            blob_lengths.push(usize_of(i64::from(i32::from_le_bytes([
+                b[0], b[1], b[2], b[3],
+            ])))?);
+        }
+        off += lengths_region.len();
+    }
     check_trailer(buf, off)?;
 
     let main = Buffers {
@@ -505,21 +542,24 @@ fn layout_single(
         b4: Cursor::new(slice(buf, b4_start + 4, b4_len.saturating_sub(4))?),
         b8: Cursor::new(slice(buf, b8_start, b8_len)?),
     };
-    Ok(Ctx {
-        version,
-        strings,
-        types: Cursor::new(types),
-        object_lengths: Cursor::new(&[]),
-        main,
-        aux: Buffers {
-            b1: Cursor::new(&[]),
-            b2: Cursor::new(&[]),
-            b4: Cursor::new(&[]),
-            b8: Cursor::new(&[]),
+    Ok((
+        Ctx {
+            version,
+            strings,
+            types: Cursor::new(types),
+            object_lengths: Cursor::new(&[]),
+            main,
+            aux: Buffers {
+                b1: Cursor::new(&[]),
+                b2: Cursor::new(&[]),
+                b4: Cursor::new(&[]),
+                b8: Cursor::new(&[]),
+            },
+            blobs: Vec::new(),
+            next_blob: 0,
         },
-        blobs: Vec::new(),
-        next_blob: 0,
-    })
+        blob_lengths,
+    ))
 }
 
 fn read_type(ctx: &mut Ctx) -> Result<(u8, u8), DecodeError> {

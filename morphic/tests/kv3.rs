@@ -285,3 +285,73 @@ fn collect_binaries(value: &Value) -> Vec<&[u8]> {
     walk(value, &mut out);
     out
 }
+
+#[test]
+fn inserts_a_blob_into_a_two_blob_material() {
+    // Insert a third dynamic param (a binary expression blob) at index 0 of the
+    // 2-blob fixture's m_dynamicParams. The result must stay v5 + LZ4 with a
+    // 3-blob section (the engine misreads uncompressed blob framing), the new
+    // blob must land FIRST in document order, and both original blobs must
+    // survive byte-identically.
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/material/necro_picker_hand_effect.vmat_c"
+    ))
+    .expect("read 2-blob fixture");
+    let before = morphic::decode_kv3_resource(&bytes).expect("decode");
+    let before_blobs: Vec<Vec<u8>> = collect_binaries(&before)
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect();
+
+    let new_code: Vec<u8> = vec![0x07, 0x00, 0x00, 0x80, 0x3F, 0x00]; // return 1.0
+    let inserted = Value::Object(vec![
+        (
+            "m_name".to_string(),
+            Value::String("g_flSelfIllumScale1".to_string()),
+        ),
+        ("m_value".to_string(), Value::Binary(new_code.clone())),
+    ]);
+    let patched = morphic::patch_kv3_resource_array_insert(
+        &bytes,
+        &[morphic::kv3::Seg::Key("m_dynamicParams".to_string())],
+        0,
+        &inserted,
+    )
+    .expect("blob-bearing insert");
+
+    let data = morphic::kv3_resource_data_block(&patched).expect("data block");
+    assert_eq!(data[0], 5, "kv3 version");
+    assert_eq!(
+        i32::from_le_bytes(data[20..24].try_into().unwrap()),
+        1,
+        "compressionMethod must stay LZ4"
+    );
+    assert_eq!(
+        i32::from_le_bytes(data[56..60].try_into().unwrap()),
+        3,
+        "blob count"
+    );
+
+    let after = morphic::decode_kv3_resource(&patched).expect("re-decode");
+    let params = after
+        .get("m_dynamicParams")
+        .and_then(Value::as_array)
+        .expect("dynamic params");
+    assert_eq!(params.len(), 3);
+    assert_eq!(
+        params[0].get("m_name").and_then(Value::as_str),
+        Some("g_flSelfIllumScale1")
+    );
+    let after_blobs: Vec<Vec<u8>> = collect_binaries(&after)
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect();
+    assert_eq!(after_blobs.len(), 3);
+    assert_eq!(after_blobs[0], new_code, "new blob lands first");
+    assert_eq!(
+        &after_blobs[1..],
+        &before_blobs[..],
+        "original blobs survive byte-identically"
+    );
+}

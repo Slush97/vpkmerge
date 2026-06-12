@@ -21,6 +21,7 @@ mod meshopt;
 pub mod model;
 mod resource;
 mod texture;
+pub mod vfx_expr;
 
 pub use edit::{replace_face0_mip0, replace_face_mip, replace_face_mip_chain, replace_mip_chain};
 pub use error::{DecodeError, EncodeError};
@@ -72,6 +73,16 @@ pub fn decode_kv3_resource(file_bytes: &[u8]) -> Result<kv3::Value, DecodeError>
     let resource = resource::Resource::parse(file_bytes)?;
     let data = resource.data_block()?;
     kv3::decode(data)
+}
+
+/// The raw bytes of a resource's KV3 `DATA` block (as stored, possibly
+/// LZ4-compressed inside the KV3 framing).
+///
+/// # Errors
+/// Fails when the container does not parse or has no `DATA` block.
+pub fn kv3_resource_data_block(file_bytes: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    let resource = resource::Resource::parse(file_bytes)?;
+    Ok(resource.data_block()?.to_vec())
 }
 
 /// Whether a resource's KV3 `DATA` block carries a binary-blob section

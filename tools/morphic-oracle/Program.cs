@@ -63,6 +63,7 @@ internal static class Program
                 "anim-meta" => AnimMeta(args[1..]),
                 "material-meta" => MaterialMeta(args[1..]),
                 "shader-dump" => ShaderDump(args[1..]),
+                "dynexpr"  => DynExpr(args[1..]),
                 "validate" => Validate(args[1..]),
                 "--help" or "-h" => PrintUsage(),
                 _ => Fail($"unknown subcommand: {args[0]}"),
@@ -1218,6 +1219,110 @@ internal static class Program
 
     private static string Trunc(string? s, int n) =>
         string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s[..n] + "...");
+
+    // dynexpr hash NAME...                              VRF StringToken (murmur2) of each name
+    // dynexpr brute --hashes HEX[,HEX...]               reverse hashes against stdin wordlist
+    // dynexpr decompile --vpk PAK --entry MATERIAL      decompile dynamic params via VfxEval
+    private static int DynExpr(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return Fail("dynexpr: expected hash|brute|decompile");
+        }
+
+        switch (args[0])
+        {
+            case "hash":
+            {
+                foreach (var name in args[1..])
+                {
+                    var token = ValveResourceFormat.Utils.StringToken.Get(name.ToLowerInvariant());
+                    Console.WriteLine($"{token:x8}  {name}");
+                }
+                return 0;
+            }
+            case "brute":
+            {
+                var hexes = args.Length > 2 && args[1] == "--hashes" ? args[2] : null;
+                if (hexes is null)
+                {
+                    return Fail("dynexpr brute: --hashes HEX[,HEX...] required (wordlist on stdin)");
+                }
+                var targets = hexes.Split(',')
+                    .Select(h => uint.Parse(h, NumberStyles.HexNumber, CultureInfo.InvariantCulture))
+                    .ToHashSet();
+                var found = 0;
+                string? line;
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                while ((line = Console.In.ReadLine()) != null)
+                {
+                    var s = line.Trim();
+                    if (s.Length == 0 || s.Length > 80 || !seen.Add(s))
+                    {
+                        continue;
+                    }
+                    foreach (var cand in new[] { s, s.TrimStart('$'), "$" + s.TrimStart('$') })
+                    {
+                        var token = ValveResourceFormat.Utils.StringToken.Get(cand.ToLowerInvariant());
+                        if (targets.Contains(token))
+                        {
+                            Console.WriteLine($"MATCH {token:x8}  \"{cand}\" (from \"{s}\")");
+                            found++;
+                        }
+                    }
+                }
+                Console.Error.WriteLine($"{found} matches");
+                return 0;
+            }
+            case "decompile":
+            {
+                string? vpk = null, entry = null;
+                for (var i = 1; i < args.Length; i++)
+                {
+                    switch (args[i])
+                    {
+                        case "--vpk":   vpk   = args[++i]; break;
+                        case "--entry": entry = args[++i]; break;
+                        default: return Fail($"dynexpr decompile: unknown flag {args[i]}");
+                    }
+                }
+                if (vpk is null || entry is null)
+                {
+                    return Fail("dynexpr decompile: --vpk and --entry are required");
+                }
+
+                using var pak = new Package();
+                pak.Read(vpk);
+                var packageEntry = pak.FindEntry(entry)
+                    ?? throw new FileNotFoundException($"entry not found in VPK: {entry}");
+                pak.ReadEntry(packageEntry, out var data);
+
+                using var resource = new Resource { FileName = entry };
+                using var ms = new MemoryStream(data);
+                resource.Read(ms);
+
+                if (resource.DataBlock is not Material mat)
+                {
+                    return Fail("dynexpr decompile: resource is not a material");
+                }
+
+                Console.WriteLine($"{entry}  [{mat.ShaderName}]");
+                foreach (var table in new[] { "m_dynamicParams", "m_dynamicTextureParams" })
+                {
+                    foreach (var param in mat.Data.GetArray(table) ?? [])
+                    {
+                        var name = param.GetStringProperty("m_name");
+                        var code = param.GetArray<byte>("m_value");
+                        var expr = new ValveResourceFormat.Serialization.VfxEval.VfxEval(code).DynamicExpressionResult;
+                        Console.WriteLine($"  {name} = {expr}");
+                    }
+                }
+                return 0;
+            }
+            default:
+                return Fail($"dynexpr: unknown mode {args[0]}");
+        }
+    }
 
     private static int PrintUsage()
     {

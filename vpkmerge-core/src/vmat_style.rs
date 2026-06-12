@@ -28,20 +28,49 @@ pub enum VmatEdit {
     Float { name: String, value: f64 },
     /// `m_vectorParams` entry (RGBA; pass 0 for unused lanes).
     Vector { name: String, value: [f64; 4] },
+    /// `m_dynamicParams` entry: a compiled dynamic expression
+    /// ([`morphic::vfx_expr::compile`]) driving the param per frame.
+    /// `attributes` lists every render attribute the expression reads; they
+    /// are registered in the material's `m_renderAttributesUsed` so the
+    /// engine feeds them (Valve does the same: a shipped material using
+    /// `$ent_age` carries it there).
+    Expr {
+        name: String,
+        bytecode: Vec<u8>,
+        attributes: Vec<String>,
+    },
 }
 
 impl VmatEdit {
+    /// Builds an `Expr` edit by compiling `src`.
+    ///
+    /// # Errors
+    /// Fails when the expression does not compile.
+    pub fn expr(name: impl Into<String>, src: &str) -> Result<Self> {
+        let compiled = morphic::vfx_expr::compile(src)
+            .map_err(|e| anyhow::anyhow!("compiling expression for {src}: {e}"))?;
+        Ok(Self::Expr {
+            name: name.into(),
+            bytecode: compiled.bytecode,
+            attributes: compiled.attributes,
+        })
+    }
+
     fn table(&self) -> &'static str {
         match self {
             Self::Int { .. } => "m_intParams",
             Self::Float { .. } => "m_floatParams",
             Self::Vector { .. } => "m_vectorParams",
+            Self::Expr { .. } => "m_dynamicParams",
         }
     }
 
     fn name(&self) -> &str {
         match self {
-            Self::Int { name, .. } | Self::Float { name, .. } | Self::Vector { name, .. } => name,
+            Self::Int { name, .. }
+            | Self::Float { name, .. }
+            | Self::Vector { name, .. }
+            | Self::Expr { name, .. } => name,
         }
     }
 
@@ -53,6 +82,7 @@ impl VmatEdit {
                 "m_value",
                 Value::Array(value.iter().map(|&c| Value::Double(c)).collect()),
             ),
+            Self::Expr { bytecode, .. } => ("m_value", Value::Binary(bytecode.clone())),
         };
         Value::Object(vec![
             ("m_name".to_string(), Value::String(self.name().to_string())),
@@ -102,6 +132,9 @@ fn already_applied(root: &Value, i: usize, edit: &VmatEdit) -> bool {
             .is_some_and(|a| {
                 a.len() == 4 && a.iter().zip(value).all(|(c, w)| c.as_f64() == Some(*w))
             }),
+        VmatEdit::Expr { bytecode, .. } => {
+            matches!(param.get("m_value"), Some(Value::Binary(b)) if b == bytecode)
+        }
     }
 }
 
@@ -155,6 +188,13 @@ fn apply_in_place(
                     .collect();
                 morphic::patch_kv3_resource_doubles(working, &edits)?
             }
+            // a different-length bytecode blob cannot be patched in place;
+            // route to the re-encode fallback
+            VmatEdit::Expr { .. } => {
+                return Err(morphic::DecodeError::Kv3(
+                    "existing dynamic param needs a re-encode",
+                ))
+            }
         };
         Ok((bytes, false))
     } else {
@@ -179,7 +219,7 @@ fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
             let value_key = match edit {
                 VmatEdit::Int { .. } => "m_nValue",
                 VmatEdit::Float { .. } => "m_flValue",
-                VmatEdit::Vector { .. } => "m_value",
+                VmatEdit::Vector { .. } | VmatEdit::Expr { .. } => "m_value",
             };
             let Some(slot) = params[i].get_mut(value_key) else {
                 return false;
@@ -190,6 +230,7 @@ fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
                 VmatEdit::Vector { value, .. } => {
                     Value::Array(value.iter().map(|&c| Value::Double(c)).collect())
                 }
+                VmatEdit::Expr { bytecode, .. } => Value::Binary(bytecode.clone()),
             };
         }
         None => params.push(edit.as_object()),
@@ -238,6 +279,23 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
         }
     }
 
+    // Every render attribute an expression edit reads must end up in the
+    // material's m_renderAttributesUsed so the engine feeds the values
+    // (shipped materials register their attributes the same way).
+    let mut pending_attrs: Vec<&str> = Vec::new();
+    for edit in edits {
+        if let VmatEdit::Expr { attributes, .. } = edit {
+            if stats.failed.iter().any(|f| f == edit.name()) {
+                continue;
+            }
+            for a in attributes {
+                if !pending_attrs.contains(&a.as_str()) {
+                    pending_attrs.push(a);
+                }
+            }
+        }
+    }
+
     if !needs_reencode.is_empty() {
         if morphic::kv3_resource_has_blobs(&working).unwrap_or(true) {
             stats
@@ -253,12 +311,58 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
                     stats.failed.push(edit.name().to_string());
                 }
             }
+            // ride the same re-encode for attribute registration
+            for attr in pending_attrs.drain(..) {
+                register_attribute_in_tree(&mut tree, attr);
+            }
             working = morphic::encode_kv3_resource(&working, &tree)
                 .context("re-encoding material to promote tagless params")?;
         }
     }
 
+    // No re-encode happened: register byte-faithfully via structural insert.
+    if !pending_attrs.is_empty() {
+        let root = morphic::decode_kv3_resource(&working)
+            .context("decoding material KV3 for attribute registration")?;
+        let registered: Vec<String> = root
+            .get("m_renderAttributesUsed")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_ascii_lowercase))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for attr in pending_attrs {
+            if registered.iter().any(|r| r == attr) {
+                continue;
+            }
+            match morphic::patch_kv3_resource_array_insert(
+                &working,
+                &[Seg::Key("m_renderAttributesUsed".to_string())],
+                0,
+                &Value::String(attr.to_string()),
+            ) {
+                Ok(bytes) => working = bytes,
+                Err(_) => stats.failed.push(format!("m_renderAttributesUsed:{attr}")),
+            }
+        }
+    }
+
     Ok((working, stats))
+}
+
+/// Adds `attr` to the tree's `m_renderAttributesUsed` unless already present.
+fn register_attribute_in_tree(tree: &mut Value, attr: &str) {
+    let Some(Value::Array(list)) = tree.get_mut("m_renderAttributesUsed") else {
+        return;
+    };
+    let present = list
+        .iter()
+        .any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(attr)));
+    if !present {
+        list.push(Value::String(attr.to_string()));
+    }
 }
 
 /// Curated parameter bundles for common looks. All values are modeled on
@@ -621,6 +725,67 @@ mod tests {
             before.get("m_textureParams"),
             after.get("m_textureParams"),
             "texture params must be untouched"
+        );
+    }
+
+    #[test]
+    fn insert_dynamic_expression_and_register_attribute() {
+        let bytes = fixture();
+        let edits = [
+            VmatEdit::expr(
+                "g_vColorTint1",
+                "$ent_health < .4 ? float3(1,.1,.1) : float3(1,1,1)",
+            )
+            .unwrap(),
+            VmatEdit::expr("g_flSelfIllumScale1", "(1 - $ent_health) * 3").unwrap(),
+        ];
+        let (patched, stats) = patch_vmat_params(&bytes, &edits).unwrap();
+        // expression blobs land via the re-encode fallback (counted as set)
+        // or a structural insert, depending on what the patcher supports
+        assert_eq!(stats.set + stats.inserted, 2, "{:?}", stats.failed);
+        assert!(stats.failed.is_empty(), "{:?}", stats.failed);
+
+        let after = morphic::decode_kv3_resource(&patched).unwrap();
+        let i = param_index(&after, "m_dynamicParams", "g_vColorTint1").unwrap();
+        let blob = after
+            .get("m_dynamicParams")
+            .and_then(Value::as_array)
+            .and_then(|a| a.get(i))
+            .and_then(|p| p.get("m_value"))
+            .unwrap();
+        let VmatEdit::Expr { bytecode, .. } = &edits[0] else {
+            unreachable!()
+        };
+        assert_eq!(blob, &Value::Binary(bytecode.clone()));
+
+        let attrs = after
+            .get("m_renderAttributesUsed")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            attrs.iter().any(|v| v.as_str() == Some("$ent_health")),
+            "expression attribute must be registered: {attrs:?}"
+        );
+
+        // applying again is a no-op (already_applied catches the same blob)
+        let (_, stats2) = patch_vmat_params(&patched, &edits).unwrap();
+        assert_eq!(stats2.set, 2);
+        assert_eq!(stats2.inserted, 0);
+
+        // the engine only accepts blob sections in the native LZ4 form: the
+        // patched DATA block must stay v5 with compressionMethod=1 and a
+        // two-blob section (an uncompressed re-emit renders red wireframe)
+        let data = morphic::kv3_resource_data_block(&patched).unwrap();
+        assert_eq!(data[0], 5, "kv3 version");
+        assert_eq!(
+            i32::from_le_bytes(data[20..24].try_into().unwrap()),
+            1,
+            "compressionMethod must stay LZ4"
+        );
+        assert_eq!(
+            i32::from_le_bytes(data[56..60].try_into().unwrap()),
+            2,
+            "blob count"
         );
     }
 

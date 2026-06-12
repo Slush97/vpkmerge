@@ -385,15 +385,20 @@ pub fn insert_array_element_adding(
     index: usize,
     value: &Value,
 ) -> Result<Vec<u8>, DecodeError> {
+    // A block that carries (or will carry, because the inserted value holds a
+    // `Value::Binary`) a binary-blob section takes the compressed v5 path: the
+    // engine misreads uncompressed blob framing (stale LZ4 frame table; the
+    // covered mesh renders as a red wireframe error material), so the result
+    // must stay in the native LZ4 form.
+    let has_blobs = block.len() >= 60 && i32_at(block, 56)? != 0;
+    if has_blobs || value_contains_blob(value) {
+        return insert_array_element_blob_aware(block, array_path, index, value);
+    }
+
     let out = rewrap_uncompressed(block)?;
     let version = u32_at(&out, 0)? & 0xFF;
     if version != 4 && version != 5 {
         return Err(DecodeError::Kv3("array insert requires KV3 v4 or v5"));
-    }
-    if out.len() >= 60 && i32_at(&out, 56)? != 0 {
-        return Err(DecodeError::Kv3(
-            "array insert does not support KV3 binary-blob sections",
-        ));
     }
 
     let mut wanted = Vec::new();
@@ -430,6 +435,326 @@ pub fn insert_array_element_adding(
     }
 }
 
+fn value_contains_blob(value: &Value) -> bool {
+    match value {
+        Value::Binary(_) => true,
+        Value::Array(items) => items.iter().any(value_contains_blob),
+        Value::Object(pairs) => pairs.iter().any(|(_, v)| value_contains_blob(v)),
+        _ => false,
+    }
+}
+
+/// One LZ4 blob frame covers at most this many uncompressed bytes.
+const BLOB_FRAME_SIZE: usize = 16384;
+
+/// How many LZ4 frames carry a blob of `len` uncompressed bytes.
+fn blob_frame_count(len: usize) -> usize {
+    len.div_ceil(BLOB_FRAME_SIZE).max(1)
+}
+
+/// Absolute byte range of the v5 main-buffer type stream, mirroring
+/// [`rebuild_v5_with_insert`]'s layout math.
+fn v5_types_range(block: &[u8]) -> Result<(usize, usize), DecodeError> {
+    const HEADER: usize = 120;
+    let unc1 = i32_at(block, 72)? as usize;
+    let main_b1 = i32_at(block, 88)? as usize;
+    let main_b2 = i32_at(block, 92)? as usize;
+    let main_b4 = i32_at(block, 96)? as usize;
+    let main_b8 = i32_at(block, 100)? as usize;
+    let main_obj = i32_at(block, 108)? as usize;
+    let count_types = i32_at(block, 40)? as usize;
+    let buf2 = HEADER
+        .checked_add(unc1)
+        .ok_or(DecodeError::Kv3("buf1 extent overflow"))?;
+    let mut off = main_obj * 4;
+    off += main_b1;
+    lane(&mut off, main_b2, 2);
+    lane(&mut off, main_b4, 4);
+    lane(&mut off, main_b8, 8);
+    let start = buf2 + off;
+    let end = start
+        .checked_add(count_types)
+        .ok_or(DecodeError::Kv3("type stream extent overflow"))?;
+    Ok((start, end))
+}
+
+/// Counts `BINARY_BLOB` nodes in the type stream before the absolute offset
+/// `before_abs` (flag bytes are skipped, ids masked the way the v5 reader
+/// does). This is the document-order index a blob inserted at that position
+/// takes in the blob section.
+fn count_blob_nodes_before(block: &[u8], before_abs: usize) -> Result<usize, DecodeError> {
+    let (start, end) = v5_types_range(block)?;
+    let stop = before_abs.clamp(start, end);
+    let mut count = 0usize;
+    let mut i = start;
+    while i < stop {
+        let t = *block
+            .get(i)
+            .ok_or(DecodeError::Kv3("type stream underrun"))?;
+        if t & 0x80 != 0 {
+            i += 2;
+        } else {
+            i += 1;
+        }
+        if (t & 0x3F) == node::BINARY_BLOB {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Structural array insert into a v5 block that has (or gains) a binary-blob
+/// section. The block is decompressed into a walkable working copy, the
+/// regular lane-splice insert runs on it, the blob bookkeeping (per-blob
+/// length table, LZ4 per-frame size table, header counts) is updated, and the
+/// result is re-emitted `compressionMethod = 1` with the untouched blob
+/// frames spliced through byte-for-byte and the new blob's frames inserted at
+/// its document-order position.
+fn insert_array_element_blob_aware(
+    block: &[u8],
+    array_path: &[Seg],
+    index: usize,
+    value: &Value,
+) -> Result<Vec<u8>, DecodeError> {
+    const HEADER: usize = 120;
+    if block.len() < HEADER {
+        return Err(DecodeError::Kv3("block too short for a v5 header"));
+    }
+    let version = u32_at(block, 0)? & 0xFF;
+    if version != 5 {
+        return Err(DecodeError::Kv3(
+            "blob-bearing array insert requires KV3 v5",
+        ));
+    }
+    let compression = u32_at(block, 20)?;
+    let old_blob_count =
+        usize::try_from(i32_at(block, 56)?).map_err(|_| DecodeError::Kv3("negative blob count"))?;
+    if old_blob_count > 0 && compression != 1 {
+        return Err(DecodeError::Kv3(
+            "only LZ4-compressed blob sections are supported",
+        ));
+    }
+
+    // Walkable copy: [header][raw buf1][raw buf2]; blob frames omitted (a
+    // BINARY_BLOB node consumes no typed-lane bytes).
+    let working = decompress_v5_working(block)?;
+
+    let mut wanted = Vec::new();
+    collect_value_strings(value, &mut wanted);
+    let with_strings = append_strings_v5(&working, &wanted)?;
+
+    let site = {
+        let mut w = InsertWalk::new(&with_strings, array_path, index)?;
+        let root = w.read_type()?;
+        w.value(root)?;
+        w.finish()?
+    };
+    let blob_index = count_blob_nodes_before(&with_strings, site.cursors.types)?;
+
+    let strings = lanes(&with_strings, 5)?.strings;
+    let root_type = value_wire_type(value);
+    let include_root_type = site.subtype.is_none();
+    if let Some(subtype) = site.subtype {
+        if root_type != subtype {
+            return Err(DecodeError::Kv3(
+                "inserted value type does not match target typed-array subtype",
+            ));
+        }
+    }
+    let encoded = encode_insert_value(value, 5, &strings, include_root_type)?;
+    let rebuilt = rebuild_v5_with_insert(&with_strings, &site, &encoded)?;
+
+    finalize_blob_block(block, &rebuilt, blob_index, &encoded.blobs)
+}
+
+/// Re-emits `rebuilt` (an uncompressed `[header][raw1][raw2]` working block
+/// whose lanes already carry the inserted subtree) as a `compressionMethod=1`
+/// block, inserting `new_blobs` into the blob section at document-order
+/// position `blob_index`. `orig` supplies the untouched compressed buffers
+/// and blob frames.
+#[allow(clippy::too_many_lines)]
+fn finalize_blob_block(
+    orig: &[u8],
+    rebuilt: &[u8],
+    blob_index: usize,
+    new_blobs: &[Vec<u8>],
+) -> Result<Vec<u8>, DecodeError> {
+    const HEADER: usize = 120;
+    let orig_compression = u32_at(orig, 20)?;
+    let old_blob_count =
+        usize::try_from(i32_at(orig, 56)?).map_err(|_| DecodeError::Kv3("negative blob count"))?;
+    let old_table_bytes = if orig_compression == 1 {
+        usize::try_from(i32_at(orig, 68)?).map_err(|_| DecodeError::Kv3("negative table size"))?
+    } else {
+        0
+    };
+
+    let unc1 = i32_at(rebuilt, 72)? as usize;
+    let unc2 = i32_at(rebuilt, 80)? as usize;
+    let raw1 = rebuilt
+        .get(HEADER..HEADER + unc1)
+        .ok_or(DecodeError::Kv3("rebuilt buf1 out of range"))?;
+    let raw2 = rebuilt
+        .get(HEADER + unc1..HEADER + unc1 + unc2)
+        .ok_or(DecodeError::Kv3("rebuilt buf2 out of range"))?;
+
+    // Carve buf2's tail: [lengths: old_count*4][trailer][frame table: old_table_bytes]
+    let tail_len = old_blob_count * 4 + 4 + old_table_bytes;
+    let tail_off = unc2
+        .checked_sub(tail_len)
+        .ok_or(DecodeError::Kv3("buf2 too short for blob tail"))?;
+    let lengths_region = raw2
+        .get(tail_off..tail_off + old_blob_count * 4)
+        .ok_or(DecodeError::Kv3("blob length table out of range"))?;
+    let trailer_off = tail_off + old_blob_count * 4;
+    if u32_at(raw2, trailer_off)? != 0xFFEE_DD00 {
+        return Err(DecodeError::Kv3("blob tail trailer mismatch"));
+    }
+    let old_table = raw2
+        .get(trailer_off + 4..trailer_off + 4 + old_table_bytes)
+        .ok_or(DecodeError::Kv3("blob frame table out of range"))?;
+
+    let old_lengths: Vec<usize> = lengths_region
+        .chunks_exact(4)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        .collect();
+    let old_frame_sizes: Vec<usize> = old_table
+        .chunks_exact(2)
+        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+        .collect();
+    if blob_index > old_lengths.len() {
+        return Err(DecodeError::Kv3("blob insert index out of range"));
+    }
+
+    // Frame insertion point: frames of the blobs that precede blob_index.
+    let frames_before: usize = old_lengths[..blob_index]
+        .iter()
+        .map(|&l| blob_frame_count(l))
+        .sum();
+    if frames_before > old_frame_sizes.len() {
+        return Err(DecodeError::Kv3("blob frame table underrun"));
+    }
+    let frame_bytes_before: usize = old_frame_sizes[..frames_before].iter().sum();
+
+    // Compress the new blobs, chunked per frame.
+    let mut new_frame_sizes: Vec<u16> = Vec::new();
+    let mut new_frame_bytes: Vec<u8> = Vec::new();
+    for blob in new_blobs {
+        for chunk in blob.chunks(BLOB_FRAME_SIZE) {
+            let frame = lz4_flex::block::compress(chunk);
+            let size = u16::try_from(frame.len())
+                .map_err(|_| DecodeError::Kv3("blob frame does not fit the size table"))?;
+            new_frame_sizes.push(size);
+            new_frame_bytes.extend_from_slice(&frame);
+        }
+    }
+
+    // New buf2 tail.
+    let mut new_lengths = old_lengths.clone();
+    for (k, blob) in new_blobs.iter().enumerate() {
+        new_lengths.insert(blob_index + k, blob.len());
+    }
+    let mut new_table: Vec<u8> = Vec::with_capacity(old_table.len() + new_frame_sizes.len() * 2);
+    new_table.extend_from_slice(&old_table[..frames_before * 2]);
+    for s in &new_frame_sizes {
+        new_table.extend_from_slice(&s.to_le_bytes());
+    }
+    new_table.extend_from_slice(&old_table[frames_before * 2..]);
+
+    let mut new_raw2 = raw2[..tail_off].to_vec();
+    for len in &new_lengths {
+        new_raw2.extend_from_slice(
+            &i32::try_from(*len)
+                .map_err(|_| DecodeError::Kv3("blob too large"))?
+                .to_le_bytes(),
+        );
+    }
+    new_raw2.extend_from_slice(&0xFFEE_DD00u32.to_le_bytes());
+    new_raw2.extend_from_slice(&new_table);
+
+    // Blob frames: original region with the new frames spliced in.
+    // The frame region of a shipped blob-bearing block ends with a 4-byte
+    // 0xFFEEDD00 marker after the frame data; strip it from the original (so
+    // splicing stays index-clean) and always re-append it at the end.
+    let orig_frames: &[u8] = if orig_compression == 1 && old_blob_count > 0 {
+        let comp1 = i32_at(orig, 76)? as usize;
+        let comp2 = i32_at(orig, 84)? as usize;
+        let start = HEADER + comp1 + comp2;
+        let region = orig
+            .get(start..)
+            .ok_or(DecodeError::Kv3("blob frame region out of range"))?;
+        let data_len = region
+            .len()
+            .checked_sub(4)
+            .filter(|&l| u32_at(region, l).is_ok_and(|t| t == 0xFFEE_DD00))
+            .ok_or(DecodeError::Kv3("blob frame region missing its trailer"))?;
+        &region[..data_len]
+    } else {
+        &[]
+    };
+    if frame_bytes_before > orig_frames.len() {
+        return Err(DecodeError::Kv3("blob frame region underrun"));
+    }
+    let mut frames = Vec::with_capacity(orig_frames.len() + new_frame_bytes.len() + 4);
+    frames.extend_from_slice(&orig_frames[..frame_bytes_before]);
+    frames.extend_from_slice(&new_frame_bytes);
+    frames.extend_from_slice(&orig_frames[frame_bytes_before..]);
+    frames.extend_from_slice(&0xFFEE_DD00u32.to_le_bytes());
+
+    // Compress the typed buffers (reusing the original compressed bytes when a
+    // buffer is unchanged and was already LZ4).
+    let compress_buf = |raw: &[u8], orig_unc_off: usize, orig_comp_off: usize| -> Vec<u8> {
+        if orig_compression == 1 {
+            let ounc = i32_at(orig, orig_unc_off).unwrap_or(0) as usize;
+            let ocomp = i32_at(orig, orig_comp_off).unwrap_or(0) as usize;
+            let start = if orig_unc_off == 72 {
+                HEADER
+            } else {
+                HEADER + i32_at(orig, 76).unwrap_or(0) as usize
+            };
+            if let Some(oc) = orig.get(start..start + ocomp) {
+                if let Ok(orig_raw) = lz4_flex::block::decompress(oc, ounc) {
+                    if orig_raw == raw {
+                        return oc.to_vec();
+                    }
+                }
+            }
+        }
+        lz4_flex::block::compress(raw)
+    };
+    let comp1_bytes = compress_buf(raw1, 72, 76);
+    let comp2_bytes = compress_buf(&new_raw2, 80, 84);
+
+    // Header: start from the rebuilt one (its lane counts/types/object counts
+    // are current), then write the compression + blob bookkeeping.
+    let mut out = rebuilt[..HEADER].to_vec();
+    let total_blob_bytes: usize = new_lengths.iter().sum();
+    write_i32_at(&mut out, 20, 1); // compressionMethod = LZ4
+    out[26..28].copy_from_slice(
+        &u16::try_from(BLOB_FRAME_SIZE)
+            .unwrap_or(u16::MAX)
+            .to_le_bytes(),
+    );
+    write_i32_at(&mut out, 48, fit_i32(unc1 + new_raw2.len())?);
+    write_i32_at(
+        &mut out,
+        52,
+        fit_i32(comp1_bytes.len() + comp2_bytes.len())?,
+    );
+    write_i32_at(&mut out, 56, fit_i32(new_lengths.len())?);
+    write_i32_at(&mut out, 60, fit_i32(total_blob_bytes)?);
+    write_i32_at(&mut out, 68, fit_i32(new_table.len())?);
+    write_i32_at(&mut out, 72, fit_i32(unc1)?);
+    write_i32_at(&mut out, 76, fit_i32(comp1_bytes.len())?);
+    write_i32_at(&mut out, 80, fit_i32(new_raw2.len())?);
+    write_i32_at(&mut out, 84, fit_i32(comp2_bytes.len())?);
+
+    out.extend_from_slice(&comp1_bytes);
+    out.extend_from_slice(&comp2_bytes);
+    out.extend_from_slice(&frames);
+    Ok(out)
+}
+
 fn collect_value_strings(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(s) => push_unique_string(out, s),
@@ -461,6 +786,9 @@ struct EncodedInsert {
     b8: Vec<u8>,
     types: Vec<u8>,
     obj_lengths: Vec<u8>,
+    /// Binary blobs in document order; they consume no typed-lane bytes and
+    /// are attached to the block's blob section by [`finalize_blob_block`].
+    blobs: Vec<Vec<u8>>,
 }
 
 fn encode_insert_value(
@@ -479,6 +807,7 @@ fn encode_insert_value(
             b8: Vec::new(),
             types: Vec::new(),
             obj_lengths: Vec::new(),
+            blobs: Vec::new(),
         },
     };
     enc.value(value, include_root_type)?;
@@ -561,10 +890,9 @@ impl InsertEncoder<'_> {
                     self.value(child, true)?;
                 }
             }
-            (BINARY_BLOB, Value::Binary(_)) => {
-                return Err(DecodeError::Kv3(
-                    "array insert does not support inserted binary blobs",
-                ));
+            (BINARY_BLOB, Value::Binary(bytes)) => {
+                // no lane bytes; the blob itself rides the blob section
+                self.out.blobs.push(bytes.clone());
             }
             _ => return Err(DecodeError::Kv3("insert value/type mismatch")),
         }

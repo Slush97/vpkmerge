@@ -806,7 +806,7 @@ fn repaint_texture(
 
 fn repaint_ability_texture(bytes: &[u8], options: &TrippyAbilityOptions) -> Result<Vec<u8>> {
     let mut image = morphic::decode(bytes).context("decoding trippy ability texture")?;
-    paint_image(&mut image, options.style, options.phase, options.intensity)?;
+    paint_image_keep_value(&mut image, options.style, options.phase, options.intensity)?;
     morphic::replace_mip_chain(bytes, &image).context("re-encoding trippy ability texture")
 }
 
@@ -962,6 +962,55 @@ fn trippy_material_edits(
         ));
     }
     edits
+}
+
+/// Paint the trippy pattern while preserving each pixel's original brightness
+/// (max RGB channel): the pattern contributes hue and saturation only.
+///
+/// Ability/particle textures render additively, so a pixel's brightness IS its
+/// silhouette: flares, symbols, and falloff strips keep their art inside black
+/// margins. The plain [`paint_image`] (full-canvas blend, right for body-skin
+/// albedos whose UV islands hide the margins) lights those margins up and the
+/// whole quad renders as a square.
+#[allow(
+    clippy::many_single_char_names,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn paint_image_keep_value(
+    image: &mut Image,
+    style: TrippyStyle,
+    phase: f32,
+    intensity: f32,
+) -> Result<()> {
+    let (w, h) = (image.width, image.height);
+    let ImageData::Rgba8(px) = &mut image.data else {
+        anyhow::bail!("trippy skin supports LDR (8-bit) textures only");
+    };
+    let blend = intensity.clamp(0.0, 1.0);
+    for y in 0..h {
+        let v = y as f32 / h.max(1) as f32;
+        for x in 0..w {
+            let u = x as f32 / w.max(1) as f32;
+            let generated = trippy_pixel(style, u, v, phase);
+            let i = ((y * w + x) * 4) as usize;
+            let original_max = f32::from(px[i].max(px[i + 1]).max(px[i + 2]));
+            let generated_max =
+                f32::from(generated[0].max(generated[1]).max(generated[2])).max(1.0);
+            // Rescale the pattern so its brightest channel equals the original
+            // pixel's brightest channel, then blend as usual. Black stays black.
+            let scale = original_max / generated_max;
+            for k in 0..3 {
+                let original = f32::from(px[i + k]);
+                let shaped = f32::from(generated[k]) * scale;
+                px[i + k] = (original + (shaped - original) * blend)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[allow(
@@ -1531,6 +1580,57 @@ fn list_entries(vpks: &[valve_pak::VPK], prefixes: &[String], suffix: &str) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_value_paint_preserves_silhouette() {
+        // Additive ability sprites carry their silhouette in brightness: a
+        // black margin must stay black at full paint intensity, and a bright
+        // core must stay equally bright (only hue/sat may change). 4x4 image:
+        // black border, one white pixel and one mid-grey pixel in the middle.
+        let mut px = vec![0u8; 4 * 4 * 4];
+        for p in px.chunks_exact_mut(4) {
+            p[3] = 255;
+        }
+        let white = (4 + 1) * 4; // pixel (1,1)
+        px[white..white + 3].copy_from_slice(&[255, 255, 255]);
+        let grey = (2 * 4 + 2) * 4; // pixel (2,2)
+        px[grey..grey + 3].copy_from_slice(&[80, 80, 80]);
+        let mut image = Image {
+            width: 4,
+            height: 4,
+            data: ImageData::Rgba8(px),
+        };
+        for style in [TrippyStyle::Moire, TrippyStyle::Lava, TrippyStyle::Holo] {
+            let mut painted = image.clone();
+            paint_image_keep_value(&mut painted, style, 0.3, 1.0).unwrap();
+            let ImageData::Rgba8(out) = &painted.data else {
+                panic!("rgba8");
+            };
+            let ImageData::Rgba8(orig) = &image.data else {
+                panic!("rgba8");
+            };
+            for (i, (o, n)) in orig.chunks_exact(4).zip(out.chunks_exact(4)).enumerate() {
+                let omax = o[0].max(o[1]).max(o[2]);
+                let nmax = n[0].max(n[1]).max(n[2]);
+                assert!(
+                    i32::from(omax).abs_diff(i32::from(nmax)) <= 1,
+                    "{style:?} pixel {i}: brightness {omax} -> {nmax} (silhouette changed)"
+                );
+                assert_eq!(o[3], n[3], "{style:?} pixel {i}: alpha changed");
+            }
+        }
+        // The full-canvas painter, by contrast, lights the black margin up
+        // (that is the squared-off failure this guards against).
+        paint_image(&mut image, TrippyStyle::Lava, 0.3, 1.0).unwrap();
+        let ImageData::Rgba8(out) = &image.data else {
+            panic!("rgba8");
+        };
+        assert!(
+            out.chunks_exact(4)
+                .any(|p| p[0].max(p[1]).max(p[2]) > 0 && p[..3] != [255, 255, 255]),
+            "full-canvas paint should differ (sanity check)"
+        );
+    }
 
     #[test]
     fn style_aliases_parse() {

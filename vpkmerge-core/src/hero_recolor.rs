@@ -302,12 +302,19 @@ fn inferno_recipe() -> HeroRecolorRecipe {
 /// Abrams (`abrams`): particles plus two hero-specific projected self-illum
 /// textures found by `examples/recolor_assets.rs`. The rest of the referenced
 /// ability textures are masks, normals, AO, or shared defaults.
+///
+/// Valve is migrating his asset basename to `bull` (his `hero_atlas` record
+/// points card art at `bull_card` and his kit's charge/leap/passive particles
+/// plus all weapon FX now live under the `bull` dirs; `weapon_fx/abrams/` is
+/// empty as of the 2026-06-11 update). Cover both namespaces until the
+/// `abilities/abrams/` tree is gone too.
 fn abrams_recipe() -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: "abrams".to_string(),
         particle_prefixes: vec![
             "particles/abilities/abrams/".to_string(),
-            "particles/weapon_fx/abrams/".to_string(),
+            "particles/abilities/bull/".to_string(),
+            "particles/weapon_fx/bull/".to_string(),
         ],
         texture_entries: [
             "materials/particle/abilities/abrams/abrams_leap_ground_impact_hot_symbol_projected_vmat_g_tselfillum_670d93d.vtex_c",
@@ -636,7 +643,9 @@ fn familiar_recipe() -> HeroRecolorRecipe {
     )
 }
 
-/// Victor (`frank`): high-saturation ground projections from the ability audit.
+/// Victor (`frank`): high-saturation ground projections from the ability audit,
+/// plus the Aura of Suffering membrane color map added by the 2026-06-11 update
+/// (`painaura_model_fade_color`, the chromatic layer of the green aura rework).
 fn frank_recipe() -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: "frank".to_string(),
@@ -646,6 +655,7 @@ fn frank_recipe() -> HeroRecolorRecipe {
         ],
         texture_entries: [
             "materials/particle/abilities/frank/frank_painaura_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/abilities/frank/frank_painaura_model_fade_color_psd_807c6243.vtex_c",
             "materials/particle/abilities/frank/frank_revive_marker_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/frank_shock_miss_projected_bright_vmat_g_tselfillum_670d93d.vtex_c",
         ]
@@ -3493,7 +3503,6 @@ mod tests {
         // at least one hero-specific chromatic texture; shared/default textures
         // from the audit are deliberately excluded.
         for (code, texture_count, required_marker) in [
-            ("abrams", 2, "abrams_leap_ground_impact"),
             ("fencer", 4, "fencer_ult_gradient_color"),
             ("ghost", 2, "ghost2_clothes_fx_prop_color"),
             ("nano", 2, "nano_ult_ground_dark_proj"),
@@ -3524,6 +3533,34 @@ mod tests {
             assert!(r.model_entries.is_empty());
             assert!(recipe_for(&code.to_uppercase()).is_some());
         }
+    }
+
+    #[test]
+    fn abrams_recipe_covers_the_bull_namespace_migration() {
+        // Abrams' asset basename is migrating to `bull` (his `hero_atlas`
+        // record points card art at `bull_card`; charge/leap/passive particles
+        // and all weapon FX moved to the `bull` dirs in the 2026-06-11 update,
+        // leaving `weapon_fx/abrams/` empty). The recipe must straddle both.
+        let r = recipe_for("abrams").expect("abrams recipe");
+        assert_eq!(r.codename, "abrams");
+        assert_eq!(
+            r.particle_prefixes,
+            [
+                "particles/abilities/abrams/",
+                "particles/abilities/bull/",
+                "particles/weapon_fx/bull/",
+            ]
+        );
+        assert_eq!(r.texture_entries.len(), 2);
+        assert!(r
+            .texture_entries
+            .iter()
+            .any(|t| t.contains("abrams_leap_ground_impact")));
+        let preview = r.preview_texture.expect("abrams has a preview texture");
+        assert!(r.texture_entries.contains(&preview));
+        assert!(r.material_entries.is_empty());
+        assert!(r.model_entries.is_empty());
+        assert!(recipe_for("ABRAMS").is_some());
     }
 
     #[test]
@@ -3558,7 +3595,7 @@ mod tests {
             ("drifter", 1, 0, "drifter_claw_ground_projected"),
             ("dynamo", 5, 2, "dynamo_void_sphere_projected"),
             ("familiar", 5, 0, "familiar_spotlight_ground_projected"),
-            ("frank", 3, 1, "frank_painaura_aoe_ground"),
+            ("frank", 4, 1, "frank_painaura_aoe_ground"),
             ("haze", 1, 0, "haze_tracer_self_illum"),
             ("kelvin", 3, 0, "kelvin_ice_dome_projected"),
             ("priest", 3, 0, "priest_snaptrap_ground"),

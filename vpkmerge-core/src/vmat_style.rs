@@ -39,6 +39,16 @@ pub enum VmatEdit {
         bytecode: Vec<u8>,
         attributes: Vec<String>,
     },
+    /// In-place edit of an *existing* `m_dynamicParams` expression: decompile
+    /// the current bytecode, replace every occurrence of `find` with `replace`
+    /// in the source, then recompile. Resolved to [`VmatEdit::Expr`] per target
+    /// material (it depends on that material's current expression) at the top of
+    /// [`patch_vmat_params`]; the other methods never see this variant.
+    EditExpr {
+        name: String,
+        find: String,
+        replace: String,
+    },
 }
 
 impl VmatEdit {
@@ -61,7 +71,7 @@ impl VmatEdit {
             Self::Int { .. } => "m_intParams",
             Self::Float { .. } => "m_floatParams",
             Self::Vector { .. } => "m_vectorParams",
-            Self::Expr { .. } => "m_dynamicParams",
+            Self::Expr { .. } | Self::EditExpr { .. } => "m_dynamicParams",
         }
     }
 
@@ -70,7 +80,8 @@ impl VmatEdit {
             Self::Int { name, .. }
             | Self::Float { name, .. }
             | Self::Vector { name, .. }
-            | Self::Expr { name, .. } => name,
+            | Self::Expr { name, .. }
+            | Self::EditExpr { name, .. } => name,
         }
     }
 
@@ -83,6 +94,7 @@ impl VmatEdit {
                 Value::Array(value.iter().map(|&c| Value::Double(c)).collect()),
             ),
             Self::Expr { bytecode, .. } => ("m_value", Value::Binary(bytecode.clone())),
+            Self::EditExpr { .. } => unreachable!("EditExpr is resolved to Expr before as_object"),
         };
         Value::Object(vec![
             ("m_name".to_string(), Value::String(self.name().to_string())),
@@ -134,6 +146,9 @@ fn already_applied(root: &Value, i: usize, edit: &VmatEdit) -> bool {
             }),
         VmatEdit::Expr { bytecode, .. } => {
             matches!(param.get("m_value"), Some(Value::Binary(b)) if b == bytecode)
+        }
+        VmatEdit::EditExpr { .. } => {
+            unreachable!("EditExpr is resolved to Expr before already_applied")
         }
     }
 }
@@ -195,6 +210,9 @@ fn apply_in_place(
                     "existing dynamic param needs a re-encode",
                 ))
             }
+            VmatEdit::EditExpr { .. } => {
+                unreachable!("EditExpr is resolved to Expr before apply_in_place")
+            }
         };
         Ok((bytes, false))
     } else {
@@ -220,6 +238,9 @@ fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
                 VmatEdit::Int { .. } => "m_nValue",
                 VmatEdit::Float { .. } => "m_flValue",
                 VmatEdit::Vector { .. } | VmatEdit::Expr { .. } => "m_value",
+                VmatEdit::EditExpr { .. } => {
+                    unreachable!("EditExpr is resolved to Expr before apply_to_tree")
+                }
             };
             let Some(slot) = params[i].get_mut(value_key) else {
                 return false;
@@ -231,6 +252,9 @@ fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
                     Value::Array(value.iter().map(|&c| Value::Double(c)).collect())
                 }
                 VmatEdit::Expr { bytecode, .. } => Value::Binary(bytecode.clone()),
+                VmatEdit::EditExpr { .. } => {
+                    unreachable!("EditExpr is resolved to Expr before apply_to_tree")
+                }
             };
         }
         None => params.push(edit.as_object()),
@@ -238,8 +262,100 @@ fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
     true
 }
 
+/// The attribute names a material declares in `m_renderAttributesUsed` (the
+/// dictionary that lets [`morphic::vfx_expr::decompile`] recover `$names` from
+/// their hashed tokens).
+fn render_attrs(root: &Value) -> Vec<String> {
+    root.get("m_renderAttributesUsed")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolves a [`VmatEdit::EditExpr`] against `root` (one target material):
+/// decompile the named `m_dynamicParams` expression, substitute `find`->
+/// `replace` in the source, recompile. Returns the equivalent
+/// [`VmatEdit::Expr`], or an error string describing why it could not apply.
+fn resolve_edit_expr(
+    root: &Value,
+    name: &str,
+    find: &str,
+    replace: &str,
+) -> std::result::Result<VmatEdit, String> {
+    let idx = param_index(root, "m_dynamicParams", name)
+        .ok_or_else(|| format!("{name}: no existing dynamic expression to edit"))?;
+    let bytes = root
+        .get("m_dynamicParams")
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(idx))
+        .and_then(|p| p.get("m_value"))
+        .and_then(expr_bytes)
+        .ok_or_else(|| format!("{name}: dynamic param has no readable bytecode"))?;
+    let attrs = render_attrs(root);
+    let src = morphic::vfx_expr::decompile(&bytes, &attrs)
+        .map_err(|e| format!("{name}: decompile failed ({e})"))?;
+    if !src.contains(find) {
+        return Err(format!(
+            "{name}: {find:?} not found in current expression {src:?}"
+        ));
+    }
+    let new_src = src.replace(find, replace);
+    let compiled = morphic::vfx_expr::compile(&new_src)
+        .map_err(|e| format!("{name}: recompiled {new_src:?} did not parse ({e})"))?;
+    Ok(VmatEdit::Expr {
+        name: name.to_string(),
+        bytecode: compiled.bytecode,
+        attributes: compiled.attributes,
+    })
+}
+
+/// Converts every [`VmatEdit::EditExpr`] in `edits` into a concrete
+/// [`VmatEdit::Expr`] resolved against `bytes` (one material), passing other
+/// edits through unchanged. A resolution that fails (no such expression, `find`
+/// absent, recompile error) is recorded in `stats.failed` and dropped.
+fn resolve_in_place_edits(
+    bytes: &[u8],
+    edits: &[VmatEdit],
+    stats: &mut VmatPatchStats,
+) -> Result<Vec<VmatEdit>> {
+    let mut out = Vec::with_capacity(edits.len());
+    let mut root = None;
+    for edit in edits {
+        match edit {
+            VmatEdit::EditExpr {
+                name,
+                find,
+                replace,
+            } => {
+                let tree = match &root {
+                    Some(t) => t,
+                    None => root.insert(
+                        morphic::decode_kv3_resource(bytes)
+                            .context("decoding material KV3 to edit an expression")?,
+                    ),
+                };
+                match resolve_edit_expr(tree, name, find, replace) {
+                    Ok(resolved) => out.push(resolved),
+                    Err(msg) => stats.failed.push(msg),
+                }
+            }
+            other => out.push(other.clone()),
+        }
+    }
+    Ok(out)
+}
+
 /// Applies `edits` to a compiled `.vmat_c`, setting existing params and
 /// inserting missing ones.
+///
+/// [`VmatEdit::EditExpr`] edits are resolved first against this material's
+/// current expressions (decompile -> substitute -> recompile) into ordinary
+/// `Expr` edits; one that has no matching expression or whose substitution
+/// does not recompile is reported in [`VmatPatchStats::failed`] and skipped.
 ///
 /// Byte-faithful in-place patching is tried first. A tagless stored value (a
 /// 0/1 encoded with no data bytes) cannot be patched in place; in that case a
@@ -256,6 +372,12 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
     let mut working = bytes.to_vec();
     let mut stats = VmatPatchStats::default();
     let mut needs_reencode = Vec::new();
+
+    // Resolve any in-place expression edits against this material's *current*
+    // expressions first; they become ordinary `Expr` edits (or are recorded as
+    // failed and dropped), so the rest of the pipeline never sees `EditExpr`.
+    let resolved = resolve_in_place_edits(&working, edits, &mut stats)?;
+    let edits = &resolved;
 
     for edit in edits {
         let root = morphic::decode_kv3_resource(&working)
@@ -298,9 +420,21 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
 
     if !needs_reencode.is_empty() {
         if morphic::kv3_resource_has_blobs(&working).unwrap_or(true) {
-            stats
-                .failed
-                .extend(needs_reencode.iter().map(|e| e.name().to_string()));
+            // A blob-bearing material refuses the re-encode fallback. Changing
+            // an *existing* dynamic expression lands here (its bytecode is a
+            // blob, and replacing a blob is not yet supported byte-faithfully);
+            // report why rather than emit a bare param name.
+            stats.failed.extend(needs_reencode.iter().map(|e| {
+                if matches!(e, VmatEdit::Expr { .. }) {
+                    format!(
+                        "{}: cannot replace an existing dynamic expression in a \
+                         blob-bearing material (no blob-aware replace yet)",
+                        e.name()
+                    )
+                } else {
+                    e.name().to_string()
+                }
+            }));
         } else {
             let mut tree = morphic::decode_kv3_resource(&working)
                 .context("decoding material KV3 for re-encode fallback")?;
@@ -500,6 +634,56 @@ pub struct VmatInfo {
     pub flags: Vec<(String, i64)>,
     /// Bound texture samplers (`g_t*` name -> resource path).
     pub textures: Vec<(String, String)>,
+    /// Per-frame dynamic expressions decompiled from `m_dynamicParams` and
+    /// `m_dynamicTextureParams` (param name -> source). A blob that fails to
+    /// decompile is reported as `<error: ...>` rather than dropped.
+    pub expressions: Vec<(String, String)>,
+}
+
+/// Pull the raw expression bytecode out of a `m_value` node, whether morphic
+/// decoded it as a binary blob or as a typed byte array.
+fn expr_bytes(value: &Value) -> Option<Vec<u8>> {
+    match value {
+        Value::Binary(b) => Some(b.clone()),
+        Value::Array(items) => items
+            .iter()
+            .map(|v| v.as_int().and_then(|n| u8::try_from(n).ok()))
+            .collect(),
+        _ => None,
+    }
+}
+
+/// Decompile every dynamic-expression param in `root`, using the material's
+/// `m_renderAttributesUsed` to recover attribute names from their hashes.
+fn material_expressions(root: &Value) -> Vec<(String, String)> {
+    let attrs: Vec<String> = root
+        .get("m_renderAttributesUsed")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    for table in ["m_dynamicParams", "m_dynamicTextureParams"] {
+        let Some(Value::Array(params)) = root.get(table) else {
+            continue;
+        };
+        for p in params {
+            let Some(name) = p.get("m_name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(bytes) = p.get("m_value").and_then(expr_bytes) else {
+                continue;
+            };
+            let src = morphic::vfx_expr::decompile(&bytes, &attrs)
+                .unwrap_or_else(|e| format!("<error: {e}>"));
+            out.push((name.to_string(), src));
+        }
+    }
+    out
 }
 
 fn discover_materials(vpks: &[valve_pak::VPK], targets: &VmatTargets) -> Vec<String> {
@@ -564,6 +748,7 @@ fn material_info(entry: &str, root: &Value) -> VmatInfo {
         shader,
         flags,
         textures,
+        expressions: material_expressions(root),
     }
 }
 
@@ -639,9 +824,19 @@ pub fn style_materials_to_addon(
 
     anyhow::ensure!(
         !packed.is_empty(),
-        "no materials accepted the edits (targets matched {} unreadable, {} non-pbr)",
+        "no materials accepted the edits ({} unreadable, {} non-pbr){}",
         report.skipped_unreadable,
-        report.skipped_non_pbr
+        report.skipped_non_pbr,
+        if report.failed_params.is_empty() {
+            String::new()
+        } else {
+            let reasons: Vec<String> = report
+                .failed_params
+                .iter()
+                .map(|(e, why)| format!("\n  {e}: {why}"))
+                .collect();
+            format!("; failures:{}", reasons.join(""))
+        }
     );
     let files: Vec<(&str, &[u8])> = packed
         .iter()
@@ -725,6 +920,68 @@ mod tests {
             before.get("m_textureParams"),
             after.get("m_textureParams"),
             "texture params must be untouched"
+        );
+    }
+
+    #[test]
+    fn edit_expr_resolves_against_current_expression() {
+        // Seed an expression (blob-aware insert works on the blobbed fixture),
+        // then resolve an in-place substitution against it.
+        let bytes = fixture();
+        let (seeded, s0) = patch_vmat_params(
+            &bytes,
+            &[VmatEdit::expr("g_flSelfIllumScale1", "-1 * sin(10 * time())").unwrap()],
+        )
+        .unwrap();
+        assert!(s0.failed.is_empty(), "{:?}", s0.failed);
+        let tree = morphic::decode_kv3_resource(&seeded).unwrap();
+
+        // 10 -> 20: decompile, substitute, recompile.
+        let resolved =
+            resolve_edit_expr(&tree, "g_flSelfIllumScale1", "10 * time()", "20 * time()").unwrap();
+        let VmatEdit::Expr { bytecode, .. } = &resolved else {
+            panic!("expected an Expr edit")
+        };
+        assert_eq!(
+            *bytecode,
+            morphic::vfx_expr::compile("-1 * sin(20 * time())")
+                .unwrap()
+                .bytecode
+        );
+
+        // No such expression / absent FIND are clear errors, not silent no-ops.
+        assert!(resolve_edit_expr(&tree, "g_flNope", "x", "y")
+            .unwrap_err()
+            .contains("no existing dynamic expression"));
+        assert!(
+            resolve_edit_expr(&tree, "g_flSelfIllumScale1", "99 * time()", "1")
+                .unwrap_err()
+                .contains("not found")
+        );
+    }
+
+    #[test]
+    fn edit_expr_on_blob_material_reports_unsupported() {
+        // Until a blob-aware replace lands, editing an existing expression on a
+        // blob-bearing material must fail loudly (never emit a broken blob).
+        let bytes = fixture();
+        let (seeded, _) = patch_vmat_params(
+            &bytes,
+            &[VmatEdit::expr("g_flSelfIllumScale1", "-1 * sin(10 * time())").unwrap()],
+        )
+        .unwrap();
+        let edit = VmatEdit::EditExpr {
+            name: "g_flSelfIllumScale1".into(),
+            find: "10 * time()".into(),
+            replace: "20 * time()".into(),
+        };
+        let (_, stats) = patch_vmat_params(&seeded, &[edit]).unwrap();
+        assert_eq!(stats.set + stats.inserted, 0);
+        assert_eq!(stats.failed.len(), 1);
+        assert!(
+            stats.failed[0].contains("blob-aware replace"),
+            "{:?}",
+            stats.failed
         );
     }
 

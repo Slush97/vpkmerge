@@ -514,6 +514,16 @@ struct VmatCmd {
     #[arg(long = "set-expr", value_name = "NAME=EXPR")]
     set_expr: Vec<String>,
 
+    /// Edit an *existing* dynamic expression in place via a sed-style
+    /// substitution `NAME=s<D>FIND<D>REPLACE<D>` (pick any delimiter `<D>` so
+    /// it avoids `/` in the expression), e.g.
+    /// `g_flSelfIllumScale1=s|10 * time()|20 * time()|`. The current expression
+    /// is decompiled (see `--list`), `FIND` replaced with `REPLACE` everywhere,
+    /// and recompiled. Fails if the material has no such expression or `FIND` is
+    /// absent. Repeatable.
+    #[arg(long = "edit-expr", value_name = "NAME=s/FIND/REPLACE/")]
+    edit_expr: Vec<String>,
+
     /// Target set for hero discovery: all, body, or weapons.
     #[arg(long, value_name = "TARGETS", default_value = "all")]
     targets: String,
@@ -2286,7 +2296,40 @@ fn vmat_edits(args: &VmatCmd) -> Result<Vec<vpkmerge_core::VmatEdit>> {
                 .with_context(|| format!("--set-expr {spec:?}"))?,
         );
     }
+    for spec in &args.edit_expr {
+        let (name, find, replace) =
+            parse_edit_expr(spec).with_context(|| format!("--edit-expr {spec:?}"))?;
+        edits.push(vpkmerge_core::VmatEdit::EditExpr {
+            name: name.to_string(),
+            find,
+            replace,
+        });
+    }
     Ok(edits)
+}
+
+/// Parse `NAME=s<D>FIND<D>REPLACE<D>` (sed-style; `<D>` is any single
+/// delimiter char). The trailing delimiter is optional.
+fn parse_edit_expr(spec: &str) -> Result<(&str, String, String)> {
+    let (name, cmd) = parse_name_eq(spec, "--edit-expr")?;
+    let mut chars = cmd.chars();
+    anyhow::ensure!(
+        chars.next() == Some('s'),
+        "--edit-expr command must start with 's' (a sed-style substitution)"
+    );
+    let delim = chars
+        .next()
+        .context("--edit-expr: substitution needs a delimiter, e.g. s|find|replace|")?;
+    let parts: Vec<&str> = chars.as_str().split(delim).collect();
+    let (find, replace) = match parts.as_slice() {
+        [find, replace] | [find, replace, ""] => (*find, *replace),
+        _ => anyhow::bail!(
+            "--edit-expr: delimiter {delim:?} must appear exactly twice \
+             (s{delim}FIND{delim}REPLACE{delim}); pick a delimiter not used in the text"
+        ),
+    };
+    anyhow::ensure!(!find.is_empty(), "--edit-expr: FIND must not be empty");
+    Ok((name, find.to_string(), replace.to_string()))
 }
 
 fn run_vmat(args: &VmatCmd) -> Result<()> {
@@ -2331,6 +2374,9 @@ fn run_vmat(args: &VmatCmd) -> Result<()> {
             for (slot, path) in &info.textures {
                 println!("  {slot} -> {path}");
             }
+            for (name, expr) in &info.expressions {
+                println!("  expr {name} = {expr}");
+            }
         }
         println!("{} material(s)", infos.len());
         return Ok(());
@@ -2339,7 +2385,7 @@ fn run_vmat(args: &VmatCmd) -> Result<()> {
     let edits = vmat_edits(args)?;
     anyhow::ensure!(
         !edits.is_empty(),
-        "nothing to do: pass --preset and/or --set-int/--set-float/--set-vec/--set-expr (or --list)"
+        "nothing to do: pass --preset and/or --set-int/--set-float/--set-vec/--set-expr/--edit-expr (or --list)"
     );
     let Some(out) = &args.encode_vpk else {
         anyhow::bail!("--encode-vpk OUT_dir.vpk is required when patching");

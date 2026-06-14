@@ -256,8 +256,11 @@ non-blobbed materials) and packs an addon VPK.
 `vpkmerge vmat --vpk <VPK> [--base <VPK>] (--hero CODENAME | --entry PATH...)
 [--list] [--preset gem|glass|pbr|unlit|ink] [--tint COLOR] [--set-int NAME=V]
 [--set-float NAME=V] [--set-vec NAME=X,Y,Z[,W]] [--set-expr NAME=EXPR]
-[--targets all|body|weapons] [--encode-vpk OUT_dir.vpk]`. `--list` surveys
-shader/flags/texture channels. Presets are modeled on shipped Valve materials
+[--edit-expr NAME=s/FIND/REPLACE/] [--targets all|body|weapons]
+[--encode-vpk OUT_dir.vpk]`. `--list` surveys
+shader/flags/texture channels **and decompiles every dynamic expression** (an
+`expr NAME = SRC` line per `m_dynamicParams`/`m_dynamicTextureParams` entry).
+Presets are modeled on shipped Valve materials
 (gem sheen = `xmas_vindicta_dress`, glass = `viscous_body`); `pbr` turns NPR
 lighting OFF for real reflections. Material paths use hero display names
 (`vindicta`), not model codenames (`hornet`). Survey + probe plan:
@@ -271,8 +274,29 @@ Grammar: floats, `$attribute` reads (auto-registered in
 `m_renderAttributesUsed`), the fixed builtin table (`sin`..`RemapValClamped`,
 incl. `time()`, `lerp`, `float2/3/4`), arithmetic/comparisons, `?:`, `&&`/`||`,
 swizzles, `exists()`. Verified byte-identical to Valve's compiler on shipped
-blobs; round-trip gate = `tools/morphic-oracle dynexpr decompile` (VRF) must
-print the source back. 480 shipped pak01 materials use these (430 on
+blobs (incl. negative literals: Valve emits `FLOAT; NEGATE`, never a folded
+negative float, so neither does morphic). `morphic::vfx_expr::decompile` is the
+in-Rust inverse (no .NET needed): it reconstructs source from the bytecode,
+recovering attribute names from the material's `m_renderAttributesUsed`.
+Round-trips on 1027/1044 shipped pak01 expressions (`compile(decompile(b))==b`);
+the 17 hold-outs use local variables / multi-statement bytecode (opcodes
+`0x08`/`0x09`, outside the grammar) and are reported as `<error>` rather than
+guessed. Cross-checked against `tools/morphic-oracle dynexpr decompile` (VRF).
+
+`--edit-expr 'NAME=s<D>FIND<D>REPLACE<D>'` edits an **existing** expression in
+place: decompile -> literal substring substitution -> recompile (sed-style, any
+delimiter `<D>`). **Caveat: only ADDING expressions works on shipped materials,
+not modifying existing ones.** A material that already carries a dynamic
+expression is blob-bearing (`countBlocks > 0`; the bytecode is a binary blob),
+and replacing a blob needs a *blob-aware replace* that morphic does not have yet
+(it has a blob-aware insert; the re-encode fallback is refused for blobbed
+`.vmat_c` because an uncompressed re-emit renders red wireframe). So `--edit-expr`
+(and `--set-expr` overriding an existing param) resolves correctly but then fails
+loudly with "cannot replace an existing dynamic expression in a blob-bearing
+material". The blob replace is the unbuilt follow-up; it is more bounded than the
+insert (it touches only the target blob's length-table entry + LZ4 frame, never
+the lane buffers/type stream/strings), but it is in-game-gated binary surgery.
+480 shipped pak01 materials use these (430 on
 `pbr.vfx`); engine-supplied entity attributes (`$ent_health`, `$ent_age`,
 `$ent_origin`, ... + scene-side `$camera_origin`) enumerate from `strings` over
 `game/citadel/bin/win64/client.dll`. `oracle dynexpr hash|brute` reverses

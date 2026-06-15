@@ -531,6 +531,14 @@ pub struct EncodedMesh {
     pub mvtx: Vec<u8>,
     /// meshopt-encoded index buffer (codec v1, header `0xe1`).
     pub midx: Vec<u8>,
+    /// Raw interleaved vertex bytes (the uncompressed MVTX block payload). The
+    /// engine reads uncompressed vertex buffers natively; morphic's meshopt codec
+    /// v1 (`mvtx`) is NOT byte-compatible with the engine's decoder and garbles in
+    /// game, so a buffer written for the engine must use this with
+    /// `m_bMeshoptCompressed = false`.
+    pub mvtx_raw: Vec<u8>,
+    /// Raw index bytes (u16/u32 LE), the uncompressed MIDX block payload.
+    pub midx_raw: Vec<u8>,
     pub vertex_count: usize,
     /// Interleaved vertex stride in bytes.
     pub stride: usize,
@@ -730,6 +738,8 @@ fn encode_mesh(asm: AssembledBuffer, indices: &[u32]) -> Result<EncodedMesh, Dec
     Ok(EncodedMesh {
         mvtx,
         midx,
+        mvtx_raw: asm.data,
+        midx_raw: index_bytes,
         vertex_count: asm.element_count,
         stride: asm.stride,
         index_count: indices.len(),

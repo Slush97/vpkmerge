@@ -122,6 +122,7 @@ pub struct DrawCall {
     pub vertex_count: usize,
     pub index_count: usize,
     pub start_index: usize,
+    pub applied_index_offset: u32,
     pub base_vertex: u32,
     pub material: String,
     pub primitive_type: String,
@@ -168,6 +169,8 @@ impl DrawCall {
             vertex_count: int_field(dc, "m_nVertexCount")?,
             index_count: int_field(dc, "m_nIndexCount")?,
             start_index: int_field(dc, "m_nStartIndex")?,
+            applied_index_offset: u32::try_from(int_field(dc, "m_nAppliedIndexOffset")?)
+                .map_err(|_| DecodeError::Model("applied index offset too large"))?,
             base_vertex: u32::try_from(int_field(dc, "m_nBaseVertex")?)
                 .map_err(|_| DecodeError::Model("base vertex too large"))?,
             material,
@@ -326,7 +329,8 @@ pub fn assemble(
             if dc.vertex_buffer >= vertex_buffers.len() {
                 return Err(DecodeError::Model("draw call vertex buffer out of range"));
             }
-            let indices = ib.read_indices(dc.start_index, dc.index_count, dc.base_vertex)?;
+            let index_offset = dc.base_vertex.wrapping_add(dc.applied_index_offset);
+            let indices = ib.read_indices(dc.start_index, dc.index_count, index_offset)?;
             primitives.push(Primitive {
                 vertex_buffer: dc.vertex_buffer,
                 vertex_buffers: dc.vertex_buffers.clone(),
@@ -540,9 +544,11 @@ pub fn assemble_vertex_buffer(vb: &VertexBuffer) -> Result<AssembledBuffer, Deco
 
 /// Assembles a [`VertexBuffer`] into an interleaved stream that conforms to an
 /// **existing target layout's field set** (the T1d-b wedge): one output field
-/// per `target` field, in the same order, with the same semantic name + index,
-/// but re-typed to the uncompressed format this codec writes. Offsets and stride
-/// are recomputed for the new formats.
+/// per `target` field, in the same order, with the same semantic name + index.
+/// Formats are preserved when this codec can write them (notably packed
+/// normal/tangent frames and low-precision UVs); unsupported target encodings
+/// fall back to the uncompressed format this codec writes. Offsets and stride are
+/// recomputed for the selected formats.
 ///
 /// This is what "replace one mesh part in place" needs: keeping the target's
 /// `m_inputLayoutFields` *element count* (and order, and semantics) unchanged
@@ -564,7 +570,7 @@ pub fn assemble_vertex_buffer(vb: &VertexBuffer) -> Result<AssembledBuffer, Deco
 /// - `COLOR` defaults to opaque white (a neutral vertex tint).
 ///
 /// Errors on an empty buffer, a `POSITION` count mismatch, a blend index over
-/// 255, or a target semantic this codec cannot emit uncompressed.
+/// 255, or a target semantic this codec cannot emit.
 pub fn assemble_to_layout(
     vb: &VertexBuffer,
     target: &[InputLayoutField],
@@ -582,11 +588,11 @@ pub fn assemble_to_layout(
         return Err(DecodeError::Model("target layout has no POSITION field"));
     }
 
-    // Re-type each target field to its uncompressed format and lay it out fresh.
+    // Preserve target encodings where we can write them, then lay out fresh.
     let mut fields = Vec::with_capacity(target.len());
     let mut stride = 0usize;
     for t in target {
-        let format = uncompressed_format_for(&t.semantic_name)?;
+        let format = writable_format_for(t)?;
         fields.push(InputLayoutField {
             semantic_name: t.semantic_name.clone(),
             semantic_index: t.semantic_index,
@@ -618,8 +624,8 @@ pub fn assemble_to_layout(
             let o = base + f.offset;
             match f.semantic_name.as_str() {
                 "POSITION" => put_f32s(&mut data, o, &vb.positions[i]),
-                "NORMAL" => put_f32s(&mut data, o, &normals[i]),
-                "TANGENT" => put_f32s(&mut data, o, &tangents[i]),
+                "NORMAL" => put_normal(&mut data, o, f.format, normals[i], tangents[i])?,
+                "TANGENT" => put_vector4(&mut data, o, f.format, tangents[i])?,
                 "TEXCOORD" => {
                     let s = usize::try_from(f.semantic_index).unwrap_or(0);
                     let uv = vb
@@ -628,18 +634,11 @@ pub fn assemble_to_layout(
                         .filter(|t| t.len() == count)
                         .or_else(|| vb.texcoords.first().filter(|t| t.len() == count))
                         .map_or([0.0, 0.0], |t| t[i]);
-                    put_f32s(&mut data, o, &uv);
+                    put_vector2(&mut data, o, f.format, uv)?;
                 }
                 "BLENDINDICES" => {
                     let js = if has_joints { vb.joints[i] } else { [0; 4] };
-                    for (k, &j) in js.iter().enumerate() {
-                        data[o + k] = u8::try_from(j).map_err(|_| {
-                            DecodeError::Model(
-                                "blend index exceeds 255 (localize JOINTS_0 to the target mesh's \
-                                 bone remap first; see skeleton::localize_joints)",
-                            )
-                        })?;
-                    }
+                    put_blend_indices(&mut data, o, f.format, js)?;
                 }
                 "BLENDWEIGHT" | "BLENDWEIGHTS" => {
                     let w = if has_weights {
@@ -649,7 +648,7 @@ pub fn assemble_to_layout(
                     } else {
                         [0, 0, 0, 0]
                     };
-                    data[o..o + 4].copy_from_slice(&w);
+                    put_blend_weights(&mut data, o, f.format, w)?;
                 }
                 "COLOR" => {
                     let s = usize::try_from(f.semantic_index).unwrap_or(0);
@@ -658,7 +657,7 @@ pub fn assemble_to_layout(
                         .get(s)
                         .filter(|c| c.len() == count)
                         .map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
-                    data[o..o + 4].copy_from_slice(&quantize_color_u8(color));
+                    put_color(&mut data, o, f.format, color)?;
                 }
                 other => {
                     return Err(unsupported_target_semantic(other));
@@ -675,9 +674,51 @@ pub fn assemble_to_layout(
     })
 }
 
-/// The uncompressed DXGI format this codec writes for a given target semantic.
+/// The DXGI format this codec writes for a given target field.
 /// Every choice is decode-supported (`vbib`/`dxgi`) and a multiple of 4 bytes
-/// wide, so any field set yields a meshopt-legal stride.
+/// wide, so any field set yields a meshopt-legal stride. Packed normal frames
+/// and low-precision UVs are preserved because Source 2 material input
+/// signatures often key off those encodings directly.
+fn writable_format_for(field: &InputLayoutField) -> Result<DxgiFormat, DecodeError> {
+    let fallback = uncompressed_format_for(&field.semantic_name)?;
+    Ok(match field.semantic_name.as_str() {
+        "POSITION" => match field.format {
+            DxgiFormat::R32G32B32Float => field.format,
+            _ => fallback,
+        },
+        "NORMAL" => match field.format {
+            DxgiFormat::R32G32B32Float | DxgiFormat::R32Uint => field.format,
+            _ => fallback,
+        },
+        "TANGENT" => match field.format {
+            DxgiFormat::R32G32B32A32Float | DxgiFormat::R16G16B16A16Float => field.format,
+            _ => fallback,
+        },
+        "TEXCOORD" => match field.format {
+            DxgiFormat::R32G32Float
+            | DxgiFormat::R16G16Float
+            | DxgiFormat::R16G16Unorm
+            | DxgiFormat::R16G16Snorm
+            | DxgiFormat::R32Float => field.format,
+            _ => fallback,
+        },
+        "BLENDINDICES" => match field.format {
+            DxgiFormat::R8G8B8A8Uint => field.format,
+            _ => fallback,
+        },
+        "BLENDWEIGHT" | "BLENDWEIGHTS" => match field.format {
+            DxgiFormat::R8G8B8A8Unorm => field.format,
+            _ => fallback,
+        },
+        "COLOR" => match field.format {
+            DxgiFormat::R8G8B8A8Unorm | DxgiFormat::R16G16B16A16Float => field.format,
+            _ => fallback,
+        },
+        other => return Err(unsupported_target_semantic(other)),
+    })
+}
+
+/// The uncompressed DXGI format this codec falls back to for a given semantic.
 fn uncompressed_format_for(semantic: &str) -> Result<DxgiFormat, DecodeError> {
     Ok(match semantic {
         "POSITION" | "NORMAL" => DxgiFormat::R32G32B32Float,
@@ -734,6 +775,248 @@ fn put_f32s(data: &mut [u8], o: usize, vals: &[f32]) {
     for (k, &v) in vals.iter().enumerate() {
         data[o + k * 4..o + k * 4 + 4].copy_from_slice(&v.to_le_bytes());
     }
+}
+
+fn put_normal(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    normal: [f32; 3],
+    tangent: [f32; 4],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R32G32B32Float => {
+            put_f32s(data, o, &normal);
+            Ok(())
+        }
+        DxgiFormat::R32Uint => {
+            data[o..o + 4]
+                .copy_from_slice(&pack_normal_tangent_frame(normal, tangent).to_le_bytes());
+            Ok(())
+        }
+        _ => Err(DecodeError::Model("unsupported NORMAL format for write")),
+    }
+}
+
+fn put_vector2(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    value: [f32; 2],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R32G32Float => {
+            put_f32s(data, o, &value);
+            Ok(())
+        }
+        DxgiFormat::R16G16Float => {
+            data[o..o + 2].copy_from_slice(&half::f16::from_f32(value[0]).to_bits().to_le_bytes());
+            data[o + 2..o + 4]
+                .copy_from_slice(&half::f16::from_f32(value[1]).to_bits().to_le_bytes());
+            Ok(())
+        }
+        DxgiFormat::R16G16Unorm => {
+            data[o..o + 2].copy_from_slice(&unorm16(value[0]).to_le_bytes());
+            data[o + 2..o + 4].copy_from_slice(&unorm16(value[1]).to_le_bytes());
+            Ok(())
+        }
+        DxgiFormat::R16G16Snorm => {
+            data[o..o + 2].copy_from_slice(&snorm16(value[0]).to_le_bytes());
+            data[o + 2..o + 4].copy_from_slice(&snorm16(value[1]).to_le_bytes());
+            Ok(())
+        }
+        DxgiFormat::R32Float => {
+            data[o..o + 4].copy_from_slice(&value[0].to_le_bytes());
+            Ok(())
+        }
+        _ => Err(DecodeError::Model("unsupported TEXCOORD format for write")),
+    }
+}
+
+fn put_vector4(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    value: [f32; 4],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R32G32B32A32Float => {
+            put_f32s(data, o, &value);
+            Ok(())
+        }
+        DxgiFormat::R16G16B16A16Float => {
+            for (k, &v) in value.iter().enumerate() {
+                data[o + k * 2..o + k * 2 + 2]
+                    .copy_from_slice(&half::f16::from_f32(v).to_bits().to_le_bytes());
+            }
+            Ok(())
+        }
+        DxgiFormat::R8G8B8A8Unorm => {
+            data[o..o + 4].copy_from_slice(&quantize_color_u8(value));
+            Ok(())
+        }
+        _ => Err(DecodeError::Model("unsupported vec4 format for write")),
+    }
+}
+
+fn put_blend_indices(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    joints: [u16; 4],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R8G8B8A8Uint => {
+            for (k, &j) in joints.iter().enumerate() {
+                data[o + k] = u8::try_from(j).map_err(|_| {
+                    DecodeError::Model(
+                        "blend index exceeds 255 (localize JOINTS_0 to the target mesh's bone \
+                         remap first; see skeleton::localize_joints)",
+                    )
+                })?;
+            }
+            Ok(())
+        }
+        _ => Err(DecodeError::Model(
+            "unsupported BLENDINDICES format for write",
+        )),
+    }
+}
+
+fn put_blend_weights(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    weights: [u8; 4],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R8G8B8A8Unorm => {
+            data[o..o + 4].copy_from_slice(&weights);
+            Ok(())
+        }
+        _ => Err(DecodeError::Model(
+            "unsupported BLENDWEIGHT format for write",
+        )),
+    }
+}
+
+fn put_color(
+    data: &mut [u8],
+    o: usize,
+    format: DxgiFormat,
+    color: [f32; 4],
+) -> Result<(), DecodeError> {
+    match format {
+        DxgiFormat::R8G8B8A8Unorm => {
+            data[o..o + 4].copy_from_slice(&quantize_color_u8(color));
+            Ok(())
+        }
+        DxgiFormat::R16G16B16A16Float => put_vector4(data, o, format, color),
+        _ => Err(DecodeError::Model("unsupported COLOR format for write")),
+    }
+}
+
+fn unorm16(v: f32) -> u16 {
+    (v.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+fn snorm16(v: f32) -> i16 {
+    (v.clamp(-1.0, 1.0) * 32767.0).round() as i16
+}
+
+fn pack_normal_tangent_frame(normal: [f32; 3], tangent: [f32; 4]) -> u32 {
+    use std::f32::consts::TAU;
+
+    let n = normalize3_or(normal, [0.0, 0.0, 1.0]);
+    let denom = n[0].abs() + n[1].abs() + n[2].abs();
+    let mut ox = n[0] / denom;
+    let mut oy = n[1] / denom;
+    if n[2] < 0.0 {
+        let x = ox;
+        let y = oy;
+        ox = (1.0 - y.abs()) * sign_not_zero(x);
+        oy = (1.0 - x.abs()) * sign_not_zero(y);
+    }
+
+    let x_bits = quantize_unorm_bits(ox * 0.5 + 0.5, 1023);
+    let y_bits = quantize_unorm_bits(oy * 0.5 + 0.5, 1023);
+    let packed_normal = decode_packed_normal_bits(x_bits, y_bits);
+    let unaligned = tangent_basis(packed_normal);
+    let cross = cross3(packed_normal, unaligned);
+
+    let mut t = [tangent[0], tangent[1], tangent[2]];
+    let dot_n = dot3(t, packed_normal);
+    t = [
+        t[0] - packed_normal[0] * dot_n,
+        t[1] - packed_normal[1] * dot_n,
+        t[2] - packed_normal[2] * dot_n,
+    ];
+    t = normalize3_or(t, unaligned);
+
+    let angle = dot3(t, cross).atan2(dot3(t, unaligned)).rem_euclid(TAU);
+    let t_bits = quantize_unorm_bits(angle / TAU, 2047);
+    let sign_bit = if tangent[3] >= 0.0 { 1 } else { 0 };
+
+    sign_bit | (t_bits << 1) | (x_bits << 12) | (y_bits << 22)
+}
+
+fn decode_packed_normal_bits(x_bits: u32, y_bits: u32) -> [f32; 3] {
+    let nx = (x_bits as f32 / 1023.0) * 2.0 - 1.0;
+    let ny = (y_bits as f32 / 1023.0) * 2.0 - 1.0;
+    let derived_z = 1.0 - nx.abs() - ny.abs();
+
+    let neg_z = (-derived_z).clamp(0.0, 1.0);
+    let x_pos = if nx >= 0.0 { 1.0 } else { 0.0 };
+    let y_pos = if ny >= 0.0 { 1.0 } else { 0.0 };
+    let ux = nx + neg_z * (1.0 - x_pos) + -neg_z * x_pos;
+    let uy = ny + neg_z * (1.0 - y_pos) + -neg_z * y_pos;
+    normalize3_or([ux, uy, derived_z], [0.0, 0.0, 1.0])
+}
+
+fn tangent_basis(normal: [f32; 3]) -> [f32; 3] {
+    let tangent_sign = if normal[2] >= 0.0 { 1.0 } else { -1.0 };
+    let rcp_tangent_z = 1.0 / (tangent_sign + normal[2]);
+    normalize3_or(
+        [
+            -tangent_sign * (normal[0] * normal[0]) * rcp_tangent_z + 1.0,
+            -tangent_sign * (normal[0] * normal[1]) * rcp_tangent_z,
+            -tangent_sign * normal[0],
+        ],
+        [1.0, 0.0, 0.0],
+    )
+}
+
+fn quantize_unorm_bits(v: f32, max: u32) -> u32 {
+    (v.clamp(0.0, 1.0) * max as f32).round() as u32
+}
+
+fn sign_not_zero(v: f32) -> f32 {
+    if v < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+fn normalize3_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 0.0 {
+        [v[0] / len, v[1] / len, v[2] / len]
+    } else {
+        fallback
+    }
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 /// Quantizes four float weights to `R8G8B8A8_UNORM` bytes summing to 255, the
@@ -1066,6 +1349,15 @@ mod assemble_tests {
         ]
     }
 
+    fn soul_layout() -> Vec<InputLayoutField> {
+        vec![
+            field("POSITION", 0, DxgiFormat::R32G32B32Float, 0),
+            field("TEXCOORD", 0, DxgiFormat::R16G16Snorm, 12),
+            field("NORMAL", 0, DxgiFormat::R32Uint, 16),
+            field("BLENDINDICES", 0, DxgiFormat::R8G8B8A8Uint, 20),
+        ]
+    }
+
     /// The T1d-b gate: assemble a mesh (no tangent) to the gun's target field set
     /// and round-trip it. The output keeps the target's field order/semantics, the
     /// stride is recomputed (52), TANGENT is synthesized perpendicular to the
@@ -1126,6 +1418,78 @@ mod assemble_tests {
             assert!(dot.abs() < 1e-5, "tangent perpendicular to normal: {dot}");
             assert!((t[3] - 1.0).abs() < 1e-6, "handedness +1: {}", t[3]);
         }
+    }
+
+    /// The soul container's stock geometry layout carries a packed
+    /// `CompressedTangentFrame` in a 4-byte `NORMAL` field and low-precision UVs.
+    /// Preserve both encodings so replacement meshes keep the same 24-byte vertex
+    /// contract the material input signature expects.
+    #[test]
+    fn assemble_to_layout_preserves_soul_packed_frame_layout() {
+        let vb = VertexBuffer {
+            element_count: 3,
+            positions: vec![[0.0, 0.0, 0.0], [1.5, -2.0, 3.25], [10.0, 20.5, -7.0]],
+            normals: vec![[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            tangents: vec![
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, -1.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ],
+            texcoords: vec![vec![[0.0, 0.0], [0.25, 0.75], [1.0, 0.5]]],
+            joints: vec![[0, 1, 2, 3], [4, 5, 6, 7], [10, 11, 12, 13]],
+            ..VertexBuffer::default()
+        };
+
+        let asm = assemble_to_layout(&vb, &soul_layout()).expect("assemble to soul layout");
+        assert_eq!(asm.stride, 24, "stock soul stride");
+        assert_eq!(
+            asm.fields.iter().map(|f| f.offset).collect::<Vec<_>>(),
+            [0, 12, 16, 20]
+        );
+        assert_eq!(asm.fields[1].format, DxgiFormat::R16G16Snorm);
+        assert_eq!(asm.fields[2].format, DxgiFormat::R32Uint);
+
+        let mvtx = encode_vertex_buffer(asm.element_count, asm.stride, &asm.data).expect("encode");
+        let desc = BufferDesc {
+            block_index: 0,
+            element_count: asm.element_count,
+            element_size: asm.stride,
+            meshopt: true,
+            zstd: false,
+            fields: asm.fields.clone(),
+        };
+        let on_disk = desc.decode(&mvtx, true).expect("decode");
+        assert_eq!(on_disk.positions().expect("positions"), vb.positions);
+
+        let uv = on_disk.vector2(&asm.fields[1]).expect("uv");
+        for (got, want) in uv.iter().zip(&vb.texcoords[0]) {
+            assert!(
+                (got[0] - want[0]).abs() <= 1.0 / 32767.0,
+                "{got:?} vs {want:?}"
+            );
+            assert!(
+                (got[1] - want[1]).abs() <= 1.0 / 32767.0,
+                "{got:?} vs {want:?}"
+            );
+        }
+
+        let (normals, tangents) = on_disk.normal_tangent(&asm.fields[2]).expect("frame");
+        for (got, want) in normals.iter().zip(&vb.normals) {
+            assert!(dot3(*got, *want) > 0.99, "{got:?} vs {want:?}");
+        }
+        for (got, want) in tangents.iter().zip(&vb.tangents) {
+            assert!(dot3([got[0], got[1], got[2]], [want[0], want[1], want[2]]) > 0.99);
+            assert_eq!(got[3].is_sign_positive(), want[3].is_sign_positive());
+        }
+
+        let joints = on_disk
+            .blend_indices(&asm.fields[3], None)
+            .expect("blend indices");
+        assert_eq!(
+            joints,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13],
+            "byte palette indices"
+        );
     }
 
     /// A target that wants BLENDWEIGHT + COLOR the source lacks: weights default to

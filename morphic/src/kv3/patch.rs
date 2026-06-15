@@ -97,10 +97,11 @@ pub enum Seg {
 /// Errors if the block is not v4/v5, if any path is missing / not an integer
 /// scalar / ambiguous, or if a value does not fit its field's width.
 pub fn set_scalars(block: &[u8], edits: &[(Vec<Seg>, i64)]) -> Result<Vec<u8>, DecodeError> {
-    // A blobbed-LZ4 v5 block (a `.vnmclip_c` with its pose blob) is decompressed to
-    // a walkable working copy and re-emitted still compressed (the blob frames
-    // carried through verbatim), exactly as [`set_doubles`] does; otherwise rewrap
-    // to an uncompressed block. Either way the in-place patch is identical.
+    // A blobbed LZ4 v5 block (a `.vnmclip_c` with its pose blob, or a blobbed
+    // `.vmat_c` with `countBlocks > 0`) cannot ship uncompressed without the engine
+    // misreading its blob framing, so it is decompressed to a walkable working copy,
+    // patched, then re-emitted still LZ4-compressed (the blob frames carried through
+    // verbatim, exactly as [`set_doubles`] does). Everything else rewraps uncompressed.
     let blobbed = is_blobbed_lz4_v5(block);
     let mut out = if blobbed {
         decompress_v5_working(block)?
@@ -116,16 +117,22 @@ pub fn set_scalars(block: &[u8], edits: &[(Vec<Seg>, i64)]) -> Result<Vec<u8>, D
     }
 
     let targets: Vec<&[Seg]> = edits.iter().map(|(p, _)| p.as_slice()).collect();
-    let hits = {
+    let (hits, int_type_hits) = {
         let mut w = PathWalk::new(&out, &targets)?;
         let root = w.read_type()?;
         w.value(root)?;
-        w.hits
+        (w.hits, w.int_type_hits)
     };
 
-    // Every edit must resolve to exactly one settable integer scalar.
+    // Every edit must resolve to exactly one settable integer: either a real
+    // integer scalar (with a data lane) or a tagless INT64_ZERO/INT64_ONE (the
+    // value *is* the type byte, e.g. a material `F_*` feature flag stored as 1).
+    // Count across both encodings so a field is patchable whichever way it is
+    // stored, but reject anything matching more than one field.
     for i in 0..edits.len() {
-        match hits.iter().filter(|h| h.edit == i).count() {
+        let n = hits.iter().filter(|h| h.edit == i).count()
+            + int_type_hits.iter().filter(|h| h.edit == i).count();
+        match n {
             0 => {
                 return Err(DecodeError::Kv3(
                     "scalar patch path not found or not an integer scalar",
@@ -145,6 +152,24 @@ pub fn set_scalars(block: &[u8], edits: &[(Vec<Seg>, i64)]) -> Result<Vec<u8>, D
         out.get_mut(h.offset..h.offset + bytes.len())
             .ok_or(DecodeError::Kv3("scalar patch offset out of range"))?
             .copy_from_slice(&bytes);
+    }
+    // Tagless ints carry no data lane, so only 0/1 are representable in place:
+    // rewrite the type byte between INT64_ZERO/INT64_ONE, keeping the high flag
+    // bits (the int sibling of set_bools' BoolKind::TypeByte).
+    for h in &int_type_hits {
+        let want = match edits[h.edit].1 {
+            0 => node::INT64_ZERO,
+            1 => node::INT64_ONE,
+            _ => {
+                return Err(DecodeError::Kv3(
+                    "tagless integer field can only be set to 0 or 1 in place",
+                ))
+            }
+        };
+        let b = out
+            .get_mut(h.offset)
+            .ok_or(DecodeError::Kv3("scalar patch offset out of range"))?;
+        *b = (*b & 0xC0) | want;
     }
     if blobbed {
         reassemble_blobbed_v5(block, &out)
@@ -287,8 +312,32 @@ pub fn set_floats(block: &[u8], edits: &[(Vec<Seg>, f32)]) -> Result<Vec<u8>, De
 /// ambiguous, or if a requested target string is not already interned in the
 /// block.
 pub fn set_strings(block: &[u8], edits: &[(Vec<Seg>, String)]) -> Result<Vec<u8>, DecodeError> {
-    let mut out = rewrap_uncompressed(block)?;
-    let version = u32_at(&out, 0)? & 0xFF;
+    // Same blobbed-LZ4-v5 handling as [`set_doubles`]/[`set_scalars`]: a blobbed
+    // `.vmat_c` is decompressed-but-kept-compressed so its blob framing survives.
+    let blobbed = is_blobbed_lz4_v5(block);
+    let mut out = if blobbed {
+        decompress_v5_working(block)?
+    } else {
+        rewrap_uncompressed(block)?
+    };
+    redirect_interned_strings(&mut out, edits)?;
+    if blobbed {
+        reassemble_blobbed_v5(block, &out)
+    } else {
+        Ok(out)
+    }
+}
+
+/// Redirect the `STRING` fields at `edits`' paths to other strings **already
+/// interned** in the table, patching the working block `out` in place (each hit's
+/// 4-byte string id is rewritten; no table growth, no size change). Shared by
+/// [`set_strings`] and the blobbed branch of [`set_strings_adding`], which first
+/// grows the table so the targets become interned, then calls this.
+fn redirect_interned_strings(
+    out: &mut [u8],
+    edits: &[(Vec<Seg>, String)],
+) -> Result<(), DecodeError> {
+    let version = u32_at(out, 0)? & 0xFF;
     let min_header = if version == 5 { 120 } else { 72 };
     if out.len() < min_header || (version != 4 && version != 5) {
         return Err(DecodeError::Kv3("string patch requires KV3 v4 or v5"));
@@ -296,7 +345,7 @@ pub fn set_strings(block: &[u8], edits: &[(Vec<Seg>, String)]) -> Result<Vec<u8>
 
     let targets: Vec<&[Seg]> = edits.iter().map(|(p, _)| p.as_slice()).collect();
     let (hits, strings) = {
-        let mut w = PathWalk::new(&out, &targets)?;
+        let mut w = PathWalk::new(out, &targets)?;
         let root = w.read_type()?;
         w.value(root)?;
         (w.string_hits, w.strings)
@@ -337,7 +386,7 @@ pub fn set_strings(block: &[u8], edits: &[(Vec<Seg>, String)]) -> Result<Vec<u8>
             .ok_or(DecodeError::Kv3("string patch offset out of range"))?
             .copy_from_slice(&id.to_le_bytes());
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Sets `STRING` fields by path, **adding** any target string that is not already
@@ -361,14 +410,36 @@ pub fn set_strings_adding(
     block: &[u8],
     edits: &[(Vec<Seg>, String)],
 ) -> Result<Vec<u8>, DecodeError> {
-    let out = rewrap_uncompressed(block)?;
-    let version = u32_at(&out, 0)? & 0xFF;
     let mut wanted: Vec<String> = Vec::new();
     for (_, s) in edits {
         if !s.is_empty() && !wanted.contains(s) {
             wanted.push(s.clone());
         }
     }
+
+    // A blobbed LZ4 v5 block (a blobbed `.vmat_c`, `countBlocks > 0`) cannot be
+    // rewrapped to `comp = 0` (the engine misframes the blob and renders the covered
+    // mesh as a red error material). Mirror [`insert_array_element_blob_aware`]: grow
+    // the string table on a decompressed-but-logically-compressed working copy, redirect
+    // the fields to the now-interned strings, then re-emit `comp = 1` with the binary
+    // blob frames spliced through byte-for-byte (no new blobs). This is what lets a
+    // copied material reference brand-new texture paths in place.
+    if is_blobbed_lz4_v5(block) {
+        let working = decompress_v5_working(block)?;
+        if u32_at(&working, 0)? & 0xFF != 5 {
+            return Err(DecodeError::Kv3("blobbed string append requires KV3 v5"));
+        }
+        let mut grown = append_strings_v5(&working, &wanted)?;
+        redirect_interned_strings(&mut grown, edits)?;
+        let old_blob_count = usize::try_from(i32_at(block, 56)?)
+            .map_err(|_| DecodeError::Kv3("negative blob count"))?;
+        // No new blobs; appending an empty slice at the end carries every existing
+        // blob frame through verbatim while recompressing the grown buf1.
+        return finalize_blob_block(block, &grown, old_blob_count, &[]);
+    }
+
+    let out = rewrap_uncompressed(block)?;
+    let version = u32_at(&out, 0)? & 0xFF;
     let appended = match version {
         5 => append_strings_v5(&out, &wanted)?,
         4 => append_strings_v4(&out, &wanted)?,
@@ -1858,6 +1929,17 @@ enum BoolKind {
     ValueByte,
 }
 
+/// A located tagless integer field (`INT64_ZERO` / `INT64_ONE`), for
+/// [`set_scalars`]. Like a type-byte bool, the value *is* the type id and carries
+/// no data lane, so only 0 and 1 are representable in place: `offset` is the type
+/// byte, flipped between `INT64_ZERO`/`INT64_ONE` (the int sibling of
+/// [`BoolKind::TypeByte`]). This is what makes a material `F_*` feature flag stored
+/// as a tagless `1` patchable.
+struct IntTypeHit {
+    edit: usize,
+    offset: usize,
+}
+
 /// Path-tracking sibling of [`Walk`]: walks the value tree (sharing [`lanes`]),
 /// maintaining the current KV3 path, and records each integer scalar whose path
 /// equals one of `targets`. Used by [`set_scalars`].
@@ -1874,6 +1956,7 @@ struct PathWalk<'a> {
     targets: &'a [&'a [Seg]],
     path: Vec<Seg>,
     hits: Vec<Hit>,
+    int_type_hits: Vec<IntTypeHit>,
     bool_hits: Vec<BoolHit>,
     double_hits: Vec<Hit>,
     float_hits: Vec<Hit>,
@@ -1895,6 +1978,7 @@ impl<'a> PathWalk<'a> {
             targets,
             path: Vec::new(),
             hits: Vec::new(),
+            int_type_hits: Vec::new(),
             bool_hits: Vec::new(),
             double_hits: Vec::new(),
             float_hits: Vec::new(),
@@ -1955,6 +2039,22 @@ impl<'a> PathWalk<'a> {
                 edit,
                 offset: type_off,
                 kind: BoolKind::TypeByte,
+            });
+        }
+    }
+
+    /// Records a tagless integer (`INT64_ZERO`/`INT64_ONE`) as a hit if its path
+    /// matches a target. `type_off` is the absolute offset of its type byte (the
+    /// value lives in the type id, no data lane), the int sibling of
+    /// [`Self::record_bool_type`].
+    fn record_int_type(&mut self, datatype: u8, type_off: usize) {
+        if datatype != node::INT64_ZERO && datatype != node::INT64_ONE {
+            return;
+        }
+        if let Some(edit) = self.targets.iter().position(|t| self.path.as_slice() == *t) {
+            self.int_type_hits.push(IntTypeHit {
+                edit,
+                offset: type_off,
             });
         }
     }
@@ -2074,6 +2174,7 @@ impl<'a> PathWalk<'a> {
                     let t = self.read_type()?;
                     self.path.push(Seg::Index(i as usize));
                     self.record_bool_type(t, type_off);
+                    self.record_int_type(t, type_off);
                     self.value(t)?;
                     self.path.pop();
                 }
@@ -2121,6 +2222,7 @@ impl<'a> PathWalk<'a> {
                     let id = self.lane_u32(B4)?;
                     self.path.push(Seg::Key(self.key(id).to_string()));
                     self.record_bool_type(vt, type_off);
+                    self.record_int_type(vt, type_off);
                     self.value(vt)?;
                     self.path.pop();
                 }
@@ -2749,6 +2851,62 @@ mod tests {
         assert_eq!(frames_new, frames_old, "blob frames byte-identical");
     }
 
+    #[test]
+    fn set_scalars_flips_a_tagless_int_flag_in_a_blobbed_v5_material() {
+        // A material `F_*` feature flag is stored as a tagless INT64_ZERO/INT64_ONE
+        // (the value lives in the type byte, no data lane). set_scalars must (a) take
+        // the blobbed-LZ4-v5 path so it does not die on "binary-blob section", and
+        // (b) flip the type byte in place. This is what de-toons the soul-container
+        // import (F_USE_NPR_LIGHTING / F_SOLID_COLOR_OUTLINE -> 0).
+        let res = Resource::parse(NECRO_HANDS).expect("parse resource");
+        let data = res.data_block().expect("DATA block");
+        assert_eq!(field(data, 56), 1, "fixture must carry a binary blob");
+
+        // Locate an m_intParams entry whose value is a tagless 0/1.
+        let tree = crate::kv3::decode(data).expect("decode tree");
+        let params = tree
+            .get("m_intParams")
+            .and_then(Value::as_array)
+            .expect("m_intParams");
+        let (pi, old) = params
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| {
+                let v = p.get("m_nValue").and_then(Value::as_int)?;
+                (v == 0 || v == 1).then_some((i, v))
+            })
+            .expect("a 0/1 int flag");
+        let path = vec![
+            Seg::Key("m_intParams".to_string()),
+            Seg::Index(pi),
+            Seg::Key("m_nValue".to_string()),
+        ];
+        let new = 1 - old;
+        let patched = set_scalars(data, &[(path, new)]).expect("flip tagless int flag");
+
+        // Stays the engine-loadable compressed + blobbed shape (not flipped to the
+        // broken comp=0 form), with blob framing untouched.
+        assert_eq!(u32_at(&patched, 0).unwrap() & 0xFF, 5);
+        assert_eq!(u32_at(&patched, 20).unwrap(), 1, "stays LZ4-compressed");
+        assert_eq!(field(&patched, 56), 1, "blob section preserved");
+        assert!(frames_eq(data, &patched), "blob frames byte-identical");
+
+        // Only the targeted flag changed: full tree equality against the edited tree.
+        let new_tree = crate::kv3::decode(&patched).expect("decode patched");
+        let mut expect = tree.clone();
+        if let Some(Value::Array(ps)) = expect.get_mut("m_intParams") {
+            if let Some(slot) = ps[pi].get_mut("m_nValue") {
+                *slot = Value::Int(new);
+            }
+        }
+        assert_eq!(new_tree, expect, "only the targeted int flag changed");
+    }
+
+    /// True if the binary-blob frame regions of two v5 DATA blocks are byte-equal.
+    fn frames_eq(a: &[u8], b: &[u8]) -> bool {
+        buf2_and_frames(a).1 == buf2_and_frames(b).1
+    }
+
     /// A real Deadlock soundevents resource: KV3 v5, LZ4-compressed, NO binary-blob
     /// section, so its `DATA` block re-wraps cleanly uncompressed. Used to exercise
     /// the string-table append (format-generic: append works on any v5 KV3, not just
@@ -2931,6 +3089,66 @@ mod tests {
             "the field now reads the brand-new string"
         );
         // Nothing else changed: rebuild the expected tree by editing only that field.
+        let mut expect = tree.clone();
+        set_at(&mut expect, &path, Value::String(novel));
+        assert_eq!(new_tree, expect, "only the targeted string field changed");
+    }
+
+    /// The blobbed `.vmat_c` case: grow the string table on a binary-blob-bearing,
+    /// LZ4-compressed v5 material and redirect a texture slot to a brand-new path.
+    /// This is the lever that lets a copied soul-container material reference its own
+    /// custom textures in place (instead of overriding the stock bound paths). The
+    /// result must stay `comp = 1` with the blob frames carried through verbatim, or
+    /// the engine renders the covered mesh as the red error material.
+    #[test]
+    fn set_strings_adding_appends_a_new_path_to_a_blobbed_v5_material() {
+        let res = Resource::parse(NECRO_HANDS).expect("parse resource");
+        let data = res.data_block().expect("DATA block");
+
+        // Precondition: the hard case (blobbed LZ4 v5), which `rewrap_uncompressed`
+        // refuses, so the old `set_strings_adding` died here.
+        assert_eq!(u32_at(data, 0).unwrap() & 0xFF, 5, "v5");
+        assert_eq!(u32_at(data, 20).unwrap(), 1, "LZ4-compressed");
+        assert_eq!(field(data, 56), 1, "one binary blob");
+
+        let tree = crate::kv3::decode(data).expect("decode tree");
+        let tex = tree
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .expect("m_textureParams");
+        assert!(!tex.is_empty(), "fixture binds at least one texture");
+        let path = vec![
+            Seg::Key("m_textureParams".to_string()),
+            Seg::Index(0),
+            Seg::Key("m_pValue".to_string()),
+        ];
+        let novel =
+            String::from("models/props_gameplay/soul_container/materials/morphic_custom_xyz.vtex");
+
+        let patched = set_strings_adding(data, &[(path.clone(), novel.clone())])
+            .expect("append + redirect on a blobbed material");
+
+        // 1. Still the engine-loadable compressed + blobbed shape (NOT flipped to the
+        //    broken comp=0 form); blob bookkeeping intact.
+        assert_eq!(u32_at(&patched, 0).unwrap() & 0xFF, 5);
+        assert_eq!(u32_at(&patched, 20).unwrap(), 1, "stays LZ4-compressed");
+        assert_eq!(field(&patched, 56), 1, "blob section preserved");
+        assert_eq!(field(&patched, 60), field(data, 60), "sizeBlobs unchanged");
+
+        // 2. The binary blob frames are carried through byte-for-byte (no new blobs).
+        assert_eq!(
+            buf2_and_frames(&patched).1,
+            buf2_and_frames(data).1,
+            "blob frame region unchanged"
+        );
+
+        // 3. The slot reads the brand-new path and nothing else changed.
+        let new_tree = crate::kv3::decode(&patched).expect("decode patched");
+        assert_eq!(
+            get_at(&new_tree, &path),
+            Some(&Value::String(novel.clone())),
+            "the texture slot now reads the brand-new path"
+        );
         let mut expect = tree.clone();
         set_at(&mut expect, &path, Value::String(novel));
         assert_eq!(new_tree, expect, "only the targeted string field changed");

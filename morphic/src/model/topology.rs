@@ -51,6 +51,7 @@ pub struct DrawCallInfo {
     /// Global `MIDX` block index.
     pub index_block: usize,
     pub start_index: usize,
+    pub applied_index_offset: usize,
     pub base_vertex: u32,
     pub primitive_type: String,
     /// Material path the draw call renders with (`m_material`), e.g.
@@ -129,6 +130,7 @@ pub fn draw_call_targets(vmdl_bytes: &[u8]) -> Result<Vec<DrawCallInfo>, DecodeE
                     vertex_block,
                     index_block,
                     start_index: usize_field(dc, "m_nStartIndex"),
+                    applied_index_offset: usize_field(dc, "m_nAppliedIndexOffset"),
                     base_vertex: u32::try_from(usize_field(dc, "m_nBaseVertex")).unwrap_or(0),
                     primitive_type: dc
                         .get("m_nPrimitiveType")
@@ -348,11 +350,44 @@ pub struct ReplacedMeshGroup {
 /// these contract violations rather than producing a broken model.
 ///
 /// Returns the new `.vmdl_c` bytes and a report of what changed.
+///
+/// The swapped buffers are written with morphic's meshopt codec (v1). That codec
+/// round-trips through morphic's own decoder but is **not byte-compatible with the
+/// engine's meshopt decoder** and garbles in game. For a model that must load in
+/// Deadlock, use [`replace_mesh_part_uncompressed`], which writes raw buffers and
+/// flips `m_bMeshoptCompressed` to false (the engine reads uncompressed natively).
 pub fn replace_mesh_part(
     vmdl_bytes: &[u8],
     mesh_name: &str,
     new_mesh: &VertexBuffer,
     indices: &[u32],
+) -> Result<(Vec<u8>, ReplacedMeshPart), DecodeError> {
+    replace_mesh_part_impl(vmdl_bytes, mesh_name, new_mesh, indices, true)
+}
+
+/// Like [`replace_mesh_part`], but writes the new vertex/index buffers
+/// **uncompressed** and flips their `m_bMeshoptCompressed` flags to false in the
+/// `CTRL` registry. This is the engine-loadable path: morphic's meshopt encoder
+/// emits codec v1 (`0xa1`/`0xe1`) which Deadlock's decoder garbles, whereas the
+/// engine reads uncompressed vertex/index buffers natively (hero models ship
+/// them). Use this when the output is meant to run in game (e.g. soul-container
+/// imports); the file is larger but correct.
+pub fn replace_mesh_part_uncompressed(
+    vmdl_bytes: &[u8],
+    mesh_name: &str,
+    new_mesh: &VertexBuffer,
+    indices: &[u32],
+) -> Result<(Vec<u8>, ReplacedMeshPart), DecodeError> {
+    replace_mesh_part_impl(vmdl_bytes, mesh_name, new_mesh, indices, false)
+}
+
+#[allow(clippy::too_many_lines)] // one cohesive wedge; splitting hurts readability
+fn replace_mesh_part_impl(
+    vmdl_bytes: &[u8],
+    mesh_name: &str,
+    new_mesh: &VertexBuffer,
+    indices: &[u32],
+    compressed: bool,
 ) -> Result<(Vec<u8>, ReplacedMeshPart), DecodeError> {
     let (resource, embedded) = parse_embedded(vmdl_bytes)?;
 
@@ -427,14 +462,45 @@ pub fn replace_mesh_part(
     // are only re-emitted when they actually changed (an unchanged-count replace
     // touches only MVTX/MIDX, like a Tier-0 edit).
     let mut swaps: Vec<(usize, Vec<u8>)> = Vec::with_capacity(4);
-    if !ctrl_edits.is_empty() {
-        swaps.push((ctrl_idx, kv3::set_scalars(ctrl_bytes, &ctrl_edits)?));
+    // CTRL carries the buffer-count/stride scalar edits and, for the uncompressed
+    // path, the two m_bMeshoptCompressed flag flips. Both land on the same CTRL
+    // block, so apply scalars then bools to one working copy.
+    let mut new_ctrl: Option<Vec<u8>> = if ctrl_edits.is_empty() {
+        None
+    } else {
+        Some(kv3::set_scalars(ctrl_bytes, &ctrl_edits)?)
+    };
+    if !compressed {
+        let base = new_ctrl.as_deref().unwrap_or(ctrl_bytes);
+        let vb_flag = vec![
+            seg("embedded_meshes"),
+            Seg::Index(mesh_pos),
+            seg("m_vertexBuffers"),
+            Seg::Index(0),
+            seg("m_bMeshoptCompressed"),
+        ];
+        let ib_flag = vec![
+            seg("embedded_meshes"),
+            Seg::Index(mesh_pos),
+            seg("m_indexBuffers"),
+            Seg::Index(0),
+            seg("m_bMeshoptCompressed"),
+        ];
+        new_ctrl = Some(kv3::set_bools(base, &[(vb_flag, false), (ib_flag, false)])?);
+    }
+    if let Some(ctrl) = new_ctrl {
+        swaps.push((ctrl_idx, ctrl));
     }
     if !mdat_edits.is_empty() {
         swaps.push((mdat_block, kv3::set_scalars(mdat_bytes, &mdat_edits)?));
     }
-    swaps.push((vb_block, enc.mvtx));
-    swaps.push((ib_block, enc.midx));
+    let (vtx_payload, idx_payload) = if compressed {
+        (enc.mvtx, enc.midx)
+    } else {
+        (enc.mvtx_raw, enc.midx_raw)
+    };
+    swaps.push((vb_block, vtx_payload));
+    swaps.push((ib_block, idx_payload));
 
     let mut bytes = vmdl_bytes.to_vec();
     for (idx, payload) in swaps {
@@ -455,6 +521,243 @@ pub fn replace_mesh_part(
             index_size,
         },
     ))
+}
+
+/// Repoints the model's single draw-call material to `new_material` (a `.vmat`
+/// path), in place: the new path is appended to the `MDAT` string table and the
+/// draw call's `m_material` (or legacy `m_pMaterial`) field is redirected to it.
+///
+/// This is what makes a reskinned soul container **additive** rather than a graft
+/// over vanilla: the model references a fresh, uniquely-named material (e.g.
+/// `.../my_skin.vmat`) that the mod ships alongside, instead of overriding the
+/// stock `soul_container.vmat`. The engine binds by this `m_material` string at
+/// render time; the `RERL` precache list (which still names the old material) is a
+/// dependency hint, not the render binding, so it is intentionally left untouched.
+///
+/// Requires the model to have exactly one draw call (the soul-container shape) and
+/// a KV3 v5 `MDAT` (so a brand-new string can be appended). Errors otherwise.
+pub fn set_model_material(vmdl_bytes: &[u8], new_material: &str) -> Result<Vec<u8>, DecodeError> {
+    let targets = draw_call_targets(vmdl_bytes)?;
+    let [dc] = targets.as_slice() else {
+        return Err(DecodeError::Model(
+            "set_model_material requires exactly one draw call",
+        ));
+    };
+
+    let resource = Resource::parse(vmdl_bytes)?;
+    let mdat_bytes = resource
+        .get_block_by_index(dc.data_block)
+        .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+
+    // Pick the key the draw call actually uses (modern m_material / legacy
+    // m_pMaterial), mirroring material_of.
+    let mdat = kv3::decode(mdat_bytes)?;
+    let draw_call = mdat
+        .get("m_sceneObjects")
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(dc.scene_object))
+        .and_then(|so| so.get("m_drawCalls"))
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(dc.draw_call))
+        .ok_or(DecodeError::Model("draw call not found in MDAT"))?;
+    let key = if draw_call.get("m_material").is_some() {
+        "m_material"
+    } else if draw_call.get("m_pMaterial").is_some() {
+        "m_pMaterial"
+    } else {
+        return Err(DecodeError::Model("draw call has no material field"));
+    };
+
+    let path = vec![
+        Seg::Key("m_sceneObjects".to_string()),
+        Seg::Index(dc.scene_object),
+        Seg::Key("m_drawCalls".to_string()),
+        Seg::Index(dc.draw_call),
+        Seg::Key(key.to_string()),
+    ];
+    let new_mdat = kv3::set_strings_adding(mdat_bytes, &[(path, new_material.to_string())])?;
+    resource.rebuild_with_block(dc.data_block, &new_mdat)
+}
+
+/// One material's draw call when expanding a single-draw-call model into a
+/// multi-material one. The group owns a contiguous `[start_index, start_index +
+/// index_count)` slice of the model's single (already globally-rebased) index
+/// buffer and renders `material`. `vertex_start` is written to
+/// `m_nAppliedIndexOffset`, and `vertex_end` is written to `m_nVertexCount`,
+/// matching resourcecompiler's per-material vertex range convention.
+#[derive(Debug, Clone)]
+pub struct DrawCallGroup {
+    /// The `.vmat` path this group renders with (no `_c`).
+    pub material: String,
+    /// First index of this group's slice of the shared index buffer.
+    pub start_index: usize,
+    /// Number of indices in this group's slice.
+    pub index_count: usize,
+    /// First vertex in the shared vertex buffer for this group.
+    pub vertex_start: usize,
+    /// Exclusive end vertex in the shared vertex buffer for this group.
+    pub vertex_end: usize,
+}
+
+/// Expands a model that currently has exactly ONE draw call into
+/// `groups.len()` draw calls, one per material group.
+///
+/// This is the multi-material companion to [`set_model_material`]. Source 2
+/// binds a material per draw call (`m_sceneObjects[0].m_drawCalls[].m_material`)
+/// and partitions one shared index buffer between them via each call's
+/// `m_nStartIndex`/`m_nIndexCount`; each draw also carries a vertex-range bound
+/// via `m_nAppliedIndexOffset`/`m_nVertexCount`. So the expansion is: clone the
+/// single draw call `groups.len() - 1` times (growing the `m_drawCalls` array
+/// byte-faithfully via [`kv3::insert_array_element_adding`]), then repoint each
+/// clone's index slice/range ([`kv3::set_scalars`]) and material
+/// ([`kv3::set_strings_adding`]). No block re-encode, no RERL edit (the precache
+/// list is a hint, not the render binding).
+///
+/// Call this AFTER [`replace_mesh_part_uncompressed`] has swapped in the merged
+/// geometry (which leaves the part with one draw call covering the whole mesh).
+/// `total_vertex_count` is retained as a consistency guard for older callers:
+/// every group's `vertex_end` must be within that shared buffer.
+pub fn set_draw_call_groups(
+    vmdl_bytes: &[u8],
+    groups: &[DrawCallGroup],
+    total_vertex_count: usize,
+) -> Result<Vec<u8>, DecodeError> {
+    if groups.is_empty() {
+        return Err(DecodeError::Model("need at least one draw-call group"));
+    }
+    for group in groups {
+        if group.vertex_start > group.vertex_end || group.vertex_end > total_vertex_count {
+            return Err(DecodeError::Model(
+                "draw-call group vertex range is outside the shared vertex buffer",
+            ));
+        }
+    }
+
+    let resource = Resource::parse(vmdl_bytes)?;
+    // The single draw call lives in the part's MDAT block; find it the same way
+    // draw_call_targets does, then require exactly one (the wedge contract).
+    let dc = {
+        let targets = draw_call_targets(vmdl_bytes)?;
+        let [only] = targets.as_slice() else {
+            return Err(DecodeError::Model(
+                "set_draw_call_groups requires the model to start with exactly one draw call",
+            ));
+        };
+        only.clone()
+    };
+    let mdat_block = dc.data_block;
+    let so_idx = dc.scene_object;
+    let dc_idx = dc.draw_call;
+
+    let mdat_bytes = resource
+        .get_block_by_index(mdat_block)
+        .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+    let mdat = kv3::decode(mdat_bytes)?;
+    let template = mdat
+        .get("m_sceneObjects")
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(so_idx))
+        .and_then(|so| so.get("m_drawCalls"))
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(dc_idx))
+        .ok_or(DecodeError::Model("draw call not found in MDAT"))?
+        .clone();
+    let mat_key = if template.get("m_material").is_some() {
+        "m_material"
+    } else if template.get("m_pMaterial").is_some() {
+        "m_pMaterial"
+    } else {
+        return Err(DecodeError::Model("draw call has no material field"));
+    };
+
+    let dcs_path = vec![
+        seg("m_sceneObjects"),
+        Seg::Index(so_idx),
+        seg("m_drawCalls"),
+    ];
+
+    // 1) Grow the m_drawCalls array to groups.len() by inserting clones of the
+    //    single existing draw call after it (indices dc_idx+1..). Each clone has
+    //    its group's index slice + material BAKED into the Value before
+    //    insertion: a non-zero m_nStartIndex/m_nIndexCount must be stored with a
+    //    real data lane (KV3 encodes a non-zero int that fits i32 as INT32),
+    //    because a tagless 0 (the template's m_nStartIndex) has no byte to
+    //    overwrite later. Baking also means the post-insert set_scalars pass sees
+    //    current == new for these clones and skips them.
+    let mut bytes = mdat_bytes.to_vec();
+    for (i, g) in groups.iter().enumerate().skip(1) {
+        let mut clone = template.clone();
+        bake_draw_call(&mut clone, g, mat_key);
+        bytes = kv3::insert_array_element_adding(&bytes, &dcs_path, dc_idx + i, &clone)?;
+    }
+
+    // 2) Repoint every draw call's material in one string pass.
+    let str_edits: Vec<(Vec<Seg>, String)> = groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let mut p = dcs_path.clone();
+            p.push(Seg::Index(dc_idx + i));
+            p.push(seg(mat_key));
+            (p, g.material.clone())
+        })
+        .collect();
+    bytes = kv3::set_strings_adding(&bytes, &str_edits)?;
+
+    // 3) Set each draw call's index slice (start/count), pin base vertex to 0,
+    //    and record the shared vertex-count upper bound. Read current values off
+    //    the grown block so push_if_changed can skip tagless 0/1 no-ops.
+    let grown = kv3::decode(&bytes)?;
+    let grown_dcs = grown
+        .get("m_sceneObjects")
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(so_idx))
+        .and_then(|so| so.get("m_drawCalls"))
+        .and_then(Value::as_array)
+        .ok_or(DecodeError::Model("draw calls vanished after growth"))?;
+    if grown_dcs.len() != groups.len() {
+        return Err(DecodeError::Model(
+            "draw-call array did not grow to the expected length",
+        ));
+    }
+    let scal_edits = draw_call_range_edits(grown_dcs, so_idx, dc_idx, groups)?;
+    if !scal_edits.is_empty() {
+        bytes = kv3::set_scalars(&bytes, &scal_edits)?;
+    }
+
+    resource.rebuild_with_block(mdat_block, &bytes)
+}
+
+/// The scalar edits that pin each draw call's index slice (start/count), applied
+/// index offset, base vertex (0), and vertex-range end bound. Reads current
+/// values off the grown draw-call array so `push_if_changed` skips tagless-0
+/// no-ops (a baked clone's fields already match).
+fn draw_call_range_edits(
+    grown_dcs: &[Value],
+    so_idx: usize,
+    dc_idx: usize,
+    groups: &[DrawCallGroup],
+) -> Result<Vec<(Vec<Seg>, i64)>, DecodeError> {
+    let mut edits: Vec<(Vec<Seg>, i64)> = Vec::new();
+    for (i, g) in groups.iter().enumerate() {
+        let dc_val = &grown_dcs[i];
+        let base = vec![
+            seg("m_sceneObjects"),
+            Seg::Index(so_idx),
+            seg("m_drawCalls"),
+            Seg::Index(dc_idx + i),
+        ];
+        for (key, new) in [
+            ("m_nStartIndex", g.start_index),
+            ("m_nIndexCount", g.index_count),
+            ("m_nAppliedIndexOffset", g.vertex_start),
+            ("m_nVertexCount", g.vertex_end),
+            ("m_nBaseVertex", 0),
+        ] {
+            push_if_changed(&mut edits, child(&base, key), dc_uint(dc_val, key), new)?;
+        }
+    }
+    Ok(edits)
 }
 
 /// Replaces a semantic group that can span multiple draw calls. Each selected
@@ -1060,6 +1363,38 @@ fn push_if_changed(
         edits.push((path, as_i64(new)?));
     }
     Ok(())
+}
+
+/// Bakes a draw-call group's index slice, vertex-count bound, and material into
+/// a cloned draw-call `Value` (the clones grown by [`set_draw_call_groups`]).
+/// Numeric fields keep their existing Int/UInt wire variant so a positive
+/// count/offset round-trips to the KV3 width the engine read.
+fn bake_draw_call(dc: &mut Value, group: &DrawCallGroup, mat_key: &str) {
+    set_uint_field(dc, "m_nStartIndex", group.start_index);
+    set_uint_field(dc, "m_nIndexCount", group.index_count);
+    set_applied_index_offset(dc, group.vertex_start);
+    set_uint_field(dc, "m_nVertexCount", group.vertex_end);
+    set_uint_field(dc, "m_nBaseVertex", 0);
+    if let Some(v) = dc.get_mut(mat_key) {
+        *v = Value::String(group.material.clone());
+    }
+}
+
+/// Overwrites an unsigned draw-call field in place, preserving its current
+/// Int/UInt wire variant (and leaving it untouched if the template lacks the key).
+fn set_uint_field(dc: &mut Value, key: &str, n: usize) {
+    if let Some(v) = dc.get_mut(key) {
+        *v = match v {
+            Value::UInt(_) => Value::UInt(n as u64),
+            _ => Value::Int(i64::try_from(n).unwrap_or(i64::MAX)),
+        };
+    }
+}
+
+fn set_applied_index_offset(dc: &mut Value, n: usize) {
+    if let Some(v) = dc.get_mut("m_nAppliedIndexOffset") {
+        *v = Value::UInt(n as u64);
+    }
 }
 
 /// Reads an unsigned draw-call field's current value (for the changed-or-skip

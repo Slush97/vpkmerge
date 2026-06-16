@@ -2,10 +2,12 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use vpkmerge_core::{
-    edit_model_geometry, export_hero_model, export_model, extract_portraits, inspect_models, merge,
-    model_draw_call_targets, model_vertex_targets, split, AnimOptions, CollisionPolicy,
-    GeometryEdit, MergeOptions, ModelPartSelector, OverlapPolicy, PathPredicate, PortraitInfo,
-    PoseSelection, SoundEvents, SplitOptions, SplitOutput,
+    bake_uv_atlas, bake_uv_mask, edit_model_geometry, export_hero_model, export_model,
+    extract_portraits, hero_model_entry, import_soul_container_clone, inspect_models, merge,
+    model_draw_call_targets, model_uv_segments, model_vertex_targets, split, AnimOptions,
+    CollisionPolicy, GeometryEdit, MergeOptions, ModelPartSelector, OverlapPolicy, PathPredicate,
+    PortraitInfo, PoseSelection, SegmentBy, SoulGlow, SoulImportCloneOptions, SoulOrient,
+    SoundEvents, SplitOptions, SplitOutput,
 };
 
 #[derive(Parser)]
@@ -119,6 +121,13 @@ enum Command {
     /// into one addon VPK so it overrides the base art in place. Built for the
     /// Locker custom hero-card upload: pass one `--set` per card variant.
     Icon(IconCmd),
+
+    /// Build a custom soul-container override VPK from a user `.glb`. `import`
+    /// clones the model's mesh into the stock soul container, atlases its
+    /// materials into one albedo, fits it to the orb's bounds, and (by default)
+    /// recolors the soul-glow particles to the model's dominant hue. The
+    /// one-call bridge for Grimoire's drag-and-drop soul-container import.
+    SoulContainer(SoulContainerCmd),
 }
 
 #[derive(Args)]
@@ -139,6 +148,90 @@ struct IconCmd {
     /// so it overrides the base art in place.
     #[arg(long = "encode-vpk", value_name = "OUT_dir.vpk")]
     encode_vpk: PathBuf,
+}
+
+#[derive(Args)]
+struct SoulContainerCmd {
+    #[command(subcommand)]
+    action: SoulContainerAction,
+}
+
+#[derive(Subcommand)]
+enum SoulContainerAction {
+    /// Clone a `.glb` into a soul-container override VPK.
+    Import(SoulImportArgs),
+}
+
+#[derive(Args)]
+struct SoulImportArgs {
+    /// The model to import (binary glTF `.glb`).
+    #[arg(long, value_name = "FILE")]
+    glb: PathBuf,
+
+    /// Base `pak01_dir.vpk` to read the stock soul-container model, donor
+    /// textures, and soul-glow particles from.
+    #[arg(long, value_name = "VPK")]
+    pak: PathBuf,
+
+    /// Output addon VPK; overrides the stock soul container in place.
+    #[arg(long, value_name = "OUT_dir.vpk")]
+    out: PathBuf,
+
+    /// Material/texture basename used inside the VPK.
+    #[arg(long, default_value = "custom_soul")]
+    name: String,
+
+    /// Coordinate convention applied to the GLB before fitting. `auto` is not
+    /// reliable for cube-like props; prefer manual correction.
+    #[arg(long, value_enum, default_value_t = OrientArg::YUp)]
+    orient: OrientArg,
+
+    /// Extra Euler rotation in degrees as `X,Y,Z`, applied after --orient.
+    #[arg(long, value_name = "X,Y,Z")]
+    rotate: Option<String>,
+
+    /// What to do with the orb's soul-glow particles.
+    #[arg(long, value_enum, default_value_t = GlowArg::Recolor)]
+    glow: GlowArg,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OrientArg {
+    #[value(name = "y-up")]
+    YUp,
+    #[value(name = "z-up")]
+    ZUp,
+    #[value(name = "flip-y")]
+    FlipY,
+    Auto,
+}
+
+impl From<OrientArg> for SoulOrient {
+    fn from(v: OrientArg) -> Self {
+        match v {
+            OrientArg::YUp => SoulOrient::YUp,
+            OrientArg::ZUp => SoulOrient::ZUp,
+            OrientArg::FlipY => SoulOrient::FlipY,
+            OrientArg::Auto => SoulOrient::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum GlowArg {
+    Recolor,
+    Base,
+    Off,
+}
+
+impl From<GlowArg> for SoulGlow {
+    fn from(v: GlowArg) -> Self {
+        match v {
+            GlowArg::Recolor => SoulGlow::Recolor,
+            GlowArg::Base => SoulGlow::Base,
+            GlowArg::Off => SoulGlow::Off,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -636,6 +729,91 @@ enum ModelAction {
     /// several ENTRIES to recolor a whole set into one addon, each overriding its
     /// base entry in place. Mirrors `vpkmerge texture`.
     Recolor(ModelRecolorArgs),
+
+    /// Segment a model's texture space into regions and bake UV masks, the
+    /// headless replacement for Blender's per-part face-picker. `--list` prints
+    /// the regions; `--atlas <PNG>` renders a distinct-color-per-region picking
+    /// atlas; `--select <ID>... --mask <PNG>` bakes a white-on-black mask the
+    /// reskin builders consume as a region selector (in place of the AO
+    /// heuristic). Segment by UV island (default), mesh part, or material.
+    Mask(ModelMaskArgs),
+}
+
+#[derive(Args)]
+struct ModelMaskArgs {
+    /// VPK containing the `.vmdl_c` (a skin VPK, or the base pak itself).
+    #[arg(long, value_name = "VPK")]
+    vpk: PathBuf,
+
+    /// VPK-internal model path, e.g.
+    /// `models/heroes_staging/hornet_v3/hornet.vmdl_c`. Mutually exclusive with
+    /// `--hero`.
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "hero",
+        conflicts_with = "hero"
+    )]
+    entry: Option<String>,
+
+    /// Hero codename (e.g. `hornet`, `bookworm`) whose body model is
+    /// auto-discovered. Mutually exclusive with `--entry`.
+    #[arg(long, value_name = "CODENAME")]
+    hero: Option<String>,
+
+    /// Base `pak01_dir.vpk` to fall back to when `--vpk` does not ship the mesh.
+    #[arg(long, value_name = "VPK")]
+    base: Option<PathBuf>,
+
+    /// How to partition texture space into regions: `island` (connected UV
+    /// components, the default), `part` (one per mesh part), or `material`.
+    #[arg(long, value_name = "MODE", default_value = "island")]
+    by: MaskByArg,
+
+    /// Restrict to mesh parts whose name contains this (case-insensitive), e.g.
+    /// `--part body` to drop weapon meshes. Hero bodies carry many small weapon
+    /// islands; this is the usual way to focus island mode on the body.
+    #[arg(long, value_name = "NAME")]
+    part: Option<String>,
+
+    /// List the regions (id, label, triangles, UV area, swatch color) and exit.
+    /// Run this first to find the id(s) you want to `--select`.
+    #[arg(long)]
+    list: bool,
+
+    /// Render a distinct-color-per-region picking atlas PNG to this path (pair it
+    /// with the printed legend to read off region ids by eye).
+    #[arg(long, value_name = "PNG")]
+    atlas: Option<PathBuf>,
+
+    /// Region id(s) to bake into the mask (from `--list`/`--atlas`). Repeatable.
+    #[arg(long, value_name = "ID", num_args = 1..)]
+    select: Vec<usize>,
+
+    /// Bake the `--select`ed regions to a white-on-black mask PNG at this path.
+    #[arg(long, value_name = "PNG", requires = "select")]
+    mask: Option<PathBuf>,
+
+    /// Atlas/mask resolution in pixels (square). Match the texture you will paint.
+    #[arg(long, value_name = "N", default_value_t = 1024)]
+    resolution: u32,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum MaskByArg {
+    Island,
+    Part,
+    Material,
+}
+
+impl From<MaskByArg> for SegmentBy {
+    fn from(v: MaskByArg) -> Self {
+        match v {
+            MaskByArg::Island => SegmentBy::Island,
+            MaskByArg::Part => SegmentBy::Part,
+            MaskByArg::Material => SegmentBy::Material,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -960,6 +1138,7 @@ fn main() -> Result<()> {
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
         Some(Command::Vmat(args)) => run_vmat(&args),
         Some(Command::Icon(args)) => run_icon(&args),
+        Some(Command::SoulContainer(args)) => run_soul_container(&args),
         None => run_merge(cli),
     }
 }
@@ -992,6 +1171,7 @@ fn run_model(args: ModelCmd) -> Result<()> {
         Some(ModelAction::Export(e)) => return run_model_export(&e),
         Some(ModelAction::Edit(e)) => return run_model_edit(e),
         Some(ModelAction::Recolor(e)) => return run_model_recolor(&e),
+        Some(ModelAction::Mask(m)) => return run_model_mask(&m),
         None => {}
     }
 
@@ -1035,6 +1215,98 @@ fn run_model(args: ModelCmd) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_model_mask(m: &ModelMaskArgs) -> Result<()> {
+    let by: SegmentBy = m.by.into();
+    let entry = match (&m.entry, &m.hero) {
+        (Some(entry), _) => entry.clone(),
+        (None, Some(hero)) => hero_model_entry(&m.vpk, m.base.as_deref(), hero)?,
+        (None, None) => anyhow::bail!("model mask: provide --entry or --hero"),
+    };
+
+    let part = m.part.as_deref();
+
+    // No output requested: list the regions so the caller can pick ids.
+    if m.atlas.is_none() && m.mask.is_none() {
+        let segs = model_uv_segments(&m.vpk, &entry, m.base.as_deref(), by, part, m.resolution)?;
+        print_uv_segments(&segs, by);
+        if !m.list {
+            eprintln!(
+                "\n(no --atlas/--mask given. Add --atlas <PNG> for a picker, or --select <ID>... --mask <PNG> to bake a mask.)"
+            );
+        }
+        return Ok(());
+    }
+
+    if let Some(atlas) = &m.atlas {
+        let segs = bake_uv_atlas(
+            &m.vpk,
+            &entry,
+            m.base.as_deref(),
+            by,
+            part,
+            m.resolution,
+            atlas,
+        )?;
+        print_uv_segments(&segs, by);
+        println!(
+            "wrote {} ({}x{}, {} region(s))",
+            atlas.display(),
+            m.resolution,
+            m.resolution,
+            segs.len()
+        );
+    }
+
+    if let Some(mask) = &m.mask {
+        let labels = bake_uv_mask(
+            &m.vpk,
+            &entry,
+            m.base.as_deref(),
+            by,
+            part,
+            &m.select,
+            m.resolution,
+            mask,
+        )?;
+        println!(
+            "wrote {} ({}x{}): mask of {} region(s): {}",
+            mask.display(),
+            m.resolution,
+            m.resolution,
+            labels.len(),
+            labels.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+fn print_uv_segments(segs: &[vpkmerge_core::UvSegmentInfo], by: SegmentBy) {
+    let mode = match by {
+        SegmentBy::Island => "UV island",
+        SegmentBy::Part => "mesh part",
+        SegmentBy::Material => "material",
+    };
+    eprintln!(
+        "{} region(s) by {mode} (sorted by texture coverage):",
+        segs.len()
+    );
+    eprintln!(
+        "  {:>4}  {:>8}  {:>7}  {:<8}  label",
+        "id", "tris", "cover%", "color"
+    );
+    for s in segs {
+        let [r, g, b] = s.color;
+        eprintln!(
+            "  {:>4}  {:>8}  {:>7.2}  #{r:02x}{g:02x}{b:02x}  {}",
+            s.id,
+            s.triangles,
+            f64::from(s.coverage) * 100.0,
+            s.label,
+        );
+    }
 }
 
 fn run_model_export(e: &ModelExportArgs) -> Result<()> {
@@ -2040,6 +2312,83 @@ fn run_icon(args: &IconCmd) -> Result<()> {
         refs.len(),
         if refs.len() == 1 { "y" } else { "ies" }
     );
+    Ok(())
+}
+
+fn run_soul_container(cmd: &SoulContainerCmd) -> Result<()> {
+    match &cmd.action {
+        SoulContainerAction::Import(args) => run_soul_container_import(args),
+    }
+}
+
+/// Parse a `--rotate X,Y,Z` value into Euler degrees.
+fn parse_soul_rotate(spec: &str) -> Result<[f32; 3]> {
+    let parts: Vec<f32> = spec
+        .split(',')
+        .map(|p| p.trim().parse::<f32>())
+        .collect::<std::result::Result<_, _>>()
+        .with_context(|| format!("--rotate must be degrees as X,Y,Z, got {spec:?}"))?;
+    if parts.len() != 3 {
+        anyhow::bail!("--rotate must be degrees as X,Y,Z, got {spec:?}");
+    }
+    Ok([parts[0], parts[1], parts[2]])
+}
+
+fn run_soul_container_import(args: &SoulImportArgs) -> Result<()> {
+    let rotate = args.rotate.as_deref().map(parse_soul_rotate).transpose()?;
+    let glb =
+        std::fs::read(&args.glb).with_context(|| format!("reading GLB {}", args.glb.display()))?;
+    let opts = SoulImportCloneOptions {
+        name: args.name.clone(),
+        orient: args.orient.into(),
+        rotate,
+        glow: args.glow.into(),
+    };
+    let report = import_soul_container_clone(&args.pak, &glb, &args.out, &opts)
+        .with_context(|| format!("importing {} into a soul container", args.glb.display()))?;
+
+    // Human-readable progress on stderr.
+    eprintln!("orient: {}", report.orient_label);
+    eprintln!(
+        "mesh:   {} prims -> {} group(s), {} verts, {} tris; atlas {}x{} ({}px); fit x{:.3} (source span {:.2} -> {:.2})",
+        report.prim_count,
+        report.group_count,
+        report.vert_count,
+        report.tri_count,
+        report.atlas_cols,
+        report.atlas_rows,
+        report.atlas_px,
+        report.fit_scale,
+        report.source_span,
+        report.target_span,
+    );
+    eprintln!(
+        "glow:   hue {:.0} deg (from dominant group)",
+        report.glow_hue
+    );
+    eprintln!(
+        "wrote {} ({} entries)",
+        args.out.display(),
+        report.entry_count
+    );
+
+    // Machine-readable report on stdout (one JSON object) so a caller such as
+    // Grimoire can record the transform + fitted bounds without scraping logs.
+    let json = serde_json::json!({
+        "orient": report.orient_label,
+        "version": env!("CARGO_PKG_VERSION"),
+        "primCount": report.prim_count,
+        "groupCount": report.group_count,
+        "vertCount": report.vert_count,
+        "triCount": report.tri_count,
+        "atlasPx": report.atlas_px,
+        "fitScale": report.fit_scale,
+        "sourceSpan": report.source_span,
+        "targetSpan": report.target_span,
+        "glowHue": report.glow_hue,
+        "entryCount": report.entry_count,
+    });
+    println!("{json}");
     Ok(())
 }
 

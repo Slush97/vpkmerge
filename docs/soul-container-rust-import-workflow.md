@@ -126,18 +126,20 @@ isolated `git archive` snapshot before commit.
 
 The script auto-scales. After reading and merging GLB primitives, it:
 
-1. transforms GLB Y-up geometry into Source-style Z-up coordinates:
+1. applies each GLB node's world transform to positions and normals
+2. transforms GLB Y-up geometry into Source-style Z-up coordinates:
    `[x, y, z] -> [x, z, -y]`
-2. computes merged mesh bounds
-3. computes the stock soul-container model bounds
-4. subtracts the imported mesh center
-5. scales the imported mesh by:
+3. applies the selected import orientation
+4. computes merged mesh bounds
+5. computes the stock soul-container model bounds
+6. subtracts the imported mesh center
+7. scales the imported mesh by:
 
 ```text
 scale = stock_soul_largest_axis / imported_largest_axis
 ```
 
-6. translates the mesh to the stock soul-container center
+8. translates the mesh to the stock soul-container center
 
 Confirmed build summaries:
 
@@ -151,6 +153,23 @@ The Togetic installed sanity bounds were:
 ```text
 span=[7.18318, 8.241109, 12.65]
 ```
+
+## Orientation Overrides
+
+The importer accepts explicit orientation controls for GLBs whose baked up-axis or
+root orientation does not match the default path:
+
+```bash
+SOUL_ORIENT=y-up    # default, after GLB node-world transforms
+SOUL_ORIENT=z-up    # rotate a Z-up source so game Z is tallest
+SOUL_ORIENT=flip-y  # flip the post-conversion vertical sign
+SOUL_ORIENT=auto    # pick y-up or z-up by largest game-Z bounds span
+SOUL_ROTATE=90,0,0  # optional extra X,Y,Z Euler rotation in degrees
+```
+
+`auto` is intentionally bounds-only. It handles common y-up versus z-up cases, but
+explicit `SOUL_ORIENT` / `SOUL_ROTATE` is still the reliable path for upside-down,
+symmetrical, or deliberately wide models.
 
 ## Vertex Layout Fix
 
@@ -197,6 +216,43 @@ SOUL_GLOW=off      # do not ship particle overrides
 A true mute should be implemented as a new mode, likely `SOUL_GLOW=mute`, that
 ships inert overrides for those three particle paths or patches spawn/intensity
 or alpha to zero.
+
+## Albedo Atlas Resolution (and a dead end)
+
+The albedo atlas is spliced into a same-size BCn donor texture
+(`dev/helper/testgrid_color_tga_2d6cc34.vtex_c`, 512x512) via `replace_mip_chain`,
+which can only overwrite pixels in a donor of matching dimensions. That hard-caps
+the whole atlas at 512x512 split across every material group (six groups -> ~170px
+cells). This is the main albedo-resolution limit.
+
+**Dead end, do not retry without a new plan:** minting the atlas from scratch with
+`morphic::encode_vtex_png_rgba8888` (inline `PNG_RGBA8888`, single mip) lifts the
+512 cap and decodes cleanly offline (it round-trips out of the packed VPK via
+`vpkmerge texture --from-vpk`, and Grimoire's own preview renders it correctly).
+But **Deadlock's engine REJECTS an inline-PNG_RGBA8888 albedo on a model material
+and renders the missing-texture purple** (in-game verified on piplup: flat purple
+body, correct only in the offline / Grimoire decoders). `PNG_RGBA8888` is a
+UI/panorama format; shipped model albedos are all BCn with mip chains. So the
+resolution bump cannot go through the inline-PNG writer.
+
+To actually raise albedo resolution the atlas must stay BCn, which means a **larger
+same-format BCn donor** (e.g. a committed 2048 BC7 `.vtex_c` to splice into). That
+is the open follow-up; the code stays on the proven 512 BCn donor for now.
+
+## Orientation Auto-Picker
+
+`SoulOrient::Auto` scores candidate rotations about X (identity, +/-90, 180) in the
+FINAL mesh space (after the assembler's `[x, z, -y]` swizzle), preferring the
+tallest vertical axis and then the most bottom-heavy (right-side-up) result. The old
+picker only tried identity and +90, measured the pre-swizzle span, and never checked
+the up-sign, so it both missed the rotation Sketchfab models need and could land a
+model upside-down.
+
+Sketchfab GLBs are the common case: the `Sketchfab_model` root node carries a
+Z-up -> Y-up matrix, and combined with the importer's conversion the model needs an
+extra **-90 about X** to stand up (`SOUL_ROTATE=-90,0,0`, or just `SOUL_ORIENT=auto`,
+which resolves to `auto:z-up-inv`). Explicit `SOUL_ROTATE` remains the reliable
+override for ambiguous models.
 
 ## Current Limitations
 

@@ -8,7 +8,7 @@ use std::path::Path;
 
 pub use morphic::model::{
     BlockSummary, DrawCallInfo, ModelInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup,
-    ReplacedMeshPart, VertexTarget,
+    ReplacedMeshPart, SegmentBy, VertexTarget,
 };
 
 /// Default candidate clips for a bare `--pose`, in priority order. Menu-pose
@@ -397,6 +397,150 @@ pub struct ModelPartSelector {
     pub group: Option<String>,
     pub materials: Vec<String>,
     pub mesh_parts: Vec<String>,
+}
+
+/// One UV region surfaced by `vpkmerge model mask`: its picking id, label, the
+/// mesh part it came from, triangle count, UV footprint, and atlas swatch color.
+#[derive(Debug, Clone)]
+pub struct UvSegmentInfo {
+    pub id: usize,
+    pub label: String,
+    pub mesh: String,
+    pub triangles: usize,
+    /// Fraction of the texture this region actually covers (`0..1`), measured by
+    /// rasterizing at the analysis resolution. Bounded and honest, unlike summed
+    /// UV area which tiling/mirrored hero UVs inflate past 1.
+    pub coverage: f32,
+    /// Summed UV-space triangle area (may exceed 1 with tiling/overlap).
+    pub uv_area: f32,
+    /// `[min_u, min_v, max_u, max_v]`.
+    pub uv_bounds: [f32; 4],
+    /// RGB of this region's atlas color, so a legend can show the swatch.
+    pub color: [u8; 3],
+}
+
+/// Resolves a hero codename to its body model entry (`<dir>/<codename>.vmdl_c`),
+/// searching `--vpk` then the optional base pak. Mirrors `export_hero_model`'s
+/// discovery so `model mask --hero` accepts the same names as `model export`.
+pub fn hero_model_entry(
+    vpk: impl AsRef<Path>,
+    base: Option<&Path>,
+    codename: &str,
+) -> Result<String> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    discover_hero_entry(&vpks, codename)
+        .with_context(|| format!("no hero model '{codename}.vmdl_c' found in the given VPK(s)"))
+}
+
+fn decode_model_entry(
+    vpk: &Path,
+    entry: &str,
+    base: Option<&Path>,
+) -> Result<morphic::model::Model> {
+    let vpks = open_vpks(vpk, base)?;
+    let bytes =
+        read_entry(&vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
+    morphic::model::decode(&bytes).with_context(|| format!("decoding {entry}"))
+}
+
+/// Builds the listing rows for a set of segments: measures per-segment texel
+/// coverage at `resolution`, then sorts the rows largest-coverage-first (the
+/// region a reskinner most likely wants on top). The stable `id`/color follow
+/// the segment, so list order can differ from id order.
+fn segment_infos(segs: &[morphic::model::Segment], resolution: u32) -> Vec<UvSegmentInfo> {
+    let coverage = morphic::model::segment_coverage(segs, resolution);
+    let mut infos: Vec<UvSegmentInfo> = segs
+        .iter()
+        .zip(coverage)
+        .map(|(s, cov)| UvSegmentInfo {
+            id: s.id,
+            label: s.label.clone(),
+            mesh: s.mesh.clone(),
+            triangles: s.triangle_count(),
+            coverage: cov,
+            uv_area: s.uv_area(),
+            uv_bounds: s.uv_bounds(),
+            color: morphic::model::segment_color(s.id),
+        })
+        .collect();
+    infos.sort_by(|a, b| {
+        b.coverage
+            .partial_cmp(&a.coverage)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    infos
+}
+
+fn write_png_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Lists a model's UV regions under the chosen segmentation scheme
+/// ([`SegmentBy::Part`], [`SegmentBy::Material`], or [`SegmentBy::Island`]),
+/// sorted largest-first. Backs `model mask --list` and the atlas legend.
+pub fn model_uv_segments(
+    vpk: impl AsRef<Path>,
+    entry: &str,
+    base: Option<&Path>,
+    by: SegmentBy,
+    part: Option<&str>,
+    resolution: u32,
+) -> Result<Vec<UvSegmentInfo>> {
+    let model = decode_model_entry(vpk.as_ref(), entry, base)?;
+    let segs = morphic::model::segments(&model, by, part);
+    Ok(segment_infos(&segs, resolution))
+}
+
+/// Bakes a distinct-hue atlas PNG (one color per UV region, for picking by eye)
+/// to `out_png` and returns the region metadata so the caller can print a legend.
+pub fn bake_uv_atlas(
+    vpk: impl AsRef<Path>,
+    entry: &str,
+    base: Option<&Path>,
+    by: SegmentBy,
+    part: Option<&str>,
+    resolution: u32,
+    out_png: impl AsRef<Path>,
+) -> Result<Vec<UvSegmentInfo>> {
+    let model = decode_model_entry(vpk.as_ref(), entry, base)?;
+    let segs = morphic::model::segments(&model, by, part);
+    let png = morphic::model::atlas_png(&segs, resolution).context("rendering UV atlas")?;
+    write_png_file(out_png.as_ref(), &png)?;
+    Ok(segment_infos(&segs, resolution))
+}
+
+/// Bakes a white-on-black mask PNG of the `selected` region ids to `out_png` (the
+/// region selector the reskin builders consume in place of the AO heuristic).
+/// Returns the labels of the baked regions; errors if any id is out of range.
+#[allow(clippy::too_many_arguments)]
+pub fn bake_uv_mask(
+    vpk: impl AsRef<Path>,
+    entry: &str,
+    base: Option<&Path>,
+    by: SegmentBy,
+    part: Option<&str>,
+    selected: &[usize],
+    resolution: u32,
+    out_png: impl AsRef<Path>,
+) -> Result<Vec<String>> {
+    let model = decode_model_entry(vpk.as_ref(), entry, base)?;
+    let segs = morphic::model::segments(&model, by, part);
+    for &id in selected {
+        if id >= segs.len() {
+            anyhow::bail!(
+                "segment id {id} out of range: model has {} segment(s) (run --list)",
+                segs.len()
+            );
+        }
+    }
+    let png = morphic::model::mask_png(&segs, selected, resolution).context("rendering UV mask")?;
+    write_png_file(out_png.as_ref(), &png)?;
+    Ok(selected.iter().map(|&i| segs[i].label.clone()).collect())
 }
 
 /// Lists the vertex buffers in a model entry (which mesh parts can be edited, and

@@ -30,6 +30,280 @@ tools/soul-container-compiler/build_soul_container.py <input.glb> \
 See `tools/soul-container-compiler/README.md` for install and environment
 options.
 
+## Rust Prep API
+
+The first Blender dependency has been factored into `vpkmerge-core`:
+
+```rust
+vpkmerge_core::prepare_soul_container_import(glb, source_root, options)
+```
+
+It reads the GLB with the Rust `gltf` crate, applies node transforms and the
+same center-and-fit rule, writes source `.vmat` files, source PNG color
+textures, `soul_container.vmdl`, and a static `model.fbx` with FBX material
+names set to Source-relative material paths:
+
+```text
+models/props_gameplay/soul_container/materials/<material>
+```
+
+The prepared output is intentionally a compiler source tree, not hand-written
+compiled resources. The matching abstraction is:
+
+```rust
+vpkmerge_core::compile_soul_container_source(source_root, options, backend, output_vpk)
+```
+
+The full end-to-end backend is still
+`SoulContainerCompileBackend::ResourceCompiler`. `PureRust` is partial: it emits
+generated `.vmat_c` / `.vtex_c` resources, but not `.vmdl_c`.
+
+Manual prep probe:
+
+```sh
+cargo run -p vpkmerge-core --example prepare_soul_container -- \
+  /home/esoc/Downloads/piplup.glb /tmp/piplup_soul_source
+```
+
+Important validation boundary: the Rust prep API has unit coverage for GLB
+parsing, material path generation, source file emission, and normalized bounds.
+The minimal Rust-authored FBX still needs resourcecompiler and in-game probes
+against several real GLBs before it replaces the Blender-generated FBX path in
+the installed proof pipeline.
+
+Current probe: resourcecompiler accepts the Rust-prepared `.vmdl` but emits only
+a tiny modeldoc shell (`CTRL has no embedded_meshes`) for both an ASCII FBX and
+a minimal Kaydara binary FBX 7400. Blender's FBX remains the known-good
+compiler input. The next Rust-prep milestone is therefore FBX SDK compatibility:
+diff Blender's binary FBX node/property graph against the Rust writer and keep
+adding required FBX structures until resourcecompiler emits VBIB/material/VTEX
+outputs.
+
+## Rust FBX Compatibility Harness
+
+Three Track-1 examples now gate the Rust prep path without touching the installed
+proof VPK:
+
+```sh
+cargo run -p vpkmerge-core --example fbx_graph_diff -- \
+  /home/esoc/csdk12/Reduced_CSDK_12/content/citadel_addons/test/models/props_gameplay/soul_container_glbprobe/model.fbx \
+  /tmp/<rust-prep>/models/props_gameplay/soul_container/model.fbx \
+  --max-diffs 120 --dump-focus
+```
+
+This parses both binary FBX files with `fbxcel`, loads DOM object metadata with
+`fbxcel-dom`, and compares root paths, node/property signatures, object
+class/subclass counts, connection kinds, and focused sections:
+`GlobalSettings`, `Definitions`, `Objects/Geometry`, `Objects/Model`,
+`Objects/Material`, `Connections`, and `Takes`.
+
+```sh
+cargo run -p vpkmerge-core --example soul_container_acceptance -- \
+  /home/esoc/Downloads/piplup.glb /tmp/piplup_rust_accept_dir.vpk \
+  --addon piplup_rust_accept
+```
+
+This runs:
+
+1. Rust `prepare_soul_container_import`.
+2. `resourcecompiler.exe` through Proton.
+3. VPK packing.
+4. VPK/resource inspection.
+
+It fails unless the compiled model decodes with embedded meshes, material refs
+are Source-relative under the expected model folder, draw-call/material count
+matches the prepared material count, largest bounds axis is `12.65 +/- 0.05`,
+and `.vmat_c` / `.vtex_c` outputs exist. It explicitly refuses to write:
+
+```text
+/home/esoc/.steam/steam/steamapps/common/Deadlock/game/citadel/addons/pak06_dir.vpk
+```
+
+The controlled mutation harness starts from the known-good Blender source model
+directory, swaps the staged `model.fbx` one feature at a time toward a candidate
+Rust FBX, runs resourcecompiler/pack/inspect for each case, and prints
+`embedded` versus `shell` outcomes:
+
+```sh
+cargo run -p vpkmerge-core --example soul_container_fbx_mutation -- \
+  /tmp/<rust-prep>/models/props_gameplay/soul_container/model.fbx \
+  --out-dir /tmp/vpkmerge-fbx-mutation
+```
+
+Use `--write-only` to generate the mutated FBX files without invoking
+resourcecompiler. The default cumulative run includes baseline raw FBX,
+baseline fbxcel roundtrip, metadata/material swaps, compatible geometry/model
+swaps, full `Objects` + `Connections`, and the fully rewritten candidate. If
+the candidate has different `Objects/Geometry` or `Objects/Model` counts, the
+default run skips those count-sensitive feature swaps and says why; pass
+`--features geometry_edges,geometry_normals,...` explicitly when comparing a
+candidate with matching object counts.
+
+The harness rewrites candidate material/model strings from
+`models/props_gameplay/soul_container` to the known-good proof path
+`models/props_gameplay/soul_container_glbprobe` before compiling, so each
+mutation uses the proof VMAT/PNG/VMDL source tree and changes only the FBX under
+test. It writes output VPKs under `--out-dir` and carries the same installed
+proof VPK refusal guard as the acceptance example.
+
+Current Rust binary FBX improvements:
+
+- Valid FBX 7.4 footer (`fbxcel` reports `footer=ok`).
+- Blender-style object metadata strings: `name\0\x01Class`.
+- One `Geometry/Mesh` and one `Model/Mesh` per material instead of one
+  multi-material geometry.
+- `LayerElementMaterial` uses `AllSame`.
+- Normal and UV layers use `IndexToDirect` with index arrays.
+- Blender-style null model hierarchy and `NodeAttribute/Null` objects.
+- Blender-observed global axis/time/default-camera fields.
+- Root null rotation/scale matching the Blender export.
+- Basic `Definitions` property templates.
+- `Geometry/Properties70` and generated `Edges` arrays.
+- Blender-style top-level `FileId`, `CreationTime`, and `Creator` root nodes.
+
+The controlled mutation harness found the resourcecompiler flip point: with the
+current Rust FBX graph, cumulative mutations stayed embedded through header,
+global settings, documents, definitions, material properties, model properties,
+geometry edges, normals, UVs, material layers, topology, full geometry payloads,
+and full `Objects` + `Connections`. The fully rewritten candidate only shelled
+when it lacked Blender's three top-level metadata nodes: `FileId`,
+`CreationTime`, and `Creator`.
+
+After adding those nodes to the Rust writer, the acceptance harness passes:
+
+```text
+compiled addon piplup_rust_accept_metadata packed_entries 18 output /tmp/piplup_rust_accept_metadata_dir.vpk
+validated embedded geometry: mesh_parts=1 draw_calls=6 materials=6 bounds_span=[12.650001, 9.299569, 8.924238] vmat_c=6 vtex_c=11
+acceptance ok
+```
+
+The release `v0sanity` gate also passes against that VPK:
+
+```text
+span=[12.650001, 9.299569, 8.924238]
+```
+
+## Compiler Oracle Fixtures
+
+Before replacing `resourcecompiler.exe`, freeze compiler outputs for the small
+GLB corpus. The fixture freezer keeps the Rust-prepared source tree, copied
+CSDK compiled game tree, packed VPK, `v0sanity.txt`, and structured
+`oracle.json` metadata with model bounds, draw/material refs, resource blocks,
+compiled material params, and VTEX formats:
+
+```sh
+cargo run -p vpkmerge-core --example soul_container_oracle_fixtures -- \
+  --out-dir /tmp/soul-container-oracle \
+  --case piplup=/home/esoc/Downloads/piplup.glb \
+  --case cinna=/home/esoc/Downloads/75ee040c5394475481652b9064889728.glb \
+  --case edge_chest=/home/esoc/aaplsucks/assets/dungeon/chest.glb \
+  --case edge_cesium_man=/home/esoc/aaplsucks/assets/models/CesiumMan.glb \
+  --case edge_fox=/home/esoc/aaplsucks/assets/models/Fox.glb \
+  --force
+```
+
+Use additional `--case name=/path/model.glb` arguments for edge cases. The tool
+guards the known installed addon proof paths and writes fixture output under
+`--out-dir`, not into the Deadlock install.
+
+## Pure Rust VTEX Writer
+
+The first pure-Rust compiled-resource writer is intentionally narrow:
+`morphic::encode_vtex_png_rgba8888` and
+`morphic::encode_vtex_png_rgba8888_from_png` build a complete `.vtex_c` from
+scratch using inline `PNG_RGBA8888` payloads. This does not try to match CSDK's
+BC7 texture choices yet; it gives the pure backend a small engine-plausible
+texture resource to validate before VMAT/VMDL emission lands.
+
+Developer probe against a prepared source PNG:
+
+```sh
+cargo run -p morphic --example write_vtex_png -- \
+  /tmp/soul-container-oracle/piplup/source/models/props_gameplay/soul_container/materials/initialshadinggroup_color.png \
+  /tmp/piplup_inline_png.vtex_c
+```
+
+## Pure Rust VMAT Writer
+
+The first pure-Rust `.vmat_c` writer is similarly constrained:
+`morphic::encode_pbr_vmat_c` emits a generated material for the soul-container
+`pbr.vfx` subset. It writes a `DATA` KV3 block with the CSDK-observed material
+fields for `m_materialName`, `m_shaderName`, `m_intParams`,
+`m_vectorParams`, `m_textureParams`, empty dynamic/attribute arrays, and
+representative texture dimensions. It also emits the static `INSG` shader input
+signature observed across the CSDK oracle corpus. The color slot is
+caller-provided as `g_tColor`; missing PBR/NPR slots use the same default
+material texture paths CSDK inserted in the oracle fixtures.
+
+Developer probe:
+
+```sh
+cargo run -p morphic --example write_vmat -- \
+  models/props_gameplay/soul_container/materials/initialshadinggroup.vmat \
+  models/props_gameplay/soul_container/materials/initialshadinggroup_color.vtex \
+  2 2 \
+  /tmp/piplup_generated.vmat_c
+```
+
+## Partial Pure Rust Backend Probe
+
+`SoulContainerCompileBackend::PureRust` now performs the partial material and
+texture compile: it scans a prepared source tree and packs generated `.vmat_c`
+and `.vtex_c` resources. It intentionally does not emit `soul_container.vmdl_c`
+yet, so the output is not a complete replacement VPK.
+
+For a fresh GLB prepare + pure material/texture compile:
+
+```sh
+cargo run -p vpkmerge-core --example soul_container_pure_probe -- \
+  /tmp/soul-container-oracle/piplup/input.glb \
+  /tmp/soul-container-pure-probe/piplup/compiled_game \
+  /tmp/soul-container-pure-probe/piplup/piplup_pure_dir.vpk \
+  --oracle /tmp/soul-container-oracle/piplup/oracle.json \
+  --force
+```
+
+For a frozen prepared source tree, useful when the fixture GLB references an
+external texture URI:
+
+```sh
+cargo run -p vpkmerge-core --example soul_container_pure_probe -- \
+  --source-root /tmp/soul-container-oracle/edge_chest/source \
+  /tmp/soul-container-pure-probe/edge_chest/compiled_game \
+  /tmp/soul-container-pure-probe/edge_chest/edge_chest_pure_dir.vpk \
+  --oracle /tmp/soul-container-oracle/edge_chest/oracle.json \
+  --force
+```
+
+Current result across `piplup`, `cinna`, `edge_chest`, `edge_cesium_man`, and
+`edge_fox`: generated resources parse through `morphic::material::parse` /
+`morphic::inspect`; VMAT shader, texture-param keys, int-param keys, and
+vector-param keys match the CSDK oracle. Expected differences remain:
+
+- Color texture paths are deterministic `<material>_color.vtex`, not CSDK's
+  hash-suffixed `<material>_color_png_<hash>.vtex`.
+- VTEX format is inline `PNG_RGBA8888`, not CSDK's BC7.
+- Output has no default texture copies and no `.vmdl_c`.
+
+In-game breakpoint as of the `pak43_dir.vpk` probe:
+
+- Pure `PNG_RGBA8888` VTEX is accepted by the engine.
+- Generated DATA-only VMAT failed red/wireframe.
+- Generated `DATA+INSG` VMAT failed red/wireframe.
+- Oracle `RERL/RED2/INSG` with fully regenerated v4 DATA failed red/wireframe.
+- Oracle `RERL/RED2/INSG` and byte-faithful v5 DATA patched only at
+  `g_tColor` rendered successfully.
+
+This means the immediate VMAT replacement target is not a lossy full KV3
+re-encode. The next pure backend should preserve or generate engine-compatible
+v5 DATA layout, then update `g_tColor` byte-faithfully; after that, generate
+matching `RERL` / `RED2` instead of borrowing oracle blocks.
+
+Do not install a Rust-prep VPK just because graph parity looks good. Keep using
+`soul_container_acceptance` and `v0sanity` as the gate; only install artifacts
+that pass both and report embedded geometry, correct material refs, draw/material
+counts, and largest bounds axis around `12.65`.
+
 ## Reverse Engineering Boundary
 
 We can and should reverse engineer what the compiler emits enough to validate,
@@ -205,6 +479,13 @@ Piplup GLB probe:
 ## Remaining Production Work
 
 - Wire the maintained compiler wrapper into the app/Grimoire flow.
+- Implement pure `.vmdl_c` emission for the constrained static soul-container
+  path.
+- Replace VMAT full DATA re-encode with byte-faithful v5 DATA construction or
+  patching. The `pak43_dir.vpk` probe proves v5 DATA patched only at `g_tColor`
+  renders in game.
+- Generate matching `RERL` / `RED2` dependency/edit blocks for pure VMAT output
+  instead of borrowing oracle blocks.
 - Preserve more GLB material channels, not just base color.
 - Decide whether to include resourcecompiler-emitted default textures or rely on
   base-game defaults when packing.

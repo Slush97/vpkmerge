@@ -18,14 +18,15 @@ use std::path::{Path, PathBuf};
 pub mod model;
 pub mod portrait;
 pub use model::{
-    apply_model_edit_glb, edit_model_geometry, export_hero_model, export_model,
-    export_model_buffer_glb, export_model_group_glb, inspect_model_parts, inspect_models,
-    model_draw_call_targets, model_vertex_targets, recolor_models_to_addon, reencode_model_mdat,
-    remove_model_material, replace_model_group, replace_model_part, AnimOptions, DrawCallInfo,
-    DrawCallSkinInfo, GeometryEdit, GeometryEditReport, MaterialRemovalReport,
-    ModelDrawCallInspection, ModelEntry, ModelInfo, ModelPartInspection, ModelPartSelector,
-    ModelRecolorEntry, PartReplacementReport, PoseSelection, RemovedDrawCall, ReplacedMeshGroup,
-    ReplacedMeshPart, ResolvedResource, ResolvedTextureParam, SuggestedPartGroup, VertexTarget,
+    apply_model_edit_glb, bake_uv_atlas, bake_uv_mask, edit_model_geometry, export_hero_model,
+    export_model, export_model_buffer_glb, export_model_group_glb, hero_model_entry,
+    inspect_model_parts, inspect_models, model_draw_call_targets, model_uv_segments,
+    model_vertex_targets, recolor_models_to_addon, reencode_model_mdat, remove_model_material,
+    replace_model_group, replace_model_part, AnimOptions, DrawCallInfo, DrawCallSkinInfo,
+    GeometryEdit, GeometryEditReport, MaterialRemovalReport, ModelDrawCallInspection, ModelEntry,
+    ModelInfo, ModelPartInspection, ModelPartSelector, ModelRecolorEntry, PartReplacementReport,
+    PoseSelection, RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart, ResolvedResource,
+    ResolvedTextureParam, SegmentBy, SuggestedPartGroup, UvSegmentInfo, VertexTarget,
     DEFAULT_POSE_CLIPS,
 };
 pub use portrait::{extract_portraits, PortraitInfo, PortraitVariant};
@@ -68,6 +69,22 @@ pub mod vmat_style;
 pub use vmat_style::{
     list_materials, patch_vmat_params, style_materials_to_addon, VmatEdit, VmatInfo,
     VmatPatchStats, VmatPreset, VmatStyleReport, VmatTargets,
+};
+
+pub mod soul_container;
+pub use soul_container::{
+    compile_soul_container_prepared_pure_rust, compile_soul_container_source,
+    compile_soul_container_source_pure_rust, prepare_soul_container_import,
+    ResourceCompilerBackend, SoulContainerBounds, SoulContainerCompileBackend,
+    SoulContainerCompileReport, SoulContainerImportOptions, SoulContainerPreparedMaterial,
+    SoulContainerPreparedSource, DEFAULT_SOUL_CONTAINER_MODEL_REL,
+    DEFAULT_SOUL_CONTAINER_PHYSICS_RADIUS, DEFAULT_SOUL_CONTAINER_TARGET_LARGEST_AXIS,
+    DEFAULT_SOURCE_UNITS_PER_BLENDER,
+};
+
+pub mod soul_import_clone;
+pub use soul_import_clone::{
+    import_soul_container_clone, SoulGlow, SoulImportCloneOptions, SoulImportReport, SoulOrient,
 };
 
 #[derive(Debug, Clone)]

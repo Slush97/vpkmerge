@@ -9,7 +9,13 @@
 //! buffer decode + deinterleave once a block source is available.
 
 // Scene bounds are stored as f64-widened f32 in KV3; narrowing back is exact.
-#![allow(clippy::cast_possible_truncation)]
+// The pack/unpack helpers quantize clamped [0,1]/[-1,1] floats into fixed-width
+// integer lanes, so sign loss and mantissa-precision loss are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 
 use crate::error::DecodeError;
 use crate::kv3::Value;
@@ -955,7 +961,7 @@ fn pack_normal_tangent_frame(normal: [f32; 3], tangent: [f32; 4]) -> u32 {
 
     let angle = dot3(t, cross).atan2(dot3(t, unaligned)).rem_euclid(TAU);
     let t_bits = quantize_unorm_bits(angle / TAU, 2047);
-    let sign_bit = if tangent[3] >= 0.0 { 1 } else { 0 };
+    let sign_bit = u32::from(tangent[3] >= 0.0);
 
     sign_bit | (t_bits << 1) | (x_bits << 12) | (y_bits << 22)
 }

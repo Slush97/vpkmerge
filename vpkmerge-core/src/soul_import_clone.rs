@@ -23,6 +23,18 @@
 // glow matches the model instead of staying default gold.
 //
 // Output: fresh model + 1 material + 1 atlas texture + 3 recolored particles.
+
+// Atlas layout, UV remapping, geometry fitting, and colour conversion convert
+// between float and fixed-width integer lanes with clamped, bounded inputs; the
+// truncation, sign loss, wrap, precision loss, and infallible widening on these
+// casts are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+
 use anyhow::{anyhow, Context, Result};
 use gltf::mesh::Mode;
 use morphic::kv3::{Seg, Value as Kv3};
@@ -132,6 +144,11 @@ pub struct SoulImportReport {
 /// stock orb's bounds and writing it (plus material, atlas texture, and recolored
 /// particles) to `out`. `pak` is a base `pak01_dir.vpk` the stock model, donor
 /// textures, and particles are read from.
+#[allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::similar_names
+)]
 pub fn import_soul_container_clone(
     pak: impl AsRef<Path>,
     glb: &[u8],
@@ -145,7 +162,7 @@ pub fn import_soul_container_clone(
         let mut f = vpk
             .get_file(entry)
             .with_context(|| format!("entry {entry} not found"))?;
-        Ok(f.read_all()?)
+        f.read_all()
     };
 
     // --- 1. read GLB prims, group by material, resolve each group's albedo ---
@@ -401,10 +418,11 @@ fn to_srgb_u8(c: f64) -> u8 {
 }
 
 fn midpoint(a: f32, b: f32) -> f32 {
-    (a + b) / 2.0
+    f32::midpoint(a, b)
 }
 
 /// sRGB 0-255 RGB -> hue in degrees [0,360).
+#[allow(clippy::many_single_char_names)]
 fn rgb_to_hue(r: f64, g: f64, b: f64) -> f64 {
     let (r, g, b) = (r / 255.0, g / 255.0, b / 255.0);
     let max = r.max(g).max(b);
@@ -643,7 +661,7 @@ fn read_glb_primitive(
         .ok_or_else(|| anyhow!("mesh primitive has no indices"))?
         .into_u32()
         .collect();
-    if indices.len() % 3 != 0 {
+    if !indices.len().is_multiple_of(3) {
         return Err(anyhow!(
             "triangle primitive has {} indices, not a multiple of 3",
             indices.len()
@@ -760,7 +778,7 @@ fn vertical_metrics(prims: &[ImportPrimitive], matrix: &Mat3) -> (f32, f32) {
         return (0.0, 0.0);
     }
     let span = zmax - zmin;
-    let center = (zmin + zmax) / 2.0;
+    let center = f32::midpoint(zmin, zmax);
     let centroid = (zsum / count as f64) as f32;
     (span, centroid - center)
 }
@@ -904,7 +922,7 @@ fn texture_pvalue_path(mat: &Kv3, slot: &str) -> Option<Vec<Seg>> {
     ])
 }
 
-/// Clean material = donor copy, g_tColor -> our atlas, prop-local normal -> flat
+/// Clean material = donor copy, `g_tColor` -> our atlas, prop-local normal -> flat
 /// default. Byte-faithful blob-aware string add (no re-encode).
 fn build_material(color_vtex: &str) -> Result<Vec<u8>> {
     let vmat =

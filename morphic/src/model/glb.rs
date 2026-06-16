@@ -1309,6 +1309,7 @@ fn png_encode(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 /// Source 2 stores roughness in the BLUE channel (not normal Z), so reconstruct
 /// Z from X,Y to keep a valid normal map. The old code passed blue (roughness)
 /// straight into the normal's Z, skewing every surface normal.
+#[allow(clippy::cast_sign_loss)]
 fn normal_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
     for px in rgba.chunks_exact(4) {
@@ -1322,7 +1323,7 @@ fn normal_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
 }
 
 /// glTF metallic-roughness texture: G = roughness (from the normal texture's
-/// BLUE channel; Source 2 g_tNormalRoughness packs roughness in B while the
+/// BLUE channel; Source 2 `g_tNormalRoughness` packs roughness in B while the
 /// alpha is a constant ~1.0 placeholder, so reading alpha yielded fully-rough
 /// matte surfaces), B = metalness (the metalness mask's R channel,
 /// nearest-neighbor resampled to the roughness image's dimensions; 0 without a

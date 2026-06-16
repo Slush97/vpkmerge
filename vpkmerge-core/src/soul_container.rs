@@ -5,6 +5,15 @@
 //! bounds, writes Source 2 source materials/textures/modeldoc, and leaves the
 //! compiled-resource step behind an explicit backend boundary.
 
+// Pixel/geometry quantization and FBX index bookkeeping convert between float
+// and fixed-width integer lanes with clamped, bounded inputs; the truncation,
+// sign loss, and wrap on these casts are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use anyhow::{anyhow, bail, Context, Result};
 use gltf::mesh::Mode;
 use image::{ColorType, ImageFormat};
@@ -331,6 +340,7 @@ pub fn compile_soul_container_source_pure_rust(
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_field_names)]
 struct SourceMaterial {
     name: String,
     source_material: String,
@@ -373,10 +383,10 @@ impl MaterialRegistry {
             return existing;
         }
 
-        let raw_name = material
-            .name()
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("material_{:02}", self.materials.len()));
+        let raw_name = material.name().map_or_else(
+            || format!("material_{:02}", self.materials.len()),
+            str::to_string,
+        );
         let name = unique_safe_name(
             &raw_name,
             &format!("material_{:02}", self.materials.len()),
@@ -458,13 +468,11 @@ fn extract_static_mesh(
                 .read_tex_coords(0)
                 .map(|u| u.into_f32().collect())
                 .unwrap_or_default();
-            let indices: Vec<u32> = reader
-                .read_indices()
-                .map(|i| i.into_u32().collect())
-                .unwrap_or_else(|| {
-                    (0..u32::try_from(local_positions.len()).unwrap_or(0)).collect()
-                });
-            if indices.len() % 3 != 0 {
+            let indices: Vec<u32> = reader.read_indices().map_or_else(
+                || (0..u32::try_from(local_positions.len()).unwrap_or(0)).collect(),
+                |i| i.into_u32().collect(),
+            );
+            if !indices.len().is_multiple_of(3) {
                 bail!(
                     "triangle primitive has {} indices, not a multiple of 3",
                     indices.len()
@@ -561,6 +569,7 @@ fn write_material_color_png(
         .with_context(|| format!("saving {}", out.display()))
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
     use gltf::image::Format;
     let pixels = &image.pixels;
@@ -731,6 +740,7 @@ fn write_vmdl(path: &Path, options: &SoulContainerImportOptions) -> Result<()> {
     std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
 }
 
+#[allow(clippy::too_many_lines)]
 fn write_fbx(path: &Path, mesh: &StaticMesh) -> Result<()> {
     let geometry_id = 100_000_i64;
     let model_id = 110_000_i64;

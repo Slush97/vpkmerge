@@ -467,7 +467,7 @@ pub fn recolor_vertex_buffer(
 ///
 /// Use to bind geometry to a bone the cloth sim drives but that no vertex
 /// currently follows (e.g. Holliday's boot fringe rides `leg_lower_*` while the
-/// FeModel drives the unused `flaps_0_*`). The caller resolves bone names to local
+/// `FeModel` drives the unused `flaps_0_*`). The caller resolves bone names to local
 /// palette slots via the mesh's remap table ([`invert_remap`] over
 /// [`remap_table`]); both source and target bone must already be in the palette
 /// (this never grows the remap table). Same meshopt handling as
@@ -479,6 +479,7 @@ pub fn recolor_vertex_buffer(
 ///
 /// [`invert_remap`]: super::invert_remap
 /// [`remap_table`]: super::remap_table
+#[allow(clippy::similar_names)]
 pub fn reskin_vertex_buffer(
     vmdl_bytes: &[u8],
     block_index: usize,

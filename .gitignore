@@ -40,3 +40,6 @@ logo-concepts/
 # Repository paper, kept local for now (LaTeX source + built PDF)
 docs/vpkmerge-repository-paper.tex
 docs/vpkmerge-repository-paper.pdf
+
+# Scratch perf dump (esox viewer report, regenerable)
+perf_report.txt

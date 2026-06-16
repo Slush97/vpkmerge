@@ -212,6 +212,46 @@ model particle (`.vpcf_c`), not named obviously. Paige's ult body is
 the `heroes_wip/bookworm/bookworm_horse*` models. Full writeup + workflow:
 [docs/handoff-vertex-color-recolor.md](docs/handoff-vertex-color-recolor.md).
 
+## UV region masks (`model mask`)
+
+The headless, Blender-free replacement for per-island skin masking. Blender's role
+in per-part masking is purely mechanical (parse mesh -> select faces -> bake the
+selection into a UV-space mask); `morphic::model::uvmask` does all three in pure
+Rust off the already-decoded mesh. `segments(model, by, part)` partitions a model's
+triangles into regions three ways: `island` (connected UV components, default),
+`part` (one per mesh part), or `material`. `atlas_png` colors every region a
+distinct hue (a picking atlas, the stand-in for Blender's viewport face-picker);
+`mask_png` bakes selected region ids to a white-on-black PNG that the reskin
+builders consume as a region selector in place of the AO-contrast heuristic.
+
+UV islands are union-find over each vertex buffer's index graph: triangles sharing
+a vertex index share that UV exactly, so a connected component is exactly an island
+(a seam is where the exporter split a vertex). Region size is reported as true
+**texel coverage** (rasterize, count unique texels), not summed UV area, because
+hero UVs tile/mirror and inflate area well past 100%.
+
+`vpkmerge model mask --vpk <VPK> [--base <VPK>] (--hero CODENAME | --entry PATH)
+[--by island|part|material] [--part NAME] [--list] [--atlas PNG]
+[--select ID... --mask PNG] [--resolution N]`. Core API:
+`model_uv_segments` / `bake_uv_atlas` / `bake_uv_mask` (+ `hero_model_entry`).
+
+**Caveat (Deadlock heroes):** `--by part` and `--by material` give clean masks;
+island mode on hero **bodies** is streaky because the body mesh carries stretched
+bridging UV triangles (the same overlapping/mirrored UVs that defeat Cycles
+baking). Use `--part body` to drop the many small weapon islands, but expect
+material/part masks to be the cleaner region selector on these specific assets.
+Island mode is clean on models with proper UV charts.
+
+**First reskin consumer:** `vpkmerge-core/examples/reskin_chrono_stained_glass.rs`
+(Paradox "Stained Glass") drives its region selection off a baked **part** mask
+instead of the AO heuristic. chrono's `body` and `headbase` parts share one
+material/texture (`chrono_v2`), so the part mask is the *only* way to paint the
+face differently from the torso in image space (leaded jewel glass on the body,
+pale clear glass on the face); it also lead-blacks the dead texels so UV-edge mip
+bleed reads as came. It bakes the masks in-process via the same
+`morphic::model::{segments, mask_png}` the CLI uses (`--png` previews, second
+positional arg bakes the addon VPK).
+
 ## Hero ability-VFX recolor (compose + prism)
 
 `vpkmerge_core::hero_recolor` is the composition layer over the three mechanisms

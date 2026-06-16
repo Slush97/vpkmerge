@@ -53,6 +53,9 @@ pub enum DecodeError {
 
     #[error("inline image decode failed: {0}")]
     InlineImage(String),
+
+    #[error("material compile error: {0}")]
+    Material(String),
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -23,6 +23,7 @@ mod nm;
 mod pose;
 mod skeleton;
 mod topology;
+mod uvmask;
 mod vbib;
 
 #[cfg(test)]
@@ -33,7 +34,7 @@ pub use edit::{
     apply_edited_glb, build_mesh_buffers, build_mesh_buffers_from_glb,
     build_mesh_buffers_to_layout, export_buffer_for_edit, read_edited_mesh, read_edited_primitives,
     read_vertex_colors, read_vertex_positions, recolor_vertex_buffer, replace_vertex_positions,
-    vertex_targets, EditedPrimitive, EncodedMesh, VertexTarget,
+    reskin_vertex_buffer, vertex_targets, EditedPrimitive, EncodedMesh, VertexTarget,
 };
 pub use glb::{to_glb, to_glb_textured, FileResolver};
 pub use gltf_import::{
@@ -49,12 +50,15 @@ pub use nm::{
     NmPose, NmSkeleton, NmTrack, QuantRange, TrackSettings,
 };
 pub use pose::{bake_pose, bake_pose_from, bake_pose_named, LocalPose};
-pub use skeleton::{invert_remap, localize_joints, Bone, Skeleton};
+pub use skeleton::{invert_remap, localize_joints, remap_table, Bone, Skeleton};
 pub use topology::{
     draw_call_targets, reencode_all_mdat_identity, remove_draw_calls_by_material,
     replace_mesh_group, replace_mesh_part, replace_mesh_part_uncompressed, set_draw_call_groups,
     set_model_material, DrawCallGroup, DrawCallInfo, PrimitiveSelection, RemovedDrawCall,
     ReplacedMeshGroup, ReplacedMeshPart,
+};
+pub use uvmask::{
+    atlas_png, mask_png, segment_color, segment_coverage, segments, Segment, SegmentBy,
 };
 
 use crate::error::DecodeError;

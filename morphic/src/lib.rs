@@ -20,14 +20,18 @@ pub mod material;
 mod meshopt;
 pub mod model;
 mod resource;
+pub mod sound;
 mod texture;
 pub mod vfx_expr;
 
 pub use edit::{replace_face0_mip0, replace_face_mip, replace_face_mip_chain, replace_mip_chain};
 pub use error::{DecodeError, EncodeError};
+pub use material::{compile_pbr_vmat, encode_pbr_vmat_c, PbrVmatParams};
+pub use sound::{encode_vsnd_c, VsndParams};
 pub use texture::{
     decode::decode_image,
     encode::encode_image,
+    encode_vtex_png_rgba8888, encode_vtex_png_rgba8888_from_png,
     format::{TextureFlags, TextureFormat},
     parse_texture_header, Image, ImageData, TextureInfo,
 };

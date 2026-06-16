@@ -29,12 +29,14 @@
 pub mod decode;
 pub mod encode;
 pub mod format;
+mod vtex;
 
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::error::DecodeError;
 use crate::resource::Resource;
 use format::{TextureFlags, TextureFormat};
+pub use vtex::{encode_vtex_png_rgba8888, encode_vtex_png_rgba8888_from_png};
 
 const TEXTURE_VERSION: u16 = 1;
 const TEXTURE_HEADER_SIZE: usize = 40;

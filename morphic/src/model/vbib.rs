@@ -330,6 +330,64 @@ impl OnDiskBuffer {
         Ok(())
     }
 
+    /// Overwrites the `attr` lane (a `BLENDINDICES` attribute) in-place with
+    /// `joints` (four mesh-local palette slots per vertex, as
+    /// [`blend_indices`](Self::blend_indices) returns with `remap = None`),
+    /// leaving every other interleaved byte untouched. The skinning analog of
+    /// [`write_colors`](Self::write_colors): re-point which bones drive a vertex
+    /// without changing topology, position, normal, uv, or weights.
+    ///
+    /// Covers the 4-influence formats `blend_indices` reads (`R8G8B8A8_UINT`,
+    /// `R16G16B16A16_SINT`, and the 2-wide `R16G16_SINT` where only the first two
+    /// lanes are stored). Errors on an 8-influence format or a count mismatch (a
+    /// vertex-count change is a topology edit, out of scope).
+    pub fn write_blend_indices(
+        &mut self,
+        attr: &InputLayoutField,
+        joints: &[[u16; 4]],
+    ) -> Result<(), DecodeError> {
+        if attr.semantic_name != "BLENDINDICES" {
+            return Err(DecodeError::Model(
+                "write_blend_indices called on a non-BLENDINDICES attribute",
+            ));
+        }
+        if joints.len() != self.element_count {
+            return Err(DecodeError::Model(
+                "joint count does not match vertex count (topology change not supported)",
+            ));
+        }
+        let offset = attr.offset;
+        let stride = self.element_size;
+        for (i, j) in joints.iter().enumerate() {
+            let o = i * stride + offset;
+            match attr.format {
+                DxgiFormat::R8G8B8A8Uint => {
+                    let mut bytes = [0u8; 4];
+                    for k in 0..4 {
+                        bytes[k] = u8::try_from(j[k])
+                            .map_err(|_| DecodeError::Model("blend index exceeds u8 palette"))?;
+                    }
+                    self.write_at(o, &bytes)?;
+                }
+                DxgiFormat::R16G16B16A16Sint => {
+                    for (k, &v) in j.iter().enumerate() {
+                        self.write_at(o + k * 2, &v.to_le_bytes())?;
+                    }
+                }
+                DxgiFormat::R16G16Sint => {
+                    self.write_at(o, &j[0].to_le_bytes())?;
+                    self.write_at(o + 2, &j[1].to_le_bytes())?;
+                }
+                _ => {
+                    return Err(DecodeError::Model(
+                        "unsupported BLENDINDICES format for write",
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Copies `bytes` into `self.data` at `o`, erroring if it would run past the
     /// buffer. The shared bounds-checked write under [`write_colors`].
     fn write_at(&mut self, o: usize, bytes: &[u8]) -> Result<(), DecodeError> {

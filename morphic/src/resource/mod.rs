@@ -121,6 +121,75 @@ impl<'a> Resource<'a> {
     }
 }
 
+/// Build a new Source 2 resource container from block payloads, optionally
+/// appending bytes after the aligned block payload region.
+///
+/// VTEX resources store their texture pixel payload outside the `DATA` block,
+/// so callers can put the texture header in a `DATA` block and pass the encoded
+/// pixel payload as `tail`. Blocks themselves are 16-byte aligned; `tail` begins
+/// after the aligned final block payload and is not represented in the block
+/// table.
+pub(crate) fn build_resource_with_tail(
+    blocks: &[([u8; 4], &[u8])],
+    tail: &[u8],
+    resource_version: u16,
+) -> Result<Vec<u8>, DecodeError> {
+    let block_count = blocks.len();
+    let table_len = block_count
+        .checked_mul(12)
+        .ok_or(DecodeError::BadResource("block table length overflow"))?;
+    let mut cursor = align16(
+        HEADER_LEN
+            .checked_add(table_len)
+            .ok_or(DecodeError::BadResource("resource header length overflow"))?,
+    );
+
+    let mut offsets = Vec::with_capacity(block_count);
+    for (_, payload) in blocks {
+        offsets.push(cursor);
+        cursor = align16(
+            cursor
+                .checked_add(payload.len())
+                .ok_or(DecodeError::BadResource("block payload offset overflow"))?,
+        );
+    }
+    let tail_start = cursor;
+    let total_len = tail_start
+        .checked_add(tail.len())
+        .ok_or(DecodeError::BadResource("resource size overflow"))?;
+
+    let total_len_u32 =
+        u32::try_from(total_len).map_err(|_| DecodeError::BadResource("resource too large"))?;
+    let block_count_u32 =
+        u32::try_from(block_count).map_err(|_| DecodeError::BadResource("too many blocks"))?;
+
+    let mut out = vec![0u8; total_len];
+    out[0..4].copy_from_slice(&total_len_u32.to_le_bytes());
+    out[4..6].copy_from_slice(&12u16.to_le_bytes());
+    out[6..8].copy_from_slice(&resource_version.to_le_bytes());
+    out[8..12].copy_from_slice(&8u32.to_le_bytes());
+    out[12..16].copy_from_slice(&block_count_u32.to_le_bytes());
+
+    for (i, ((kind, payload), offset)) in blocks.iter().zip(&offsets).enumerate() {
+        let entry = HEADER_LEN + i * 12;
+        out[entry..entry + 4].copy_from_slice(kind);
+        let off_field_pos = entry + 4;
+        let rel = offset
+            .checked_sub(off_field_pos)
+            .ok_or(DecodeError::BadResource("block relative offset underflow"))?;
+        let rel = u32::try_from(rel)
+            .map_err(|_| DecodeError::BadResource("block relative offset overflow"))?;
+        let size = u32::try_from(payload.len())
+            .map_err(|_| DecodeError::BadResource("block too large"))?;
+        out[off_field_pos..off_field_pos + 4].copy_from_slice(&rel.to_le_bytes());
+        out[off_field_pos + 4..off_field_pos + 8].copy_from_slice(&size.to_le_bytes());
+        out[*offset..*offset + payload.len()].copy_from_slice(payload);
+    }
+    out[tail_start..tail_start + tail.len()].copy_from_slice(tail);
+
+    Ok(out)
+}
+
 fn align16(n: usize) -> usize {
     (n + 15) & !15
 }

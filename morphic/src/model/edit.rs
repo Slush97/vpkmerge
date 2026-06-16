@@ -440,7 +440,7 @@ pub fn recolor_vertex_buffer(
         // in game). Instead convert this buffer to UNCOMPRESSED: splice the edited
         // interleaved bytes raw and flip m_bMeshoptCompressed=false in CTRL. The
         // engine reads uncompressed vertex buffers natively (hero models ship them).
-        return convert_meshopt_color_to_uncompressed(vmdl_bytes, block_index, &on_disk.data)
+        return convert_meshopt_to_uncompressed(vmdl_bytes, block_index, &on_disk.data)
             .map(|bytes| (bytes, color_fields.len()));
     }
 
@@ -457,13 +457,123 @@ pub fn recolor_vertex_buffer(
     Ok((out, color_fields.len()))
 }
 
+/// Re-skins the vertex buffer at `block_index`: for each vertex, `edit` receives
+/// its buffer-order index, model-space position, current mesh-local
+/// `BLENDINDICES` (four palette slots), and `BLENDWEIGHT`s, and returns the new
+/// local joints (or the same to leave it). Weights, positions, normals, and uvs
+/// are untouched, so only *which bones* drive each vertex changes. The index lets
+/// a caller key into a precomputed per-vertex mask (e.g. connected-component
+/// membership). Returns `(bytes, n_changed)`.
+///
+/// Use to bind geometry to a bone the cloth sim drives but that no vertex
+/// currently follows (e.g. Holliday's boot fringe rides `leg_lower_*` while the
+/// FeModel drives the unused `flaps_0_*`). The caller resolves bone names to local
+/// palette slots via the mesh's remap table ([`invert_remap`] over
+/// [`remap_table`]); both source and target bone must already be in the palette
+/// (this never grows the remap table). Same meshopt handling as
+/// [`recolor_vertex_buffer`]: a meshopt buffer is converted to uncompressed (the
+/// engine reads that natively); an uncompressed buffer is patched in place.
+///
+/// Errors on a ZSTD buffer, an 8-influence buffer, or a buffer with no
+/// `BLENDINDICES`.
+///
+/// [`invert_remap`]: super::invert_remap
+/// [`remap_table`]: super::remap_table
+pub fn reskin_vertex_buffer(
+    vmdl_bytes: &[u8],
+    block_index: usize,
+    edit: impl Fn(usize, [f32; 3], [u16; 4], [f32; 4]) -> [u16; 4],
+) -> Result<(Vec<u8>, usize), DecodeError> {
+    let (resource, embedded) = parse_embedded(vmdl_bytes)?;
+    let desc = find_vertex_buffer(&embedded, block_index)
+        .ok_or(DecodeError::Model("no vertex buffer at that block index"))?;
+    if desc.zstd {
+        return Err(DecodeError::Model("ZSTD vertex buffers not supported"));
+    }
+    let block_offset = resource
+        .blocks()
+        .get(block_index)
+        .ok_or(DecodeError::Model("MVTX block index out of range"))?
+        .offset as usize;
+    let raw = resource
+        .get_block_by_index(block_index)
+        .ok_or(DecodeError::Model("MVTX block index out of range"))?;
+    let mut on_disk = desc.decode(raw, true)?;
+
+    let bi_field = on_disk
+        .fields
+        .iter()
+        .find(|f| f.semantic_name == "BLENDINDICES")
+        .cloned()
+        .ok_or(DecodeError::Model("buffer has no BLENDINDICES"))?;
+    let bw_field = on_disk
+        .fields
+        .iter()
+        .find(|f| f.semantic_name == "BLENDWEIGHT")
+        .cloned();
+
+    let n = on_disk.element_count;
+    let positions = on_disk.positions()?;
+    let joints_flat = on_disk.blend_indices(&bi_field, None)?;
+    if joints_flat.len() != n * 4 {
+        return Err(DecodeError::Model(
+            "re-skin supports 4-influence buffers only",
+        ));
+    }
+    let weights_flat = match &bw_field {
+        Some(f) => on_disk.blend_weights(f)?,
+        None => vec![],
+    };
+
+    let mut new_joints = Vec::with_capacity(n);
+    let mut changed = 0usize;
+    for i in 0..n {
+        let j = [
+            joints_flat[i * 4],
+            joints_flat[i * 4 + 1],
+            joints_flat[i * 4 + 2],
+            joints_flat[i * 4 + 3],
+        ];
+        let w = if weights_flat.len() >= (i + 1) * 4 {
+            [
+                weights_flat[i * 4],
+                weights_flat[i * 4 + 1],
+                weights_flat[i * 4 + 2],
+                weights_flat[i * 4 + 3],
+            ]
+        } else {
+            [1.0, 0.0, 0.0, 0.0]
+        };
+        let nj = edit(i, positions[i], j, w);
+        if nj != j {
+            changed += 1;
+        }
+        new_joints.push(nj);
+    }
+    if changed == 0 {
+        return Ok((vmdl_bytes.to_vec(), 0));
+    }
+    on_disk.write_blend_indices(&bi_field, &new_joints)?;
+
+    if desc.meshopt {
+        return convert_meshopt_to_uncompressed(vmdl_bytes, block_index, &on_disk.data)
+            .map(|bytes| (bytes, changed));
+    }
+    let mut out = vmdl_bytes.to_vec();
+    out.get_mut(block_offset..block_offset + on_disk.data.len())
+        .ok_or(DecodeError::Model("uncompressed block past end of file"))?
+        .copy_from_slice(&on_disk.data);
+    Ok((out, changed))
+}
+
 /// Converts the meshopt vertex buffer at `block_index` into an uncompressed one
-/// carrying `raw` (its decoded, color-edited interleaved bytes): splices the raw
-/// bytes as the block and flips `m_bMeshoptCompressed` to false for that buffer in
-/// the `CTRL` registry (byte-faithfully, via [`set_bools`]). The engine then reads
-/// the buffer uncompressed. This sidesteps re-encoding meshopt, which is not
-/// byte-compatible with the engine's decoder.
-fn convert_meshopt_color_to_uncompressed(
+/// carrying `raw` (its decoded, edited interleaved bytes): splices the raw bytes
+/// as the block and flips `m_bMeshoptCompressed` to false for that buffer in the
+/// `CTRL` registry (byte-faithfully, via [`set_bools`]). The engine then reads the
+/// buffer uncompressed. This sidesteps re-encoding meshopt, which is not
+/// byte-compatible with the engine's decoder. Shared by the color recolor and the
+/// blend-index re-skin paths.
+fn convert_meshopt_to_uncompressed(
     vmdl_bytes: &[u8],
     block_index: usize,
     raw: &[u8],

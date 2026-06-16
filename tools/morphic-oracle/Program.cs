@@ -64,6 +64,7 @@ internal static class Program
                 "material-meta" => MaterialMeta(args[1..]),
                 "shader-dump" => ShaderDump(args[1..]),
                 "dynexpr"  => DynExpr(args[1..]),
+                "panorama" => Panorama(args[1..]),
                 "validate" => Validate(args[1..]),
                 "--help" or "-h" => PrintUsage(),
                 _ => Fail($"unknown subcommand: {args[0]}"),
@@ -1324,6 +1325,72 @@ internal static class Program
         }
     }
 
+    // ---------- panorama ----------
+    // Decompile a compiled Panorama resource (.vxml_c / .vjs_c / .vcss_c) back to
+    // its source form via VRF's FileExtract (the same path Source2Viewer's
+    // "decompile & export" uses). For .vxml_c this reconstructs the XML from the
+    // compiled AST; for .vjs_c / .vcss_c it recovers the embedded source text.
+    //   panorama decompile (--vpk PAK --entry PATH | --file FILE) [--out FILE]
+    private static int Panorama(string[] args)
+    {
+        if (args.Length == 0 || args[0] != "decompile")
+        {
+            return Fail("panorama: expected `decompile`");
+        }
+
+        string? vpk = null, entry = null, file = null, outPath = null;
+        for (var i = 1; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--vpk":   vpk     = args[++i]; break;
+                case "--entry": entry   = args[++i]; break;
+                case "--file":  file    = args[++i]; break;
+                case "--out":   outPath = args[++i]; break;
+                default: return Fail($"panorama decompile: unknown flag {args[i]}");
+            }
+        }
+
+        byte[] data;
+        string name;
+        if (file is not null)
+        {
+            data = File.ReadAllBytes(file);
+            name = Path.GetFileName(file);
+        }
+        else if (vpk is not null && entry is not null)
+        {
+            using var pak = new Package();
+            pak.Read(vpk);
+            var packageEntry = pak.FindEntry(entry)
+                ?? throw new FileNotFoundException($"entry not found in VPK: {entry}");
+            pak.ReadEntry(packageEntry, out data);
+            name = entry;
+        }
+        else
+        {
+            return Fail("panorama decompile: pass --file FILE or (--vpk PAK --entry PATH)");
+        }
+
+        using var resource = new Resource { FileName = name };
+        using var ms = new MemoryStream(data);
+        resource.Read(ms);
+
+        var content = FileExtract.Extract(resource, fileLoader: null);
+        var bytes = content.Data;
+
+        if (outPath is not null)
+        {
+            File.WriteAllBytes(outPath, bytes);
+            Console.WriteLine($"wrote {bytes.Length} bytes -> {outPath}");
+        }
+        else
+        {
+            Console.Out.Write(Encoding.UTF8.GetString(bytes));
+        }
+        return 0;
+    }
+
     private static int PrintUsage()
     {
         Console.WriteLine("usage:");
@@ -1338,6 +1405,7 @@ internal static class Program
         Console.WriteLine("  morphic-oracle anim-meta --vpk PATH --entry NAME --out JSON");
         Console.WriteLine("  morphic-oracle material-meta --vpk PATH --entry NAME --out JSON");
         Console.WriteLine("  morphic-oracle shader-dump --vpk PATH (--list [--filter STR] | --entry VCS)");
+        Console.WriteLine("  morphic-oracle panorama decompile (--vpk PAK --entry PATH | --file FILE) [--out FILE]");
         Console.WriteLine("  morphic-oracle validate --file PATH  (strict VRF load of a loose resource file)");
         return 0;
     }

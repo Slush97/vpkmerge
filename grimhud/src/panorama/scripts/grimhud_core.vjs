@@ -1,0 +1,304 @@
+// grimhud_core.vjs
+// Minimal runtime. Reusable patterns:
+//   1. HUD selector registry  - every game panel id in ONE place, resolved through
+//      one helper that records resolve status (the patch-day self-test seed).
+//   2. Baked config read       - GRIMHUD_CONFIG from grimhud_config.vjs.
+//   3. Feature registry        - features pushed into a list; the tick runs them all,
+//      each with a style-signature skip so an unchanged HUD costs ~nothing.
+// Features: souls / top-bar / ability-bar reposition+scale+opacity, low-HP warning.
+(function () {
+    "use strict";
+
+    var cfg = (function () {
+        var g = (typeof globalThis !== "undefined") ? globalThis
+              : (typeof window !== "undefined") ? window : null;
+        return (g && g.GRIMHUD_CONFIG) ? g.GRIMHUD_CONFIG : {};
+    })();
+
+    // ---- 1. HUD selector registry --------------------------------------------
+    // Logical name -> ordered candidate panel ids (first hit wins; a hedge against
+    // Valve renames). One total miss is logged once and surfaced on-screen.
+    var HUD_IDS = {
+        soulsContainer:  ["gold_and_ap_container"],
+        topBar:          ["TopBar"],
+        abilitiesBar:    ["AbilitiesContainer"],
+        minimap:         ["HudMinimapContainer", "minimap_container", "minimap_persp", "hud_minimap", "minimap_frame"],
+        itemsBar:        ["ActiveAbilitiesMenu"],
+        quickbuy:        ["CitadelHudQuickbuy"],
+        heroShop:        ["CitadelHudHeroShop"],
+        passives:        ["hud_passive_items"],
+        crosshair:       ["crosshair"],
+        signatureBar:    ["hud_signature"],
+        apCurrency:      ["APContainer"],
+        damageIndicators:["damage_indicator_canvas"],
+        // readout / overlay data sources (verified bindings in the retail sub-layouts)
+        gameClock:       ["GameTime"],            // text="{s:game_clock}" -> "MM:SS"
+        teamFriendly:    ["TeamFriendly"],        // top-bar ally container
+        teamEnemy:       ["TeamEnemy"],           // top-bar enemy container
+        healthCurrent:   ["current_health"],
+        healthMax:       ["max_health"]
+    };
+    var _missLogged = {};
+    var _status = {};   // name -> true/false, for the on-screen self-test
+
+    function resolve(root, name) {
+        var ids = HUD_IDS[name] || [];
+        for (var i = 0; i < ids.length; i++) {
+            var p = root.FindChildTraverse(ids[i]);
+            if (p && p.IsValid && p.IsValid()) { _status[name] = true; return p; }
+        }
+        _status[name] = false;
+        if (!_missLogged[name]) {
+            _missLogged[name] = true;
+            $.Msg("[GRIMHUD][adapter] MISS '" + name + "' (tried: " + ids.join(", ") +
+                  ") - the game HUD may have changed\n");
+        }
+        return null;
+    }
+
+    function num(v, d) { v = Number(v); return (v === v && v !== Infinity && v !== -Infinity) ? v : d; }
+
+    // ---- 3. feature registry --------------------------------------------------
+    var FEATURES = [];
+
+    // Generic panel-transform feature: reposition (x/y), scale, opacity. Covers any
+    // "move/scale/fade a HUD panel" feature; souls/topbar/abilities all reuse it.
+    function transformFeature(selector, keys) {
+        var sig = null;
+        return function (root) {
+            if (keys.enabled && num(cfg[keys.enabled], 1) !== 1) return;
+            var p = resolve(root, selector);
+            if (!p) return;
+            var x  = num(cfg[keys.x], 0);
+            var y  = num(cfg[keys.y], 0);
+            var sc = keys.scale   ? num(cfg[keys.scale], 1)   : 1;
+            var op = keys.opacity ? num(cfg[keys.opacity], 1) : 1;
+            var s = x + "|" + y + "|" + sc + "|" + op;
+            if (s === sig) return;               // unchanged; skip the write
+            p.style.x = String(x) + "px";
+            p.style.y = String(-y) + "px";       // positive Y moves UP (settings convention)
+            if (keys.scale)   { p.style.preTransformScale2d = sc.toFixed(2) + "," + sc.toFixed(2); }
+            if (keys.opacity) { p.style.opacity = op.toFixed(2); }
+            sig = s;
+        };
+    }
+
+    FEATURES.push(transformFeature("soulsContainer", {
+        enabled: "SOULS_ENABLED", x: "SOULS_X_OFFSET", y: "SOULS_Y_OFFSET", opacity: "SOULS_OPACITY"
+    }));
+    FEATURES.push(transformFeature("topBar", {
+        enabled: "TOPBAR_ENABLED", x: "TOPBAR_X_OFFSET", y: "TOPBAR_Y_OFFSET",
+        scale: "TOPBAR_SCALE", opacity: "TOPBAR_OPACITY"
+    }));
+    FEATURES.push(transformFeature("abilitiesBar", {
+        enabled: "ABILITIES_ENABLED", x: "ABILITIES_X_OFFSET", y: "ABILITIES_Y_OFFSET",
+        scale: "ABILITIES_SCALE", opacity: "ABILITIES_OPACITY"
+    }));
+
+    // Batch 1: more reposition/scale/fade panels. Each is the same generic transform;
+    // selectors verified present in the retail hud.vxml decompile.
+    FEATURES.push(transformFeature("minimap", {
+        enabled: "MINIMAP_ENABLED", x: "MINIMAP_X_OFFSET", y: "MINIMAP_Y_OFFSET",
+        scale: "MINIMAP_SCALE", opacity: "MINIMAP_OPACITY"
+    }));
+    FEATURES.push(transformFeature("itemsBar", {
+        enabled: "ITEMS_ENABLED", x: "ITEMS_X_OFFSET", y: "ITEMS_Y_OFFSET",
+        scale: "ITEMS_SCALE", opacity: "ITEMS_OPACITY"
+    }));
+    FEATURES.push(transformFeature("quickbuy", {
+        enabled: "QUICKBUY_ENABLED", x: "QUICKBUY_X_OFFSET", y: "QUICKBUY_Y_OFFSET",
+        scale: "QUICKBUY_SCALE", opacity: "QUICKBUY_OPACITY"
+    }));
+    FEATURES.push(transformFeature("heroShop", {
+        enabled: "HEROSHOP_ENABLED", x: "HEROSHOP_X_OFFSET", y: "HEROSHOP_Y_OFFSET",
+        scale: "HEROSHOP_SCALE", opacity: "HEROSHOP_OPACITY"
+    }));
+    FEATURES.push(transformFeature("passives", {
+        enabled: "PASSIVES_ENABLED", x: "PASSIVES_X_OFFSET", y: "PASSIVES_Y_OFFSET",
+        scale: "PASSIVES_SCALE", opacity: "PASSIVES_OPACITY"
+    }));
+
+    // Reposition-catalog completion. crosshair is wired but left neutral by default
+    // (moving the crosshair mid-test would wreck aim); signature/AP/damage are visible.
+    FEATURES.push(transformFeature("crosshair", {
+        enabled: "CROSSHAIR_ENABLED", x: "CROSSHAIR_X_OFFSET", y: "CROSSHAIR_Y_OFFSET",
+        scale: "CROSSHAIR_SCALE"
+    }));
+    FEATURES.push(transformFeature("signatureBar", {
+        enabled: "SIGNATURE_ENABLED", x: "SIGNATURE_X_OFFSET", y: "SIGNATURE_Y_OFFSET",
+        scale: "SIGNATURE_SCALE", opacity: "SIGNATURE_OPACITY"
+    }));
+    FEATURES.push(transformFeature("apCurrency", {
+        enabled: "AP_ENABLED", x: "AP_X_OFFSET", y: "AP_Y_OFFSET",
+        scale: "AP_SCALE", opacity: "AP_OPACITY"
+    }));
+    FEATURES.push(transformFeature("damageIndicators", {
+        enabled: "DMGIND_ENABLED", x: "DMGIND_X_OFFSET", y: "DMGIND_Y_OFFSET",
+        opacity: "DMGIND_OPACITY"
+    }));
+
+    // Low-HP warning. Reads the TRUE health value from the bound labels
+    // (current_health = "{i:health}", max_health = "/{i:maxHealth}") and computes an
+    // exact HP%, instead of QOL Lock's fragile bar-pixel-height inference. Tints the
+    // real health bar (found unambiguously by walking up from the unique
+    // current_health label) red when at/under the threshold.
+    var _hpPct = -1, _hpLow = false, _hpSig = null;
+    function digits(s) { var n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return n; }
+    function findRealHealthBar(curLabel) {
+        var p = curLabel;
+        for (var i = 0; i < 8 && p; i++) {
+            if (p.id === "health_bar") return p;
+            p = (p.GetParent) ? p.GetParent() : null;
+        }
+        return null;
+    }
+    FEATURES.push(function (root) {
+        if (num(cfg.LOW_HP_WARNING_ENABLED, 1) !== 1) { _hpPct = -1; return; }
+        var cur = resolve(root, "healthCurrent");
+        var mx  = resolve(root, "healthMax");
+        if (!cur || !mx) { _hpPct = -1; return; }
+        var c = digits(cur.text), m = digits(mx.text);
+        if (!(c >= 0) || !(m > 0)) { _hpPct = -1; return; }
+        _hpPct = Math.round((c / m) * 100);
+        _hpLow = _hpPct <= num(cfg.LOW_HP_THRESHOLD, 35);
+        var sig = _hpLow ? "1" : "0";
+        if (sig === _hpSig) return;
+        _hpSig = sig;
+        var bar = findRealHealthBar(cur);
+        if (bar) { bar.style.washColor = _hpLow ? "#ff4040ff" : "white"; }
+    });
+
+    // Top-bar enemy/ally health color-warning. Each player slot in a team container
+    // (TeamFriendly / TeamEnemy) carries a HeroHealth ProgressBar whose .value is the
+    // TRUE health fraction (0..1) - no text scraping, locale-proof. We walk every
+    // HeroContents slot and wash the bar a config color when at/under a threshold.
+    // Ally default = amber ("teammate in danger"); enemy default = green ("go kill").
+    function topbarHpFeature(teamSel, enKey, thKey, color) {
+        return function (root) {
+            if (num(cfg[enKey], 1) !== 1) return;
+            var team = resolve(root, teamSel);
+            if (!team || !team.FindChildrenWithClassTraverse) return;
+            var th = num(cfg[thKey], 35) / 100;
+            var slots = team.FindChildrenWithClassTraverse("HeroContents") || [];
+            for (var i = 0; i < slots.length; i++) {
+                var hb = slots[i].FindChildTraverse("HeroHealth");
+                if (!hb) continue;
+                var v = Number(hb.value);
+                if (v !== v) continue;                 // unbound / not in match
+                hb.style.washColor = (v > 0 && v <= th) ? color : "white";
+            }
+        };
+    }
+    FEATURES.push(topbarHpFeature("teamFriendly", "ALLY_HP_WARN_ENABLED", "ALLY_HP_THRESHOLD", "#ffc040ff"));
+    FEATURES.push(topbarHpFeature("teamEnemy",    "ENEMY_HP_WARN_ENABLED", "ENEMY_HP_THRESHOLD", "#40ff70ff"));
+
+    // ---- objective timer overlay (aesthetic) ---------------------------------
+    // Reads the match clock (GameTime label = "{s:game_clock}" -> "MM:SS"), computes
+    // the next spawn of each tracked objective from a versioned cadence table, and
+    // renders a styled countdown card. Cadence numbers are the rot-prone part (see
+    // the teardown): they are isolated here, version-stamped, and EASY to correct.
+    // *** OBJECTIVE_CADENCE below is UNVERIFIED placeholder timing - tune in-game. ***
+    var OBJECTIVE_CADENCE_VERSION = "2026-06-15 / UNVERIFIED";
+    var OBJECTIVE_CADENCE = [
+        // label, css color class, first spawn (sec), repeat interval (sec; 0 = one-shot)
+        { label: "Mid-Boss", cls: "obj-midboss", first: 600, every: 0   },
+        { label: "Rejuv",    cls: "obj-rejuv",   first: 420, every: 420 },
+        { label: "Urn",      cls: "obj-urn",     first: 300, every: 300 }
+    ];
+    function fmtMMSS(s) {
+        s = Math.max(0, Math.round(s));
+        var m = Math.floor(s / 60), ss = s % 60;
+        return m + ":" + (ss < 10 ? "0" : "") + ss;
+    }
+    function clockSeconds(root) {
+        var c = resolve(root, "gameClock");
+        if (!c) return -1;
+        var mm = String(c.text || "").match(/(\d+):(\d{2})/);
+        return mm ? (parseInt(mm[1], 10) * 60 + parseInt(mm[2], 10)) : -1;
+    }
+    function nextSpawn(o, now) {
+        if (now <= o.first) return o.first;
+        if (!o.every) return -1;                       // one-shot, already gone
+        var k = Math.ceil((now - o.first) / o.every);
+        return o.first + k * o.every;
+    }
+    var _timerSig = null;
+    FEATURES.push(function (root) {
+        var panel = root.FindChildTraverse("GrimhudTimers");
+        if (num(cfg.TIMERS_ENABLED, 1) !== 1) { if (panel) panel.visible = false; return; }
+        if (!panel) {
+            panel = $.CreatePanel("Panel", root, "GrimhudTimers");
+            panel.AddClass("grimhud-timers");
+        }
+        panel.style.x = String(num(cfg.TIMERS_X_OFFSET, 0)) + "px";
+        panel.style.y = String(-num(cfg.TIMERS_Y_OFFSET, 0)) + "px";
+        var now = clockSeconds(root);
+        if (now < 0) { panel.visible = false; _timerSig = null; return; }  // not in match
+        panel.visible = true;
+        var rows = [];
+        for (var i = 0; i < OBJECTIVE_CADENCE.length; i++) {
+            var t = nextSpawn(OBJECTIVE_CADENCE[i], now);
+            if (t >= 0) rows.push({ o: OBJECTIVE_CADENCE[i], eta: t - now });
+        }
+        rows.sort(function (a, b) { return a.eta - b.eta; });
+        var sig = now + "|" + rows.map(function (r) { return r.o.label + r.eta; }).join(",");
+        if (sig === _timerSig) return;                 // same whole-second snapshot; skip
+        _timerSig = sig;
+        panel.RemoveAndDeleteChildren();
+        for (var j = 0; j < rows.length; j++) {
+            var r = rows[j];
+            var row = $.CreatePanel("Panel", panel, ""); row.AddClass("grimhud-timer-row"); row.AddClass(r.o.cls);
+            if (r.eta <= 30) row.AddClass("imminent");
+            var dot = $.CreatePanel("Panel", row, ""); dot.AddClass("grimhud-timer-dot");
+            var lab = $.CreatePanel("Label", row, ""); lab.AddClass("grimhud-timer-label"); lab.text = r.o.label;
+            var eta = $.CreatePanel("Label", row, ""); eta.AddClass("grimhud-timer-eta");   eta.text = fmtMMSS(r.eta);
+        }
+    });
+
+    // ---- on-screen self-test dashboard (retail has no console) ----------------
+    // Data-driven: every selector that resolve() has touched is reported with its
+    // hit/miss state, plus a N/M roll-up. This IS the patch-day harness, surfaced
+    // on-screen: a miss here means a Valve rename broke that selector.
+    var MARKER_SHORT = {   // compact labels so the line stays readable
+        soulsContainer: "souls", topBar: "top", abilitiesBar: "abils",
+        minimap: "map", itemsBar: "items", quickbuy: "qbuy",
+        heroShop: "shop", passives: "pass", crosshair: "xhair",
+        signatureBar: "sig", apCurrency: "ap", damageIndicators: "dmg",
+        gameClock: "clock", teamFriendly: "ally", teamEnemy: "enemy"
+    };
+    function updateMarker(root) {
+        try {
+            var m = root.FindChildTraverse("GrimhudStatus");
+            if (!m) { m = $.CreatePanel("Label", root, "GrimhudStatus"); }
+            var parts = [], hit = 0, total = 0;
+            for (var name in HUD_IDS) {
+                if (!HUD_IDS.hasOwnProperty(name)) continue;
+                if (name === "healthCurrent" || name === "healthMax") continue;
+                if (_status[name] === undefined) continue;   // not yet attempted
+                total++;
+                var ok = _status[name] === true;
+                if (ok) hit++;
+                parts.push((MARKER_SHORT[name] || name) + (ok ? "✓" : "✗"));
+            }
+            var hp = (_hpPct >= 0) ? ("  HP " + _hpPct + "%") : "";
+            m.text = "GRIMHUD " + hit + "/" + total + "  " + parts.join(" ") + hp;
+            m.SetHasClass("low", _hpPct >= 0 && _hpLow);
+        } catch (e) {}
+    }
+
+    function tick() {
+        try {
+            var root = $.GetContextPanel();
+            if (root) {
+                for (var i = 0; i < FEATURES.length; i++) {
+                    try { FEATURES[i](root); } catch (e) { $.Msg("[GRIMHUD] feature " + i + " error: " + e + "\n"); }
+                }
+                updateMarker(root);
+            }
+        } catch (e) { $.Msg("[GRIMHUD] tick error: " + e + "\n"); }
+        $.Schedule(0.5, tick);
+    }
+
+    $.Msg("[GRIMHUD] core loaded (" + FEATURES.length + " features)\n");
+    tick();
+})();

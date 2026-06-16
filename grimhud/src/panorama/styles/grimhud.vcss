@@ -1,0 +1,93 @@
+/* grimhud.vcss
+   Styles the on-screen self-test dashboard. Shows per-feature selector status
+   (souls/top/abils ✓ or ✗) plus live HP%. Turns red when HP is at/under the
+   warning threshold. Top-left, unmissable. (Temporary dev overlay.) */
+
+#GrimhudStatus {
+    color: #00ff88;
+    font-size: 20px;
+    font-weight: bold;
+    padding: 6px 14px 6px 14px;
+    margin-left: 24px;
+    margin-top: 24px;
+    horizontal-align: left;
+    vertical-align: top;
+    background-color: #000000cc;
+    border: 2px solid #00ff88;
+    border-radius: 4px;
+    text-shadow: 2px 2px 4px 2px #000000;
+    z-index: 1000;
+}
+
+#GrimhudStatus.low {
+    color: #ff5555;
+    border: 2px solid #ff5555;
+}
+
+/* ---- objective timer overlay -------------------------------------------- */
+/* A compact card of countdown rows, top-center under the clock. Each row:
+   colored dot + label + MM:SS. CONSERVATIVE: only properties proven to load
+   in retail (same vocabulary as the marker above + bedrock layout props).
+   Fancier polish (gradients, box-shadow, keyframe pulse) was reverted because
+   it fatally broke hud layout load in retail; re-add one prop at a time. */
+.grimhud-timers {
+    flow-children: down;
+    horizontal-align: center;
+    vertical-align: top;
+    margin-top: 64px;
+    padding: 6px 10px 6px 10px;
+    background-color: #0c0f12ee;
+    border: 1px solid #2d3640;
+    border-radius: 6px;
+    z-index: 900;
+}
+
+.grimhud-timer-row {
+    flow-children: right;
+    width: 168px;
+    height: 26px;
+    margin-top: 2px;
+    margin-bottom: 2px;
+    padding: 0px 6px 0px 6px;
+    border-radius: 4px;
+    background-color: #ffffff0c;
+}
+
+.grimhud-timer-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    vertical-align: center;
+    margin-right: 8px;
+    background-color: #8a93a0;
+}
+
+.grimhud-timer-label {
+    color: #e6ebf0;
+    font-size: 16px;
+    font-weight: bold;
+    vertical-align: center;
+    width: 96px;
+}
+
+.grimhud-timer-eta {
+    color: #ffffff;
+    font-size: 17px;
+    font-weight: bold;
+    vertical-align: center;
+    width: 44px;
+    text-align: right;
+}
+
+/* per-objective accent colors (the dot) */
+.obj-midboss .grimhud-timer-dot { background-color: #ff5a4d; }
+.obj-rejuv   .grimhud-timer-dot { background-color: #4dd2ff; }
+.obj-urn     .grimhud-timer-dot { background-color: #ffc24d; }
+
+/* imminent (<=30s): hot row + ETA (static, no animation) */
+.grimhud-timer-row.imminent {
+    background-color: #ff5a4d33;
+}
+.grimhud-timer-row.imminent .grimhud-timer-eta {
+    color: #ff7a6a;
+}

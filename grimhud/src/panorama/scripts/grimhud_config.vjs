@@ -1,0 +1,120 @@
+// grimhud_config.vjs
+// Baked configuration. Source of truth is the Grimoire desktop settings UI; this
+// file is (re)generated and baked into the addon at install time. Until that
+// integration lands it is hand-authored. The runtime only READS it.
+//
+// NOTE: several values below are deliberately set to visible TEST values so each
+// feature is obvious in-game on first install. Real defaults are 0 / 1.0 / off.
+(function () {
+    "use strict";
+    var cfg = {
+        // souls / AP counter
+        SOULS_ENABLED: 1,
+        SOULS_X_OFFSET: 120,        // px right   (TEST; default 0)
+        SOULS_Y_OFFSET: 60,         // px up      (TEST; default 0)
+        SOULS_OPACITY: 1.0,
+
+        // top bar (team scoreboard strip)
+        TOPBAR_ENABLED: 1,
+        TOPBAR_X_OFFSET: 0,
+        TOPBAR_Y_OFFSET: 0,
+        TOPBAR_SCALE: 1.0,
+        TOPBAR_OPACITY: 0.6,        // translucent (TEST; default 1.0)
+
+        // ability bar (signature + items container)
+        ABILITIES_ENABLED: 1,
+        ABILITIES_X_OFFSET: -100,   // px left    (TEST; default 0)
+        ABILITIES_Y_OFFSET: 0,
+        ABILITIES_SCALE: 1.0,
+        ABILITIES_OPACITY: 1.0,
+
+        // --- Batch 1 panels --------------------------------------------------
+        // TEST values are reposition-only (x/y); scale/opacity left neutral on
+        // purpose so these don't spawn a compositing layer (the hideout blue-hue
+        // artifact). Real defaults are 0 / 1.0.
+
+        // minimap
+        MINIMAP_ENABLED: 1,
+        MINIMAP_X_OFFSET: 60,       // px right   (TEST; default 0)
+        MINIMAP_Y_OFFSET: 0,
+        MINIMAP_SCALE: 1.0,
+        MINIMAP_OPACITY: 1.0,
+
+        // active items bar
+        ITEMS_ENABLED: 1,
+        ITEMS_X_OFFSET: 0,
+        ITEMS_Y_OFFSET: 50,         // px up      (TEST; default 0)
+        ITEMS_SCALE: 1.0,
+        ITEMS_OPACITY: 1.0,
+
+        // quickbuy strip
+        QUICKBUY_ENABLED: 1,
+        QUICKBUY_X_OFFSET: -60,     // px left    (TEST; default 0)
+        QUICKBUY_Y_OFFSET: 0,
+        QUICKBUY_SCALE: 1.0,
+        QUICKBUY_OPACITY: 1.0,
+
+        // hero shop panel (wired + resolves; neutral so the shop isn't disrupted)
+        HEROSHOP_ENABLED: 1,
+        HEROSHOP_X_OFFSET: 0,
+        HEROSHOP_Y_OFFSET: 0,
+        HEROSHOP_SCALE: 1.0,
+        HEROSHOP_OPACITY: 1.0,
+
+        // passive items row
+        PASSIVES_ENABLED: 1,
+        PASSIVES_X_OFFSET: 0,
+        PASSIVES_Y_OFFSET: 50,      // px up      (TEST; default 0)
+        PASSIVES_SCALE: 1.0,
+        PASSIVES_OPACITY: 1.0,
+
+        // crosshair (wired but neutral by default: moving the crosshair wrecks aim)
+        CROSSHAIR_ENABLED: 1,
+        CROSSHAIR_X_OFFSET: 0,
+        CROSSHAIR_Y_OFFSET: 0,
+        CROSSHAIR_SCALE: 1.0,
+
+        // signature ability bar (child of AbilitiesContainer; offset is additive)
+        SIGNATURE_ENABLED: 1,
+        SIGNATURE_X_OFFSET: 0,
+        SIGNATURE_Y_OFFSET: 30,     // px up      (TEST; default 0)
+        SIGNATURE_SCALE: 1.0,
+        SIGNATURE_OPACITY: 1.0,
+
+        // AP currency counter
+        AP_ENABLED: 1,
+        AP_X_OFFSET: 40,            // px right   (TEST; default 0)
+        AP_Y_OFFSET: 0,
+        AP_SCALE: 1.0,
+        AP_OPACITY: 1.0,
+
+        // damage direction indicators (full-screen canvas; fade is the useful knob)
+        DMGIND_ENABLED: 1,
+        DMGIND_X_OFFSET: 0,
+        DMGIND_Y_OFFSET: 0,
+        DMGIND_OPACITY: 1.0,
+
+        // top-bar ALLY health color-warning (reads HeroHealth ProgressBar .value)
+        ALLY_HP_WARN_ENABLED: 1,
+        ALLY_HP_THRESHOLD: 40,      // percent; amber wash at/under
+
+        // top-bar ENEMY health color-warning (kill-opportunity cue)
+        ENEMY_HP_WARN_ENABLED: 1,
+        ENEMY_HP_THRESHOLD: 35,     // percent; green wash at/under
+
+        // objective timer overlay (aesthetic). Cadence table lives in core and is
+        // version-stamped UNVERIFIED - tune the spawn times in-game.
+        TIMERS_ENABLED: 1,
+        TIMERS_X_OFFSET: 0,
+        TIMERS_Y_OFFSET: 0,
+
+        // low-HP warning (reads TRUE health value, not bar geometry)
+        LOW_HP_WARNING_ENABLED: 1,
+        LOW_HP_THRESHOLD: 35        // percent
+    };
+    try {
+        var g = (typeof globalThis !== "undefined") ? globalThis
+              : (typeof window !== "undefined") ? window : null;
+        if (g) { g.GRIMHUD_CONFIG = cfg; }
+    } catch (e) {}
+})();

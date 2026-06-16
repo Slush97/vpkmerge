@@ -1,0 +1,189 @@
+{
+  "artist": {
+    "name": "Title Fight",
+    "youtube_music_artist_id": "UC7TaiCy9-fIeGMosgz4tjZg"
+  },
+  "resolved_with": "ytmusicapi",
+  "tracks": [
+    {
+      "key": "chlorine",
+      "title": "Chlorine",
+      "album": "Hyperview",
+      "year": "2015",
+      "duration": "3:09",
+      "video_id": "YJRGAcu2fb8",
+      "youtube_music_url": "https://music.youtube.com/watch?v=YJRGAcu2fb8"
+    },
+    {
+      "key": "murder_your_memory",
+      "title": "Murder Your Memory",
+      "album": "Hyperview",
+      "year": "2015",
+      "duration": "2:37",
+      "video_id": "-wSPhg7Hlpw",
+      "youtube_music_url": "https://music.youtube.com/watch?v=-wSPhg7Hlpw"
+    },
+    {
+      "key": "your_pain_is_mine_now",
+      "title": "Your Pain Is Mine Now",
+      "album": "Hyperview",
+      "year": "2015",
+      "duration": "4:04",
+      "video_id": "9X9i7Nh_BPo",
+      "youtube_music_url": "https://music.youtube.com/watch?v=9X9i7Nh_BPo"
+    },
+    {
+      "key": "rose_of_sharon",
+      "title": "Rose Of Sharon",
+      "album": "Hyperview",
+      "year": "2015",
+      "duration": "3:34",
+      "video_id": "rfrcZOUr6jU",
+      "youtube_music_url": "https://music.youtube.com/watch?v=rfrcZOUr6jU"
+    },
+    {
+      "key": "numb_but_i_still_feel_it",
+      "title": "Numb, But I Still Feel It",
+      "album": "Floral Green",
+      "year": "2012",
+      "duration": "3:04",
+      "video_id": "8z6_QKZVq3A",
+      "youtube_music_url": "https://music.youtube.com/watch?v=8z6_QKZVq3A"
+    },
+    {
+      "key": "leaf",
+      "title": "Leaf",
+      "album": "Floral Green",
+      "year": "2012",
+      "duration": "2:33",
+      "video_id": "GYgmvjIE76o",
+      "youtube_music_url": "https://music.youtube.com/watch?v=GYgmvjIE76o"
+    },
+    {
+      "key": "secret_society",
+      "title": "Secret Society",
+      "album": "Floral Green",
+      "year": "2012",
+      "duration": "3:07",
+      "video_id": "rZUbHZzHF18",
+      "youtube_music_url": "https://music.youtube.com/watch?v=rZUbHZzHF18"
+    },
+    {
+      "key": "head_in_the_ceiling_fan",
+      "title": "Head in the Ceiling Fan",
+      "album": "Floral Green",
+      "year": "2012",
+      "duration": "3:34",
+      "video_id": "Tu9KgGqXDyw",
+      "youtube_music_url": "https://music.youtube.com/watch?v=Tu9KgGqXDyw"
+    },
+    {
+      "key": "lefty",
+      "title": "Lefty",
+      "album": "Floral Green",
+      "year": "2012",
+      "duration": "4:01",
+      "video_id": "Ttf5r6Am1Hw",
+      "youtube_music_url": "https://music.youtube.com/watch?v=Ttf5r6Am1Hw"
+    },
+    {
+      "key": "coxton_yard",
+      "title": "Coxton Yard",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "1:30",
+      "video_id": "u4QcrIYGPmQ",
+      "youtube_music_url": "https://music.youtube.com/watch?v=u4QcrIYGPmQ"
+    },
+    {
+      "key": "shed",
+      "title": "Shed",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "2:17",
+      "video_id": "BcKDSC7c-0M",
+      "youtube_music_url": "https://music.youtube.com/watch?v=BcKDSC7c-0M"
+    },
+    {
+      "key": "flood_of_72",
+      "title": "Flood of '72",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "1:57",
+      "video_id": "vLazWwrH48c",
+      "youtube_music_url": "https://music.youtube.com/watch?v=vLazWwrH48c"
+    },
+    {
+      "key": "safe_in_your_skin",
+      "title": "Safe In Your Skin",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "2:35",
+      "video_id": "IKdJsbUL4Zc",
+      "youtube_music_url": "https://music.youtube.com/watch?v=IKdJsbUL4Zc"
+    },
+    {
+      "key": "twenty_seven",
+      "title": "27",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "2:28",
+      "video_id": "fKqKM-gvK_w",
+      "youtube_music_url": "https://music.youtube.com/watch?v=fKqKM-gvK_w"
+    },
+    {
+      "key": "stab",
+      "title": "Stab",
+      "album": "Shed",
+      "year": "2011",
+      "duration": "2:01",
+      "video_id": "bPqR_HvfLr0",
+      "youtube_music_url": "https://music.youtube.com/watch?v=bPqR_HvfLr0"
+    },
+    {
+      "key": "symmetry",
+      "title": "Symmetry",
+      "album": "The Last Thing You Forget",
+      "year": "2009",
+      "duration": "2:15",
+      "video_id": "6xnvwYao5as",
+      "youtube_music_url": "https://music.youtube.com/watch?v=6xnvwYao5as"
+    },
+    {
+      "key": "loud_and_clear",
+      "title": "Loud And Clear",
+      "album": "The Last Thing You Forget",
+      "year": "2009",
+      "duration": "3:07",
+      "video_id": "XhviwQv8msQ",
+      "youtube_music_url": "https://music.youtube.com/watch?v=XhviwQv8msQ"
+    },
+    {
+      "key": "blush",
+      "title": "Blush",
+      "album": "Spring Songs",
+      "year": "2013",
+      "duration": "2:53",
+      "video_id": "9DzBXboDYng",
+      "youtube_music_url": "https://music.youtube.com/watch?v=9DzBXboDYng"
+    },
+    {
+      "key": "hypnotize",
+      "title": "Hypnotize",
+      "album": "Spring Songs",
+      "year": "2013",
+      "duration": "2:26",
+      "video_id": "W0xtunugOcM",
+      "youtube_music_url": "https://music.youtube.com/watch?v=W0xtunugOcM"
+    },
+    {
+      "key": "frown",
+      "title": "Frown",
+      "album": "The Last Thing You Forget",
+      "year": "2009",
+      "duration": "2:20",
+      "video_id": "CH4pi7rPorU",
+      "youtube_music_url": "https://music.youtube.com/watch?v=CH4pi7rPorU"
+    }
+  ]
+}

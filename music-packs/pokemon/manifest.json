@@ -1,0 +1,328 @@
+{
+  "pack_id": "pokemon_arcade",
+  "display_name": "Pokemon Arcade SFX Kit",
+  "theme": "Pokemon-style UI, battle, pickup, and objective feedback",
+  "source_policy": "Use local audio files you own or are licensed to use. This manifest does not authorize downloading copyrighted Pokemon audio.",
+  "custom_sound_root": "sounds/custom/pokemon",
+  "music_entries": [
+    {
+      "role": "main_menu",
+      "soundevent_entry": "soundevents/music.vsndevts_c",
+      "deadlock_event": "Music.MainMenu",
+      "source_slot": "pokemon_center_loop",
+      "local_audio": "source_audio/music/pokemon_center_loop.wav",
+      "target_vsnd": "sounds/custom/pokemon/music/pokemon_center_menu.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/music/pokemon_center_menu.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 90,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0
+      },
+      "priority": 2
+    },
+    {
+      "role": "match_intro",
+      "soundevent_entry": "soundevents/music.vsndevts_c",
+      "deadlock_event": "Music.MatchIntro.HeroReveal",
+      "source_slot": "battle_encounter_music",
+      "local_audio": "source_audio/music/battle_encounter_intro.wav",
+      "target_vsnd": "sounds/custom/pokemon/music/battle_encounter_intro.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/music/battle_encounter_intro.vsnd_c",
+      "edit": {
+        "loop": false,
+        "target_seconds": 18,
+        "fade_in_seconds": 0.0,
+        "fade_out_seconds": 0.8
+      },
+      "priority": 2
+    },
+    {
+      "role": "win",
+      "soundevent_entry": "soundevents/music.vsndevts_c",
+      "deadlock_event": "Music.Match.Win",
+      "source_slot": "battle_victory_music",
+      "local_audio": "source_audio/music/battle_victory.wav",
+      "target_vsnd": "sounds/custom/pokemon/music/battle_victory_win.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/music/battle_victory_win.vsnd_c",
+      "edit": {
+        "loop": false,
+        "target_seconds": 10,
+        "fade_in_seconds": 0.0,
+        "fade_out_seconds": 0.6
+      },
+      "priority": 2
+    },
+    {
+      "role": "loss",
+      "soundevent_entry": "soundevents/music.vsndevts_c",
+      "deadlock_event": "Music.Match.Lose",
+      "source_slot": "pokemon_faint_music",
+      "local_audio": "source_audio/music/faint_loss.wav",
+      "target_vsnd": "sounds/custom/pokemon/music/faint_loss.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/music/faint_loss.vsnd_c",
+      "edit": {
+        "loop": false,
+        "target_seconds": 8,
+        "fade_in_seconds": 0.0,
+        "fade_out_seconds": 1.0
+      },
+      "priority": 2
+    }
+  ],
+  "sfx_entries": [
+    {
+      "role": "menu_cursor",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.MainMenu.Hover", "UI.Shop.Mod.Hover", "UI.FriendsList.Hover"],
+      "source_slot": "menu_cursor",
+      "local_audio": "source_audio/sfx/menu_cursor.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/menu_cursor.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/menu_cursor.vsnd_c",
+      "edit": { "target_seconds": 0.12, "fade_out_seconds": 0.02 },
+      "priority": 1
+    },
+    {
+      "role": "menu_select",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.MainMenu.Activate", "Menu.Select", "UI.HeroCard.Activate", "UI.PlayMenu.Activate"],
+      "source_slot": "menu_select",
+      "local_audio": "source_audio/sfx/menu_select.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/menu_select.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/menu_select.vsnd_c",
+      "edit": { "target_seconds": 0.18, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "menu_cancel",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["Menu.Cancel", "UI.MainMenu.NavigateBack", "UI.Menu.Close"],
+      "source_slot": "menu_cancel",
+      "local_audio": "source_audio/sfx/menu_cancel.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/menu_cancel.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/menu_cancel.vsnd_c",
+      "edit": { "target_seconds": 0.18, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "item_get",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.Shop.Mod.Activate", "UI.Shop.Item.Destroy", "UI.Notify.ItemPurchase", "UI.Notify.QuickBuy"],
+      "source_slot": "item_get",
+      "local_audio": "source_audio/sfx/item_get.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/item_get.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/item_get.vsnd_c",
+      "edit": { "target_seconds": 0.8, "fade_out_seconds": 0.06 },
+      "priority": 1
+    },
+    {
+      "role": "gold_get",
+      "soundevent_entry": "soundevents/gameplay.vsndevts_c",
+      "deadlock_events": ["CurrencyChanged", "Player.GetGold"],
+      "source_slot": "coin_get",
+      "local_audio": "source_audio/sfx/coin_get.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/gameplay/coin_get.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/gameplay/coin_get.vsnd_c",
+      "edit": { "target_seconds": 0.25, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "large_gold_get",
+      "soundevent_entry": "soundevents/gameplay.vsndevts_c",
+      "deadlock_events": ["CurrencyChanged.Large"],
+      "source_slot": "key_item_get",
+      "local_audio": "source_audio/sfx/key_item_get.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/gameplay/key_item_get.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/gameplay/key_item_get.vsnd_c",
+      "edit": { "target_seconds": 1.0, "fade_out_seconds": 0.08 },
+      "priority": 1
+    },
+    {
+      "role": "level_up",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["Player.AbilityLevelUp", "UI.Shop.Ability.Train", "UI.Shop.Ability.Upgrade", "UI.PostGame.HeroLevelUp"],
+      "source_slot": "level_up",
+      "local_audio": "source_audio/sfx/level_up.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/level_up.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/level_up.vsnd_c",
+      "edit": { "target_seconds": 0.9, "fade_out_seconds": 0.05 },
+      "priority": 1
+    },
+    {
+      "role": "xp_orb_acquire",
+      "soundevent_entry": "soundevents/gameplay.vsndevts_c",
+      "deadlock_events": ["Player.ClaimOrb"],
+      "source_slot": "xp_gain",
+      "local_audio": "source_audio/sfx/xp_gain.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/gameplay/xp_gain.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/gameplay/xp_gain.vsnd_c",
+      "edit": { "target_seconds": 0.3, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "orb_hit",
+      "soundevent_entry": "soundevents/gameplay.vsndevts_c",
+      "deadlock_events": ["Player.ClaimOrb.Hit"],
+      "source_slot": "pokeball_capture_shake",
+      "local_audio": "source_audio/sfx/pokeball_capture_shake.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/gameplay/orb_hit_shake.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/gameplay/orb_hit_shake.vsnd_c",
+      "edit": { "target_seconds": 0.25, "fade_out_seconds": 0.02 },
+      "priority": 2
+    },
+    {
+      "role": "map_ping",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.MapPing_Start", "UI.MapPing_Exclamation", "UI.MapPing_Warning_Start", "UI.MapPing_EnemySeen_Start"],
+      "source_slot": "pokedex_ping",
+      "local_audio": "source_audio/sfx/pokedex_ping.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/pokedex_ping.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/pokedex_ping.vsnd_c",
+      "edit": { "target_seconds": 0.35, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "match_found",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.Matchmake.Made", "UI.MainMenu.Game.Launch"],
+      "source_slot": "battle_encounter",
+      "local_audio": "source_audio/sfx/battle_encounter.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/battle_encounter.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/battle_encounter.vsnd_c",
+      "edit": { "target_seconds": 1.2, "fade_out_seconds": 0.06 },
+      "priority": 1
+    },
+    {
+      "role": "player_death_notification",
+      "soundevent_entry": "soundevents/ui.vsndevts_c",
+      "deadlock_events": ["UI.PlayerDeath.Team", "UI.PlayerDeath.Opponent"],
+      "source_slot": "pokemon_faint",
+      "local_audio": "source_audio/sfx/pokemon_faint.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/ui/pokemon_faint.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/ui/pokemon_faint.vsnd_c",
+      "edit": { "target_seconds": 0.9, "fade_out_seconds": 0.08 },
+      "priority": 1
+    },
+    {
+      "role": "low_health",
+      "soundevent_entry": "soundevents/player.vsndevts_c",
+      "deadlock_events": ["PlayerAlert.LowHealth"],
+      "source_slot": "low_hp",
+      "local_audio": "source_audio/sfx/low_hp.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/player/low_hp.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/player/low_hp.vsnd_c",
+      "edit": { "target_seconds": 1.2, "loop": true, "fade_out_seconds": 0.02 },
+      "priority": 1
+    },
+    {
+      "role": "heal",
+      "soundevent_entry": "soundevents/player.vsndevts_c",
+      "deadlock_events": ["Player.Heal.Burst.Small", "Player.Heal.Burst.Medium", "Player.Heal.OverTime.TopOff"],
+      "source_slot": "pokemon_heal",
+      "local_audio": "source_audio/sfx/pokemon_heal.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/player/pokemon_heal.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/player/pokemon_heal.vsnd_c",
+      "edit": { "target_seconds": 1.0, "fade_out_seconds": 0.08 },
+      "priority": 1
+    },
+    {
+      "role": "crit_hit",
+      "soundevent_entry": "soundevents/damage.vsndevts_c",
+      "deadlock_events": ["Damage.Send.Crit", "Damage.Receive.Crit"],
+      "source_slot": "super_effective",
+      "local_audio": "source_audio/sfx/super_effective.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/damage/super_effective.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/damage/super_effective.vsnd_c",
+      "edit": { "target_seconds": 0.45, "fade_out_seconds": 0.03 },
+      "priority": 1
+    },
+    {
+      "role": "lethal_hit",
+      "soundevent_entry": "soundevents/damage.vsndevts_c",
+      "deadlock_events": ["Damage.Send.Lethal", "Damage.Receive.Lethal"],
+      "source_slot": "battle_victory_hit",
+      "local_audio": "source_audio/sfx/battle_victory_hit.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/damage/lethal_hit.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/damage/lethal_hit.vsnd_c",
+      "edit": { "target_seconds": 0.7, "fade_out_seconds": 0.05 },
+      "priority": 1
+    },
+    {
+      "role": "poison_tick",
+      "soundevent_entry": "soundevents/damage.vsndevts_c",
+      "deadlock_events": ["Damage.Receive.Poison", "Damage.Receive.DOT"],
+      "source_slot": "poison_tick",
+      "local_audio": "source_audio/sfx/poison_tick.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/damage/poison_tick.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/damage/poison_tick.vsnd_c",
+      "edit": { "target_seconds": 0.35, "fade_out_seconds": 0.03 },
+      "priority": 2
+    },
+    {
+      "role": "parry_success",
+      "soundevent_entry": "soundevents/player.vsndevts_c",
+      "deadlock_events": ["Player.Melee.Parry.Success.Shared", "Player.Melee.Parry.Trooper.Success"],
+      "source_slot": "protect",
+      "local_audio": "source_audio/sfx/protect_success.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/player/protect_success.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/player/protect_success.vsnd_c",
+      "edit": { "target_seconds": 0.55, "fade_out_seconds": 0.04 },
+      "priority": 1
+    },
+    {
+      "role": "dash",
+      "soundevent_entry": "soundevents/player.vsndevts_c",
+      "deadlock_events": ["Player.Dash.Jump", "Player.Dash.Ground", "Player.Dash.Air", "Player.Jump.Air"],
+      "source_slot": "quick_attack",
+      "local_audio": "source_audio/sfx/quick_attack.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/player/quick_attack.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/player/quick_attack.vsnd_c",
+      "edit": { "target_seconds": 0.35, "fade_out_seconds": 0.03 },
+      "priority": 2
+    },
+    {
+      "role": "urn_pickup",
+      "soundevent_entry": "soundevents/world.vsndevts_c",
+      "deadlock_events": ["Soul.Urn.Pickup", "Soul.Urn.Drop"],
+      "source_slot": "pokeball_throw",
+      "local_audio": "source_audio/sfx/pokeball_throw.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/world/pokeball_throw.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/world/pokeball_throw.vsnd_c",
+      "edit": { "target_seconds": 0.55, "fade_out_seconds": 0.04 },
+      "priority": 2
+    },
+    {
+      "role": "urn_cash_in",
+      "soundevent_entry": "soundevents/world.vsndevts_c",
+      "deadlock_events": ["Soul.Urn.CashIn.Complete.Team", "Soul.Urn.CashIn.Complete.Opponent"],
+      "source_slot": "pokeball_capture_success",
+      "local_audio": "source_audio/sfx/pokeball_capture_success.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/world/capture_success.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/world/capture_success.vsnd_c",
+      "edit": { "target_seconds": 1.0, "fade_out_seconds": 0.08 },
+      "priority": 2
+    },
+    {
+      "role": "vault_success",
+      "soundevent_entry": "soundevents/npc/neut_vaults.vsndevts_c",
+      "deadlock_events": ["Vault.HitSuccess", "Vault.WheelSuccessDing", "Props.Vault.Destruction"],
+      "source_slot": "item_get",
+      "local_audio": "source_audio/sfx/item_get.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/vault/vault_success_item_get.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/vault/vault_success_item_get.vsnd_c",
+      "edit": { "target_seconds": 0.8, "fade_out_seconds": 0.06 },
+      "priority": 2
+    },
+    {
+      "role": "rejuv_pickup",
+      "soundevent_entry": "soundevents/gameplay.vsndevts_c",
+      "deadlock_events": ["Rejuv.Pickup", "Rejuv.Rebirth.Start", "Rejuv.Rebirth.Revive"],
+      "source_slot": "rare_candy",
+      "local_audio": "source_audio/sfx/rare_candy.wav",
+      "target_vsnd": "sounds/custom/pokemon/sfx/gameplay/rare_candy_rejuv.vsnd",
+      "target_vsnd_c": "sounds/custom/pokemon/sfx/gameplay/rare_candy_rejuv.vsnd_c",
+      "edit": { "target_seconds": 1.1, "fade_out_seconds": 0.08 },
+      "priority": 2
+    }
+  ]
+}

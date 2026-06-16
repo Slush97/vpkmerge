@@ -1,0 +1,85 @@
+{
+  "pack_id": "pokemon_arcade",
+  "resolved_with": "ytmusicapi search",
+  "source_policy": "Reference metadata only. Use local audio files you own or are licensed to use.",
+  "notes": [
+    "YouTube Music search results for Pokemon game music often return covers, remixes, or soundtrack reinterpretations rather than official game audio.",
+    "SFX slots are semantic references. The actual local files should come from a licensed source or original recreated sounds."
+  ],
+  "music_candidates": [
+    {
+      "role": "pokemon_center_loop",
+      "query": "Pokemon Center Pokemon soundtrack",
+      "candidate_title": "Pokemon Center (Day)",
+      "candidate_artist": "The Zame",
+      "candidate_album": "Sinnoh: A Tale of Time and Space (Vol.1)",
+      "duration": "1:32",
+      "video_id": "Z_E5V3cQOEU",
+      "youtube_music_url": "https://music.youtube.com/watch?v=Z_E5V3cQOEU"
+    },
+    {
+      "role": "main_menu_lofi",
+      "query": "Pokemon Center Pokemon soundtrack",
+      "candidate_title": "Pokemon Center Theme (Lo-Fi Lullaby Remix)",
+      "candidate_artist": "GlitchxCity",
+      "candidate_album": "Pokemon Center Theme (Lo-Fi Lullaby Remix)",
+      "duration": "4:01",
+      "video_id": "TBzEUcwhK7M",
+      "youtube_music_url": "https://music.youtube.com/watch?v=TBzEUcwhK7M"
+    },
+    {
+      "role": "trainer_battle",
+      "query": "Pokemon Red Blue battle trainer soundtrack",
+      "candidate_title": "Battle! Trainer (From \"Pokemon Red & Blue\")",
+      "candidate_artist": "GaMetal",
+      "candidate_album": "GaMetal",
+      "duration": "3:30",
+      "video_id": "9e9y5yyYBWc",
+      "youtube_music_url": "https://music.youtube.com/watch?v=9e9y5yyYBWc"
+    },
+    {
+      "role": "wild_battle",
+      "query": "Pokemon Red Blue wild battle soundtrack",
+      "candidate_title": "Battle! Kanto Wild Pokemon (From \"Pokemon Red & Blue\")",
+      "candidate_artist": "The Zame",
+      "candidate_album": "Battle! Pokemon Battle Themes (Vol. 6)",
+      "duration": "1:57",
+      "video_id": "D_89ZUrvt6k",
+      "youtube_music_url": "https://music.youtube.com/watch?v=D_89ZUrvt6k"
+    },
+    {
+      "role": "victory_road",
+      "query": "Pokemon victory road soundtrack",
+      "candidate_title": "Victory Road (World Championships Theme 2023) (feat. Byfox)",
+      "candidate_artist": "Pokemon, Keybeaux",
+      "candidate_album": "Pokemon: World Championships 2022-23",
+      "duration": "2:49",
+      "video_id": "Q3nKT63yFP0",
+      "youtube_music_url": "https://music.youtube.com/watch?v=Q3nKT63yFP0"
+    }
+  ],
+  "sfx_reference_slots": [
+    "menu_cursor",
+    "menu_select",
+    "menu_cancel",
+    "item_get",
+    "key_item_get",
+    "coin_get",
+    "level_up",
+    "xp_gain",
+    "pokemon_heal",
+    "battle_encounter",
+    "battle_victory",
+    "pokemon_faint",
+    "low_hp",
+    "super_effective",
+    "not_very_effective",
+    "poison_tick",
+    "protect",
+    "pokeball_throw",
+    "pokeball_capture_shake",
+    "pokeball_capture_success",
+    "pc_beep",
+    "pokedex_ping"
+  ]
+}

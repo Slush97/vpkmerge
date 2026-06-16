@@ -121,6 +121,33 @@ impl SoundEvents {
         count
     }
 
+    /// Set an event's `vsnd_files` to `paths`, replacing whatever is there (a
+    /// single bare string for one-clip events, or an existing array). With more
+    /// than one path the engine picks one at random per play, which is the whole
+    /// of a "sound randomizer": list the clips and the engine rolls the dice.
+    /// Returns false if the named event does not exist.
+    pub fn set_vsnd_files(&mut self, event: &str, paths: &[String]) -> bool {
+        self.set_string_array_field(event, KEY_VSND_FILES, paths)
+    }
+
+    /// Set an event string-list field, e.g. `vsnd_files` or a layered music
+    /// field such as `vsnd_files_draft`.
+    pub fn set_string_array_field(&mut self, event: &str, field: &str, paths: &[String]) -> bool {
+        let Some(event_val) = self.root.get_mut(event) else {
+            return false;
+        };
+        let Value::Object(pairs) = event_val else {
+            return false;
+        };
+        let arr = Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect());
+        if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == field) {
+            *v = arr;
+        } else {
+            pairs.push((field.to_owned(), arr));
+        }
+        true
+    }
+
     /// Set a numeric field (e.g. `volume`, `pitch`) on one event to a double.
     /// Replaces the field if present, inserts it otherwise. Returns false if the
     /// named event does not exist.
@@ -208,15 +235,22 @@ mod tests {
         assert!(se.set_event_field("Seven.Wpn.Fire", "volume", 0.25));
         assert!(!se.set_event_field("No.Such.Event", "volume", 0.5));
 
+        // Randomizer: set an event's clip list to several paths (the engine then
+        // picks one per play). Works whether the event held one clip or many.
+        let clips = vec!["sounds/a.vsnd".to_owned(), "sounds/b.vsnd".to_owned()];
+        assert!(se.set_vsnd_files("Seven.Wpn.Fire", &clips));
+        assert!(!se.set_vsnd_files("No.Such.Event", &clips));
+
         // Re-encode and reload; edits must survive the compiled round-trip.
         let bytes = se.encode().expect("encode");
         let back = SoundEvents::from_bytes(bytes).expect("reload");
         let fire = back.root.get("Seven.Wpn.Fire").unwrap();
         assert_eq!(fire.get("volume").and_then(Value::as_f64), Some(0.25));
-        assert_eq!(
-            fire.get("vsnd_files").and_then(Value::as_array).unwrap()[0].as_str(),
-            Some("sounds/custom/my_fire.vsnd")
-        );
+        // The clip list survives as the two-element array we set.
+        let files = fire.get("vsnd_files").and_then(Value::as_array).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].as_str(), Some("sounds/a.vsnd"));
+        assert_eq!(files[1].as_str(), Some("sounds/b.vsnd"));
     }
 
     #[test]

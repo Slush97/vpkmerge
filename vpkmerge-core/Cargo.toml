@@ -21,11 +21,18 @@ serde_json = { version = "1", features = ["preserve_order"] }
 morphic = { path = "../morphic", version = "0.7.0" }
 # Decode + resize user PNGs for the custom icon/hero-card import (icon.rs).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Rust soul-container import prep reads user GLB files directly, replacing the
+# Blender-only normalization/material extraction stage for compiler source trees.
+gltf = { version = "1", features = ["names"] }
 
 [dev-dependencies]
 # Examples only: load externally-composited PNG overlays (e.g. pngover.rs) and
 # extract/resize a GLB's embedded albedo image (soul_import_additive.rs).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Examples only: inspect/diff binary FBX graphs against Blender exports while
+# bringing the Rust resourcecompiler prep path up to importer parity.
+fbxcel = { version = "0.9", features = ["tree", "writer"] }
+fbxcel-dom = "0.0.10"
 
 [lints]
 workspace = true

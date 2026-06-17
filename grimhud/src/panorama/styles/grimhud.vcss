@@ -91,3 +91,81 @@
 .grimhud-timer-row.imminent .grimhud-timer-eta {
     color: #ff7a6a;
 }
+
+/* ---- economy readout: native clock-pill second line ---------------------- */
+/* NOT a card: these style a line we append INTO the native ".GameClock" pill
+   (see the econ feature in grimhud_core). The pill is fit-children + noclip, so
+   it grows to hold our line and lends its own blurred dark backing + rounding -
+   the soul lead + team pace read as a native extension of the match clock. We
+   mirror native pill typography (font-family: oracle, centered). CONSERVATIVE
+   vocabulary only - same proven-to-load props as the rest of this sheet; the
+   one new-to-grimhud prop is font-family, which the native sheets use pervasively
+   (so it is registered + safe), NOT one of the fatal ones (gradient/shadow/anim). */
+.grimhud-econ-line {
+    flow-children: down;
+    horizontal-align: center;
+    margin-top: 1px;
+}
+.grimhud-econ-lead {
+    font-family: oracle;
+    font-size: 15px;
+    font-weight: bold;
+    horizontal-align: center;
+    text-align: center;
+    color: #fff6d8;
+    text-shadow: 1px 1px 3px 1px #000000;
+}
+.grimhud-econ-line.ahead  .grimhud-econ-lead { color: #6ff08a; }
+.grimhud-econ-line.behind .grimhud-econ-lead { color: #ff7a6a; }
+.grimhud-econ-pace {
+    font-family: oracle;
+    font-size: 11px;
+    font-weight: normal;
+    horizontal-align: center;
+    text-align: center;
+    color: #c7c3bd;
+}
+
+/* ---- allies-down respawn overlay (left-center) --------------------------- */
+.grimhud-respawn {
+    flow-children: down;
+    horizontal-align: left;
+    vertical-align: center;
+    margin-left: 24px;
+    padding: 6px 12px 6px 12px;
+    background-color: #0c0f12ee;
+    border: 1px solid #3a2d2d;
+    border-radius: 6px;
+    z-index: 880;
+}
+.grimhud-respawn-title {
+    color: #ff7a6a;
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+.grimhud-respawn-row {
+    flow-children: right;
+    width: 150px;
+    height: 22px;
+    margin-top: 1px;
+    margin-bottom: 1px;
+}
+.grimhud-respawn-name {
+    color: #e6ebf0;
+    font-size: 15px;
+    font-weight: bold;
+    vertical-align: center;
+    width: 104px;
+}
+.grimhud-respawn-eta {
+    color: #ffd24d;
+    font-size: 15px;
+    font-weight: bold;
+    vertical-align: center;
+    width: 40px;
+    text-align: right;
+}
+.grimhud-respawn-row.imminent .grimhud-respawn-eta {
+    color: #ff7a6a;
+}

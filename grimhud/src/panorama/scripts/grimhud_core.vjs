@@ -31,10 +31,15 @@
         signatureBar:    ["hud_signature"],
         apCurrency:      ["APContainer"],
         damageIndicators:["damage_indicator_canvas"],
+        chat:            ["Chat", "HudChat"],
+        statsAndMods:    ["StatsAndModsContainer", "ModBarGraph"],
         // readout / overlay data sources (verified bindings in the retail sub-layouts)
         gameClock:       ["GameTime"],            // text="{s:game_clock}" -> "MM:SS"
-        teamFriendly:    ["TeamFriendly"],        // top-bar ally container
-        teamEnemy:       ["TeamEnemy"],           // top-bar enemy container
+        teamFriendly:    ["TeamFriendly"],        // top-bar ally container (CitadelHudTopBarTeam team=2)
+        teamEnemy:       ["TeamEnemy"],           // top-bar enemy container (team=3)
+        teamScoreFriendly:["TeamScoreFriendly"],  // ScoreLabel text="{s:team_networth}"
+        teamScoreEnemy:  ["TeamScoreEnemy"],       // ScoreLabel text="{s:team_networth}"
+        unspentSouls:    ["hudCurGoldLabel"],      // text="{i:hud_cur_gold}" (local, unspent)
         healthCurrent:   ["current_health"],
         healthMax:       ["max_health"]
     };
@@ -61,25 +66,32 @@
     // ---- 3. feature registry --------------------------------------------------
     var FEATURES = [];
 
-    // Generic panel-transform feature: reposition (x/y), scale, opacity. Covers any
-    // "move/scale/fade a HUD panel" feature; souls/topbar/abilities all reuse it.
+    // Generic panel-transform feature: hide, reposition (x/y), scale, opacity. Covers
+    // any "hide/move/scale/fade a HUD panel" feature; souls/topbar/abilities all reuse it.
+    // Scale and opacity are written ONLY when non-neutral: a "1.00" scale or "1.00"
+    // opacity still forces the panel onto its own compositing layer (the source of the
+    // hideout blue-hue artifact), so at the neutral default we clear the inline style
+    // instead and the panel renders exactly as the game intends.
     function transformFeature(selector, keys) {
         var sig = null;
         return function (root) {
             if (keys.enabled && num(cfg[keys.enabled], 1) !== 1) return;
             var p = resolve(root, selector);
             if (!p) return;
+            var hide = keys.hide ? (num(cfg[keys.hide], 0) === 1) : false;
             var x  = num(cfg[keys.x], 0);
             var y  = num(cfg[keys.y], 0);
             var sc = keys.scale   ? num(cfg[keys.scale], 1)   : 1;
             var op = keys.opacity ? num(cfg[keys.opacity], 1) : 1;
-            var s = x + "|" + y + "|" + sc + "|" + op;
+            var s = (hide ? "H|" : "") + x + "|" + y + "|" + sc + "|" + op;
             if (s === sig) return;               // unchanged; skip the write
+            sig = s;
+            p.visible = !hide;
+            if (hide) return;                    // hidden: nothing else to position
             p.style.x = String(x) + "px";
             p.style.y = String(-y) + "px";       // positive Y moves UP (settings convention)
-            if (keys.scale)   { p.style.preTransformScale2d = sc.toFixed(2) + "," + sc.toFixed(2); }
-            if (keys.opacity) { p.style.opacity = op.toFixed(2); }
-            sig = s;
+            if (keys.scale)   { p.style.preTransformScale2d = (sc !== 1) ? (sc.toFixed(2) + "," + sc.toFixed(2)) : ""; }
+            if (keys.opacity) { p.style.opacity = (op !== 1) ? op.toFixed(2) : ""; }
         };
     }
 
@@ -98,7 +110,7 @@
     // Batch 1: more reposition/scale/fade panels. Each is the same generic transform;
     // selectors verified present in the retail hud.vxml decompile.
     FEATURES.push(transformFeature("minimap", {
-        enabled: "MINIMAP_ENABLED", x: "MINIMAP_X_OFFSET", y: "MINIMAP_Y_OFFSET",
+        enabled: "MINIMAP_ENABLED", hide: "MINIMAP_HIDDEN", x: "MINIMAP_X_OFFSET", y: "MINIMAP_Y_OFFSET",
         scale: "MINIMAP_SCALE", opacity: "MINIMAP_OPACITY"
     }));
     FEATURES.push(transformFeature("itemsBar", {
@@ -133,8 +145,19 @@
         scale: "AP_SCALE", opacity: "AP_OPACITY"
     }));
     FEATURES.push(transformFeature("damageIndicators", {
-        enabled: "DMGIND_ENABLED", x: "DMGIND_X_OFFSET", y: "DMGIND_Y_OFFSET",
+        enabled: "DMGIND_ENABLED", hide: "DMGIND_HIDDEN", x: "DMGIND_X_OFFSET", y: "DMGIND_Y_OFFSET",
         opacity: "DMGIND_OPACITY"
+    }));
+    // Chat box: reposition / scale / fade, plus a hide toggle for players who never
+    // want chat on screen. id="Chat" (CitadelChat) in the retail hud.vxml.
+    FEATURES.push(transformFeature("chat", {
+        enabled: "CHAT_ENABLED", hide: "CHAT_HIDDEN", x: "CHAT_X_OFFSET", y: "CHAT_Y_OFFSET",
+        scale: "CHAT_SCALE", opacity: "CHAT_OPACITY"
+    }));
+    // Stats & mods graph (the per-stat bar graph). id="StatsAndModsContainer" wraps it.
+    FEATURES.push(transformFeature("statsAndMods", {
+        enabled: "STATS_ENABLED", hide: "STATS_HIDDEN", x: "STATS_X_OFFSET", y: "STATS_Y_OFFSET",
+        scale: "STATS_SCALE", opacity: "STATS_OPACITY"
     }));
 
     // Low-HP warning. Reads the TRUE health value from the bound labels
@@ -222,10 +245,44 @@
         var k = Math.ceil((now - o.first) / o.every);
         return o.first + k * o.every;
     }
+    // State-class probe: HUD-wide mode flags (connectedToHideout, ...) are toggled on
+    // the WindowRoot (the context panel) or an engine ancestor above it, so we check
+    // the panel itself and then walk up. This is how the game itself gates top-bar
+    // pieces (the native CSS keys ".connectedToHideout .GameClock" off the same class).
+    function hasStateClass(root, cls) {
+        var p = root;
+        while (p) {
+            if (p.BHasClass && p.BHasClass(cls)) return true;
+            p = p.GetParent ? p.GetParent() : null;
+        }
+        return false;
+    }
+    // "Am I in a live match?" - gate for every match-only readout (econ/respawn/timers).
+    // Non-match contexts still LOAD this HUD and now render a populated top bar with a
+    // running clock (the hideout social space, the hero sandbox), so a slot/clock check
+    // alone is not enough: those screens would show our overlays. The decisive signal is
+    // the game's OWN state classes, set on the WindowRoot for exactly these modes - if any
+    // is present we are NOT in a match, full stop. (These are the same classes the native
+    // CSS keys off, e.g. ".connectedToHideout .GameClock", ".connectedToHeroTesting ...".)
+    // We still also require the top-bar team scoreboard to carry player slots.
+    var NOT_MATCH_CLASSES = ["connectedToHideout", "InHideout", "connectedToHeroTesting"];
+    function inMatch(root) {
+        for (var i = 0; i < NOT_MATCH_CLASSES.length; i++) {
+            if (hasStateClass(root, NOT_MATCH_CLASSES[i])) return false;  // hideout/menu/sandbox
+        }
+        var team = root.FindChildTraverse("TeamFriendly");
+        if (!team || !team.FindChildrenWithClassTraverse) return false;
+        var slots = team.FindChildrenWithClassTraverse("HeroContents");
+        return !!(slots && slots.length > 0);
+    }
     var _timerSig = null;
     FEATURES.push(function (root) {
         var panel = root.FindChildTraverse("GrimhudTimers");
-        if (num(cfg.TIMERS_ENABLED, 1) !== 1) { if (panel) panel.visible = false; return; }
+        // Default OFF: the cadence table is unverified placeholder timing, and these
+        // are clock-derived (not anchored to real spawn announcements yet), so opt-in.
+        if (num(cfg.TIMERS_ENABLED, 0) !== 1 || !inMatch(root)) {
+            if (panel) panel.visible = false; _timerSig = null; return;
+        }
         if (!panel) {
             panel = $.CreatePanel("Panel", root, "GrimhudTimers");
             panel.AddClass("grimhud-timers");
@@ -233,7 +290,7 @@
         panel.style.x = String(num(cfg.TIMERS_X_OFFSET, 0)) + "px";
         panel.style.y = String(-num(cfg.TIMERS_Y_OFFSET, 0)) + "px";
         var now = clockSeconds(root);
-        if (now < 0) { panel.visible = false; _timerSig = null; return; }  // not in match
+        if (now < 0) { panel.visible = false; _timerSig = null; return; }  // clock unreadable
         panel.visible = true;
         var rows = [];
         for (var i = 0; i < OBJECTIVE_CADENCE.length; i++) {
@@ -255,6 +312,157 @@
         }
     });
 
+    // ---- economy readouts -----------------------------------------------------
+    // The top bar shows each team's net worth (TeamScore{Friendly,Enemy} ->
+    // ScoreLabel = "{s:team_networth}") but NEVER the lead between them, and no
+    // souls-per-minute pace. We read both labels, compute the delta + pace, and
+    // render a compact card. All from formatted strings, locale/patch durable.
+    function parseSouls(s) {
+        s = String(s == null ? "" : s).trim().toLowerCase().replace(/,/g, "");
+        var m = s.match(/(-?[0-9]*\.?[0-9]+)\s*([km]?)/);
+        if (!m) return NaN;
+        var v = parseFloat(m[1]);
+        if (m[2] === "k") v *= 1000; else if (m[2] === "m") v *= 1000000;
+        return v;
+    }
+    function fmtSouls(n) {
+        n = Math.round(n);
+        var a = Math.abs(n);
+        if (a >= 1000000) return (n / 1000000).toFixed(1) + "m";
+        if (a >= 1000)    return (n / 1000).toFixed(1) + "k";
+        return String(n);
+    }
+    function teamScore(root, name) {
+        var p = resolve(root, name);
+        if (!p || !p.FindChildrenWithClassTraverse) return NaN;
+        var ls = p.FindChildrenWithClassTraverse("ScoreLabel") || [];
+        return ls.length ? parseSouls(ls[0].text) : NaN;
+    }
+    // Built INTO the native HUD: rather than float a separate dark card (which
+    // stacked under the native GameClock and read as a lumpy second box), we append
+    // a second line straight into the native ".GameClock" pill - the parent of the
+    // GameTime label. The pill is `width: fit-children; overflow: noclip`, so it
+    // grows to hold our line and shares its blurred dark background + rounded
+    // corners: the soul lead + team pace render as a native extension of the match
+    // clock, not a bolt-on overlay. (The pill carries no id, so we reach it via the
+    // resolved GameTime label's parent - patch-durable, no new selector to rot.)
+    var _econSig = null;
+    FEATURES.push(function (root) {
+        var clock = resolve(root, "gameClock");                            // GameTime label
+        var pill  = (clock && clock.GetParent) ? clock.GetParent() : null; // .GameClock pill
+        var line  = root.FindChildTraverse("GrimhudEconLine");
+        if (num(cfg.ECON_OVERLAY_ENABLED, 1) !== 1 || !inMatch(root) || !pill) {
+            if (line) line.visible = false; _econSig = null; return;
+        }
+        var fn = teamScore(root, "teamScoreFriendly");
+        var en = teamScore(root, "teamScoreEnemy");
+        if (!(fn === fn) || !(en === en)) { if (line) line.visible = false; _econSig = null; return; }
+        var lead = fn - en;
+        var now  = clockSeconds(root);
+        var spm  = (now > 0) ? (fn / (now / 60)) : NaN;
+        var sig  = Math.round(lead) + "|" + (spm === spm ? Math.round(spm) : "-");
+        // (Re)create the line as a child of the live pill if missing or orphaned
+        // (the engine can rebuild the top bar across match/hideout transitions).
+        if (!line || (line.GetParent && line.GetParent() !== pill)) {
+            if (line) line.DeleteAsync(0);
+            line = $.CreatePanel("Panel", pill, "GrimhudEconLine");
+            line.AddClass("grimhud-econ-line");
+            var l0 = $.CreatePanel("Label", line, "GrimhudEconLead"); l0.AddClass("grimhud-econ-lead");
+            var p0 = $.CreatePanel("Label", line, "GrimhudEconPace"); p0.AddClass("grimhud-econ-pace");
+            _econSig = null;                                  // force a text write below
+        }
+        line.visible = true;
+        if (sig === _econSig) return;
+        _econSig = sig;
+        line.SetHasClass("ahead", lead >= 0);
+        line.SetHasClass("behind", lead < 0);
+        var leadLbl = line.FindChildTraverse("GrimhudEconLead");
+        var paceLbl = line.FindChildTraverse("GrimhudEconPace");
+        if (leadLbl) leadLbl.text = (lead >= 0 ? "+" : "-") + fmtSouls(Math.abs(lead)) + " souls";
+        if (paceLbl) {
+            if (spm === spm) { paceLbl.visible = true; paceLbl.text = fmtSouls(spm) + "/min team"; }
+            else { paceLbl.visible = false; }
+        }
+    });
+
+    // ---- allies-down respawn overlay ------------------------------------------
+    // Each ally top-bar slot carries a RespawnTimer label ("{d:respawn_time}",
+    // only meaningful while dead) and a HeroName ("{s:hero_name}"). We consolidate
+    // every downed ally into one list so you read it at a glance instead of
+    // scanning the top bar. True bindings - no geometry, no timing table.
+    function parseRespawn(s) {
+        s = String(s == null ? "" : s).trim();
+        var mm = s.match(/(\d+):(\d{2})/);
+        if (mm) return parseInt(mm[1], 10) * 60 + parseInt(mm[2], 10);
+        var n = parseInt(s.replace(/[^0-9]/g, ""), 10);
+        return (n === n) ? n : 0;
+    }
+    function slotHeroName(hc) {                 // hc = HeroContents; name lives in a sibling subtree
+        var p = (hc.GetParent && hc.GetParent()) ? hc.GetParent().GetParent() : null;  // -> CitadelHudTopBarPlayer
+        if (!p || !p.FindChildrenWithClassTraverse) return "";
+        var hn = p.FindChildrenWithClassTraverse("HeroName") || [];
+        return hn.length ? String(hn[0].text || "") : "";
+    }
+    var _rsSig = null;
+    FEATURES.push(function (root) {
+        var panel = root.FindChildTraverse("GrimhudRespawn");
+        if (num(cfg.ALLY_RESPAWN_ENABLED, 1) !== 1 || !inMatch(root)) {
+            if (panel) panel.visible = false; _rsSig = null; return;
+        }
+        var team = resolve(root, "teamFriendly");
+        if (!team || !team.FindChildrenWithClassTraverse) { if (panel) panel.visible = false; _rsSig = null; return; }
+        var slots = team.FindChildrenWithClassTraverse("HeroContents") || [];
+        var down = [];
+        for (var i = 0; i < slots.length; i++) {
+            var rt = slots[i].FindChildrenWithClassTraverse("RespawnTimer");
+            rt = (rt && rt.length) ? rt[0] : null;
+            if (!rt) continue;
+            var secs = parseRespawn(rt.text);
+            if (!(secs > 0)) continue;                          // alive
+            down.push({ name: slotHeroName(slots[i]) || "Ally", secs: secs });
+        }
+        down.sort(function (a, b) { return a.secs - b.secs; });
+        var sig = down.map(function (d) { return d.name + d.secs; }).join(",");
+        if (sig === _rsSig && panel && panel.visible === (down.length > 0)) return;
+        _rsSig = sig;
+        if (!down.length) { if (panel) panel.visible = false; return; }
+        if (!panel) { panel = $.CreatePanel("Panel", root, "GrimhudRespawn"); panel.AddClass("grimhud-respawn"); }
+        panel.style.x = String(num(cfg.ALLY_RESPAWN_X_OFFSET, 0)) + "px";
+        panel.style.y = String(-num(cfg.ALLY_RESPAWN_Y_OFFSET, 0)) + "px";
+        panel.visible = true;
+        panel.RemoveAndDeleteChildren();
+        var title = $.CreatePanel("Label", panel, ""); title.AddClass("grimhud-respawn-title");
+        title.text = "ALLIES DOWN";
+        for (var j = 0; j < down.length; j++) {
+            var row = $.CreatePanel("Panel", panel, ""); row.AddClass("grimhud-respawn-row");
+            if (down[j].secs <= 8) row.AddClass("imminent");
+            var nm = $.CreatePanel("Label", row, ""); nm.AddClass("grimhud-respawn-name"); nm.text = down[j].name;
+            var et = $.CreatePanel("Label", row, ""); et.AddClass("grimhud-respawn-eta");  et.text = fmtMMSS(down[j].secs);
+        }
+    });
+
+    // ---- unspent-souls "go spend" nudge ---------------------------------------
+    // Reads the local unspent-souls label ("{i:hud_cur_gold}") and washes the
+    // souls counter amber when you are sitting on more than a threshold, so you
+    // remember to spend. Pure value read; clears itself once you drop below.
+    var _unspentSig = null;
+    FEATURES.push(function (root) {
+        if (num(cfg.UNSPENT_NUDGE_ENABLED, 1) !== 1) {
+            if (_unspentSig !== null) { var c0 = resolve(root, "soulsContainer"); if (c0) c0.style.washColor = "white"; _unspentSig = null; }
+            return;
+        }
+        var lbl = resolve(root, "unspentSouls");
+        var box = resolve(root, "soulsContainer");
+        if (!lbl || !box) { _unspentSig = null; return; }
+        var souls = digits(lbl.text);
+        if (!(souls >= 0)) { _unspentSig = null; return; }
+        var over = souls >= num(cfg.UNSPENT_THRESHOLD, 1500);
+        var sig = over ? "1" : "0";
+        if (sig === _unspentSig) return;
+        _unspentSig = sig;
+        box.style.washColor = over ? "#ffc040ff" : "white";
+    });
+
     // ---- on-screen self-test dashboard (retail has no console) ----------------
     // Data-driven: every selector that resolve() has touched is reported with its
     // hit/miss state, plus a N/M roll-up. This IS the patch-day harness, surfaced
@@ -264,12 +472,22 @@
         minimap: "map", itemsBar: "items", quickbuy: "qbuy",
         heroShop: "shop", passives: "pass", crosshair: "xhair",
         signatureBar: "sig", apCurrency: "ap", damageIndicators: "dmg",
-        gameClock: "clock", teamFriendly: "ally", teamEnemy: "enemy"
+        chat: "chat", statsAndMods: "stats",
+        gameClock: "clock", teamFriendly: "ally", teamEnemy: "enemy",
+        teamScoreFriendly: "nwF", teamScoreEnemy: "nwE", unspentSouls: "unspent"
     };
     function updateMarker(root) {
         try {
             var m = root.FindChildTraverse("GrimhudStatus");
+            // The on-screen dashboard is a DEV diagnostic (retail has no console). It is
+            // off by default - players should never see grimhud's own chrome on the HUD.
+            // Flip DEBUG_OVERLAY:1 in config to bring it back for selector debugging.
+            if (num(cfg.DEBUG_OVERLAY, 0) !== 1) {
+                if (m) { m.visible = false; }
+                return;
+            }
             if (!m) { m = $.CreatePanel("Label", root, "GrimhudStatus"); }
+            m.visible = true;
             var parts = [], hit = 0, total = 0;
             for (var name in HUD_IDS) {
                 if (!HUD_IDS.hasOwnProperty(name)) continue;

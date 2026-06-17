@@ -148,6 +148,28 @@ impl SoundEvents {
         true
     }
 
+    /// Set a numeric-array field (e.g. `startpoint`, `endpoint`, `sync_bpm`) on
+    /// one event. These loop-geometry fields are stored as KV3 arrays of one or
+    /// more doubles (`endpoint = [43.355]`), so a scalar [`set_event_field`]
+    /// would write the wrong node type and the engine would ignore it. Replaces
+    /// the field if present, inserts it otherwise. Returns false if the named
+    /// event does not exist.
+    pub fn set_double_array_field(&mut self, event: &str, field: &str, values: &[f64]) -> bool {
+        let Some(event_val) = self.root.get_mut(event) else {
+            return false;
+        };
+        let Value::Object(pairs) = event_val else {
+            return false;
+        };
+        let arr = Value::Array(values.iter().copied().map(Value::Double).collect());
+        if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == field) {
+            *v = arr;
+        } else {
+            pairs.push((field.to_owned(), arr));
+        }
+        true
+    }
+
     /// Set a numeric field (e.g. `volume`, `pitch`) on one event to a double.
     /// Replaces the field if present, inserts it otherwise. Returns false if the
     /// named event does not exist.

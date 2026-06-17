@@ -57,6 +57,9 @@ struct Entry {
     fade_in: f64,
     fade_out: f64,
     event_fields: BTreeMap<String, f64>,
+    /// Array-valued soundevent fields (loop geometry: `startpoint`, `endpoint`,
+    /// `sync_bpm`, ...). Stored as KV3 arrays, distinct from scalar `event_fields`.
+    event_array_fields: BTreeMap<String, Vec<f64>>,
 }
 
 fn main() -> Result<()> {
@@ -169,6 +172,9 @@ fn main() -> Result<()> {
     let mut event_durations: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut event_fields: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>> =
         BTreeMap::new();
+    // se -> event -> field -> array values (loop geometry).
+    let mut event_arrays: BTreeMap<String, BTreeMap<String, BTreeMap<String, Vec<f64>>>> =
+        BTreeMap::new();
 
     for e in &present {
         let (rate, channels) = ffprobe_stream(&e.local_audio)?;
@@ -231,6 +237,36 @@ fn main() -> Result<()> {
                     .or_default()
                     .insert(field.clone(), *value);
             }
+            // Array fields: manifest-provided loop geometry, plus an automatic
+            // full-clip loop window for beds. Retargeting a bed keeps Valve's
+            // original `startpoint`/`endpoint` (measured for their clip), so the
+            // engine would loop back mid-phrase of our track. Default the loop
+            // window to our whole clip; a manifest `soundevent_fields` entry for
+            // `startpoint`/`endpoint` overrides it with hand-authored bar points.
+            let dest = event_arrays
+                .entry(e.soundevent.clone())
+                .or_default()
+                .entry(ev.clone())
+                .or_default();
+            for (field, values) in &e.event_array_fields {
+                dest.insert(field.clone(), values.clone());
+            }
+            if e.loop_clip {
+                dest.entry("startpoint".to_owned())
+                    .or_insert_with(|| vec![0.0]);
+                // A randomized event plays several clips at one shared loop
+                // window, so take the longest so no choice is clipped early.
+                // A hand-authored manifest `endpoint` wins outright.
+                if !e.event_array_fields.contains_key("endpoint") {
+                    dest.entry("endpoint".to_owned())
+                        .and_modify(|v| {
+                            if let Some(f) = v.first_mut() {
+                                *f = f.max(duration);
+                            }
+                        })
+                        .or_insert_with(|| vec![duration]);
+                }
+            }
         }
     }
 
@@ -259,6 +295,13 @@ fn main() -> Result<()> {
             for (event, fields) in overrides {
                 for (field, value) in fields {
                     let _ = snd.set_event_field(event, field, *value);
+                }
+            }
+        }
+        if let Some(overrides) = event_arrays.get(se_entry) {
+            for (event, fields) in overrides {
+                for (field, values) in fields {
+                    let _ = snd.set_double_array_field(event, field, values);
                 }
             }
         }
@@ -353,6 +396,22 @@ fn parse_entry(e: &Value, dir: &Path, default_se: &str) -> Result<Entry> {
                 .collect()
         })
         .unwrap_or_default();
+    // Array-valued overrides (loop geometry). A manifest can hand-author
+    // `"endpoint": [43.355]` etc.; numbers nested in an array land here, scalars
+    // in `event_fields` above.
+    let event_array_fields = e
+        .get("soundevent_fields")
+        .and_then(Value::as_object)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|(key, value)| {
+                    let nums: Vec<f64> = value.as_array()?.iter().filter_map(Value::as_f64).collect();
+                    (!nums.is_empty()).then(|| (key.clone(), nums))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     Ok(Entry {
         role,
@@ -368,6 +427,7 @@ fn parse_entry(e: &Value, dir: &Path, default_se: &str) -> Result<Entry> {
         fade_in,
         fade_out,
         event_fields,
+        event_array_fields,
     })
 }
 
@@ -376,12 +436,20 @@ fn prep_audio(e: &Entry, rate: u32, channels: u32, duration: f64) -> Result<Vec<
     let tmp = std::env::temp_dir().join("build_music_pack_clip.mp3");
 
     let mut filters: Vec<String> = Vec::new();
-    if e.fade_in > 0.0 {
-        filters.push(format!("afade=t=in:st=0:d={}", e.fade_in));
-    }
-    if e.fade_out > 0.0 {
-        let st = (duration - e.fade_out).max(0.0);
-        filters.push(format!("afade=t=out:st={st}:d={}", e.fade_out));
+    // Loop beds must NOT fade to silence: a baked afade-out makes every loop
+    // iteration dip to silence before the engine jumps back to the head (the
+    // textbook choppy loop). The engine's inherited `volume_fade_out` /
+    // `volume_fade_in` already crossfade the bed on music-state changes, which
+    // is the only fade a loop should ever have. Bake fades on one-shots and
+    // stingers only.
+    if !e.loop_clip {
+        if e.fade_in > 0.0 {
+            filters.push(format!("afade=t=in:st=0:d={}", e.fade_in));
+        }
+        if e.fade_out > 0.0 {
+            let st = (duration - e.fade_out).max(0.0);
+            filters.push(format!("afade=t=out:st={st}:d={}", e.fade_out));
+        }
     }
     let af = filters.join(",");
 

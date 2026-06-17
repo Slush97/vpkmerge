@@ -51,8 +51,8 @@
       "target_vsnd": "sounds/custom/music/title_fight/match_intro/head_in_the_ceiling_fan_connecting.vsnd",
       "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/head_in_the_ceiling_fan_connecting.vsnd_c",
       "edit": {
-        "loop": false,
-        "target_seconds": 20,
+        "loop": true,
+        "target_seconds": 150,
         "fade_in_seconds": 0.5,
         "fade_out_seconds": 1.5,
         "start_seconds": 0
@@ -66,16 +66,16 @@
     {
       "role": "match_intro_hero_reveal",
       "deadlock_event": "Music.MatchIntro.HeroReveal",
-      "source_track_key": "secret_society",
-      "local_audio": "source_audio/secret_society.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/match_intro/numb_hero_reveal.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/numb_hero_reveal.vsnd_c",
+      "source_track_key": "loud_and_clear",
+      "local_audio": "source_audio/loud_and_clear.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/match_intro/loud_and_clear_match_intro_hero_reveal.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/loud_and_clear_match_intro_hero_reveal.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 18,
         "fade_in_seconds": 0.25,
         "fade_out_seconds": 1.0,
-        "start_seconds": 20
+        "start_seconds": 0
       },
       "priority": 1,
       "soundevent_fields": {
@@ -85,16 +85,16 @@
     {
       "role": "match_intro_start",
       "deadlock_event": "Music.MatchIntro.MatchStart.King",
-      "source_track_key": "secret_society",
-      "local_audio": "source_audio/secret_society.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/match_intro/secret_society_start.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/secret_society_start.vsnd_c",
+      "source_track_key": "numb_but_i_still_feel_it",
+      "local_audio": "source_audio/numb_but_i_still_feel_it.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/match_intro/numb_but_i_still_feel_it_match_intro_start.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/numb_but_i_still_feel_it_match_intro_start.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 16,
         "fade_in_seconds": 0.1,
         "fade_out_seconds": 1.0,
-        "start_seconds": 38
+        "start_seconds": 0
       },
       "priority": 1,
       "soundevent_fields": {
@@ -104,16 +104,16 @@
     {
       "role": "win",
       "deadlock_event": "Music.Match.Win",
-      "source_track_key": "your_pain_is_mine_now",
-      "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/leaf_win.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/leaf_win.vsnd_c",
+      "source_track_key": "numb_but_i_still_feel_it",
+      "local_audio": "source_audio/numb_but_i_still_feel_it.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/numb_but_i_still_feel_it_win.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/numb_but_i_still_feel_it_win.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 10,
         "fade_in_seconds": 0.0,
         "fade_out_seconds": 1.0,
-        "start_seconds": 0
+        "start_seconds": 2
       },
       "priority": 1,
       "soundevent_fields": {
@@ -125,8 +125,8 @@
       "deadlock_event": "Music.Match.Lose",
       "source_track_key": "your_pain_is_mine_now",
       "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/lefty_loss.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/lefty_loss.vsnd_c",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/your_pain_is_mine_now_loss.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/your_pain_is_mine_now_loss.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 10,
@@ -661,16 +661,16 @@
     {
       "role": "match_intro_start_mother",
       "deadlock_event": "Music.MatchIntro.MatchStart.Mother",
-      "source_track_key": "secret_society",
-      "local_audio": "source_audio/secret_society.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/match_intro/twenty_seven_start_mother.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/twenty_seven_start_mother.vsnd_c",
+      "source_track_key": "numb_but_i_still_feel_it",
+      "local_audio": "source_audio/numb_but_i_still_feel_it.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/match_intro/numb_but_i_still_feel_it_match_intro_start_mother.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/match_intro/numb_but_i_still_feel_it_match_intro_start_mother.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 28,
         "fade_in_seconds": 0.0,
         "fade_out_seconds": 1.0,
-        "start_seconds": 38
+        "start_seconds": 0
       },
       "priority": 3,
       "soundevent_fields": {
@@ -700,10 +700,10 @@
     {
       "role": "shop",
       "deadlock_event": "Music.Shop",
-      "source_track_key": "rose_of_sharon",
-      "local_audio": "source_audio/rose_of_sharon.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/normal/rose_shop.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/normal/rose_shop.vsnd_c",
+      "source_track_key": "chlorine",
+      "local_audio": "source_audio/chlorine.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/normal/chlorine_shop.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/normal/chlorine_shop.vsnd_c",
       "edit": {
         "loop": true,
         "target_seconds": 112,
@@ -720,16 +720,16 @@
     {
       "role": "shop_secret",
       "deadlock_event": "Music.Shop.Secret",
-      "source_track_key": "rose_of_sharon",
-      "local_audio": "source_audio/rose_of_sharon.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/normal/hypnotize_shop_secret.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/normal/hypnotize_shop_secret.vsnd_c",
+      "source_track_key": "blush",
+      "local_audio": "source_audio/blush.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/normal/blush_shop_secret.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/normal/blush_shop_secret.vsnd_c",
       "edit": {
         "loop": true,
         "target_seconds": 100,
         "fade_in_seconds": 1.0,
         "fade_out_seconds": 2.0,
-        "start_seconds": 112
+        "start_seconds": 0
       },
       "priority": 3,
       "soundevent_fields": {
@@ -1365,18 +1365,18 @@
       "priority": 4
     },
     {
-      "role": "win_alt_blush",
+      "role": "win_alt_secret",
       "deadlock_event": "Music.Match.Win",
-      "source_track_key": "your_pain_is_mine_now",
-      "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/blush_win_alt.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/blush_win_alt.vsnd_c",
+      "source_track_key": "secret_society",
+      "local_audio": "source_audio/secret_society.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/secret_society_win_alt_secret.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/secret_society_win_alt_secret.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 10,
         "fade_in_seconds": 0.0,
         "fade_out_seconds": 1.0,
-        "start_seconds": 10
+        "start_seconds": 0
       },
       "priority": 4,
       "soundevent_fields": {
@@ -1384,17 +1384,36 @@
       }
     },
     {
-      "role": "win_alt_coxton",
+      "role": "win_alt_shed",
       "deadlock_event": "Music.Match.Win",
-      "source_track_key": "your_pain_is_mine_now",
-      "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/coxton_win_alt.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/coxton_win_alt.vsnd_c",
+      "source_track_key": "shed",
+      "local_audio": "source_audio/shed.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/shed_win_alt_shed.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/shed_win_alt_shed.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 10,
         "fade_in_seconds": 0.0,
         "fade_out_seconds": 1.0,
+        "start_seconds": 0
+      },
+      "priority": 4,
+      "soundevent_fields": {
+        "volume_fade_out": 1.0
+      }
+    },
+    {
+      "role": "loss_alt_rose",
+      "deadlock_event": "Music.Match.Lose",
+      "source_track_key": "rose_of_sharon",
+      "local_audio": "source_audio/rose_of_sharon.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/rose_of_sharon_loss_alt_rose.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/rose_of_sharon_loss_alt_rose.vsnd_c",
+      "edit": {
+        "loop": false,
+        "target_seconds": 10,
+        "fade_in_seconds": 0.0,
+        "fade_out_seconds": 1.5,
         "start_seconds": 20
       },
       "priority": 4,
@@ -1403,37 +1422,18 @@
       }
     },
     {
-      "role": "loss_alt_frown",
+      "role": "loss_alt_murder",
       "deadlock_event": "Music.Match.Lose",
-      "source_track_key": "your_pain_is_mine_now",
-      "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/frown_loss_alt.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/frown_loss_alt.vsnd_c",
+      "source_track_key": "murder_your_memory",
+      "local_audio": "source_audio/murder_your_memory.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/stingers/murder_your_memory_loss_alt_murder.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/murder_your_memory_loss_alt_murder.vsnd_c",
       "edit": {
         "loop": false,
         "target_seconds": 10,
         "fade_in_seconds": 0.0,
         "fade_out_seconds": 1.5,
-        "start_seconds": 40
-      },
-      "priority": 4,
-      "soundevent_fields": {
-        "volume_fade_out": 1.0
-      }
-    },
-    {
-      "role": "loss_alt_shed",
-      "deadlock_event": "Music.Match.Lose",
-      "source_track_key": "your_pain_is_mine_now",
-      "local_audio": "source_audio/your_pain_is_mine_now.wav",
-      "target_vsnd": "sounds/custom/music/title_fight/stingers/shed_loss_alt.vsnd",
-      "target_vsnd_c": "sounds/custom/music/title_fight/stingers/shed_loss_alt.vsnd_c",
-      "edit": {
-        "loop": false,
-        "target_seconds": 10,
-        "fade_in_seconds": 0.0,
-        "fade_out_seconds": 1.5,
-        "start_seconds": 50
+        "start_seconds": 0
       },
       "priority": 4,
       "soundevent_fields": {
@@ -1937,6 +1937,210 @@
         "fade_out_seconds": 0.5
       },
       "priority": 5
+    },
+    {
+      "role": "hideout_base_alt_chlorine",
+      "deadlock_event": "Music.Hideout",
+      "deadlock_field": "vsnd_files_play_base",
+      "source_track_key": "chlorine",
+      "local_audio": "source_audio/chlorine.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/chlorine_hideout_base_alt_chlorine.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/chlorine_hideout_base_alt_chlorine.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 43,
+        "fade_in_seconds": 1.0,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 20
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "hideout_base_alt_blush",
+      "deadlock_event": "Music.Hideout",
+      "deadlock_field": "vsnd_files_play_base",
+      "source_track_key": "blush",
+      "local_audio": "source_audio/blush.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/blush_hideout_base_alt_blush.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/blush_hideout_base_alt_blush.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 43,
+        "fade_in_seconds": 1.0,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 10
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "hideout_search_alt_murder",
+      "deadlock_event": "Music.Hideout.Search",
+      "source_track_key": "murder_your_memory",
+      "local_audio": "source_audio/murder_your_memory.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/murder_your_memory_hideout_search_alt_murder.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/murder_your_memory_hideout_search_alt_murder.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 75,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 0
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "hideout_search_alt_lefty",
+      "deadlock_event": "Music.Hideout.Search",
+      "source_track_key": "lefty",
+      "local_audio": "source_audio/lefty.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/lefty_hideout_search_alt_lefty.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/lefty_hideout_search_alt_lefty.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 75,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 10
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "hideout_wait_alt_hypnotize",
+      "deadlock_event": "Music.Hideout.Wait",
+      "source_track_key": "hypnotize",
+      "local_audio": "source_audio/hypnotize.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/hypnotize_hideout_wait_alt_hypnotize.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/hypnotize_hideout_wait_alt_hypnotize.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 90,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 0
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "hideout_wait_alt_chlorine",
+      "deadlock_event": "Music.Hideout.Wait",
+      "source_track_key": "chlorine",
+      "local_audio": "source_audio/chlorine.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/hideout/chlorine_hideout_wait_alt_chlorine.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/hideout/chlorine_hideout_wait_alt_chlorine.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 90,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 30
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "brawl_draft_alt_lefty",
+      "deadlock_event": "Music.Brawl.Draft",
+      "deadlock_field": "vsnd_files_draft",
+      "source_track_key": "lefty",
+      "local_audio": "source_audio/lefty.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/brawl/lefty_brawl_draft_alt_lefty.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/brawl/lefty_brawl_draft_alt_lefty.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 62,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 0
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "brawl_draft_alt_blush",
+      "deadlock_event": "Music.Brawl.Draft",
+      "deadlock_field": "vsnd_files_draft",
+      "source_track_key": "blush",
+      "local_audio": "source_audio/blush.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/brawl/blush_brawl_draft_alt_blush.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/brawl/blush_brawl_draft_alt_blush.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 62,
+        "fade_in_seconds": 0.5,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 0
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "shop_alt_rose",
+      "deadlock_event": "Music.Shop",
+      "source_track_key": "rose_of_sharon",
+      "local_audio": "source_audio/rose_of_sharon.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/normal/rose_of_sharon_shop_alt_rose.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/normal/rose_of_sharon_shop_alt_rose.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 112,
+        "fade_in_seconds": 1.0,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 0
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
+    },
+    {
+      "role": "shop_secret_alt_chlorine",
+      "deadlock_event": "Music.Shop.Secret",
+      "source_track_key": "chlorine",
+      "local_audio": "source_audio/chlorine.wav",
+      "target_vsnd": "sounds/custom/music/title_fight/normal/chlorine_shop_secret_alt_chlorine.vsnd",
+      "target_vsnd_c": "sounds/custom/music/title_fight/normal/chlorine_shop_secret_alt_chlorine.vsnd_c",
+      "edit": {
+        "loop": true,
+        "target_seconds": 100,
+        "fade_in_seconds": 1.0,
+        "fade_out_seconds": 2.0,
+        "start_seconds": 30
+      },
+      "priority": 5,
+      "soundevent_fields": {
+        "volume_fade_out": 2.0,
+        "volume_fade_in": 0.5
+      }
     }
   ]
 }

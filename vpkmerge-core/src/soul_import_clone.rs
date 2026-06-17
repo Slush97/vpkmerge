@@ -48,10 +48,22 @@ use crate::{recolor_particle_bytes, Recolor};
 
 const MODEL: &str = "models/props_gameplay/soul_container/soul_container.vmdl_c";
 const MAT_DIR: &str = "models/props_gameplay/soul_container/materials";
+const MESH_NAME: &str = "soul_container";
 const DONOR_VMAT: &[u8] = include_bytes!("../../morphic/fixtures/soul/soul_material_donor.vmat_c");
 const DEFAULT_NORMAL: &str = "materials/default/default_normal_tga_7be61377.vtex";
 pub(crate) const FLAT_DONOR: &str = "panorama/images/hud/zipline_icon_psd.vtex_c";
 pub(crate) const COLOR_DONOR: &str = "dev/helper/testgrid_color_tga_2d6cc34.vtex_c";
+// A 2048x2048 BC7 donor for high-res atlases (4x the 512 donor's linear res). The
+// atlas is spliced into a same-size BCn donor, so the donor's dimensions set the
+// atlas resolution. Used for single-material props (the urn) whose source texture
+// is large; falls back to the 512 donor if absent.
+pub(crate) const COLOR_DONOR_2K: &str =
+    "models/dev/calibration_tool/materials/calibration_tool_color_psd_588eed2b.vtex_c";
+// A 4096x4096 BC7 sRGB color donor (a stock gameplay prop albedo), for props whose
+// source texture is 4096 (e.g. AI-generated meshes) so the atlas maps 1:1 with no
+// downscale. Heavier (~21 MB texture); falls back to the 2048/512 donors if absent.
+pub(crate) const COLOR_DONOR_4K: &str =
+    "models/props_gameplay/wooden_crate_03/materials/wooden_crate_03_color_png_9f61ca0d.vtex_c";
 const IDENTITY3: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const IDENTITY4: Mat4 = [
     [1.0, 0.0, 0.0, 0.0],
@@ -130,6 +142,103 @@ impl Default for SoulImportCloneOptions {
     }
 }
 
+/// Which model the clone edits, and where the result is packed. The default
+/// targets the soul container; [`urn_target`] retargets the same pipeline at the
+/// carryable Idol/urn objective (`idol_urn.vmdl_c`).
+///
+/// `envelope_model` is read from the pak and is the model actually edited (it must
+/// be a modern split-buffer `.vmdl_c` morphic can decode). `output_model` is where
+/// the edited bytes are packed in the VPK, which can differ from the envelope: the
+/// urn is a legacy monolithic-VBIB model morphic cannot edit in place, so its slot
+/// is overridden with a soul-container-derived model instead. A `.vmdl_c` carries
+/// no self path, so the engine treats whatever sits at `output_model` as that model.
+#[derive(Debug, Clone)]
+pub struct CloneTarget {
+    /// Modern, editable `.vmdl_c` entry read from the pak (the envelope).
+    pub envelope_model: String,
+    /// Embedded mesh-part name inside the envelope to replace.
+    pub mesh_name: String,
+    /// Entry path the edited model is packed at (overrides this slot in-game).
+    pub output_model: String,
+    /// Directory under which the new material + atlas texture entries are written.
+    pub mat_dir: String,
+    /// Entity-attached particles to ship (recolored per [`SoulGlow`]). Empty for
+    /// targets like the urn that have no soul-glow particles of their own.
+    pub particles: Vec<String>,
+    /// Largest-axis Source-units span to fit the import to. `None` fits to the
+    /// envelope model's own bounds (right for the soul container; for the urn the
+    /// envelope is soul-sized, so an explicit span sets the in-game size).
+    pub target_span: Option<f32>,
+    /// Preferred atlas resolution in pixels. `2048` selects the high-res BC7 donor
+    /// (props with a large source texture); anything else uses the 512 donor. The
+    /// real size is clamped to an available donor at build time.
+    pub atlas_px: u32,
+    /// When set, synthesize a `g_tNormalRoughness` map for the import and bind it in
+    /// place of the flat default normal. The flat default gives a relief-less,
+    /// matte-looking surface (roughness 0.5, no microdetail) that reads as soft/blurry
+    /// next to a real prop; a synthesized normal (height-from-albedo) plus a tuned
+    /// roughness restores surface relief and specular pop. `None` keeps the legacy
+    /// flat-default behavior (right for the glowing soul orb, which wants no relief).
+    pub synth_normal: Option<NormalSynthesis>,
+}
+
+/// Parameters for synthesizing a `g_tNormalRoughness` map from the import's albedo.
+/// The normal is a tangent-space bump derived from albedo luminance (Sobel height);
+/// roughness is packed into the B channel (Deadlock `pbr.vfx`: R,G = normal.xy,
+/// B = roughness, A = 1).
+#[derive(Debug, Clone, Copy)]
+pub struct NormalSynthesis {
+    /// Bump strength. Higher = steeper synthesized relief. ~1.0 is a subtle,
+    /// safe default; the source albedo's own contrast scales the effect.
+    pub strength: f32,
+    /// Uniform roughness packed into B, `0.0` (mirror) .. `1.0` (fully matte).
+    /// The flat default is effectively `0.5`; metal/ceramic props read crisper
+    /// glossier around `0.3..0.4`.
+    pub roughness: f32,
+}
+
+/// The default target: edit and override the soul container in place, shipping its
+/// three soul-glow particles.
+#[must_use]
+pub fn soul_target() -> CloneTarget {
+    CloneTarget {
+        envelope_model: MODEL.to_string(),
+        mesh_name: MESH_NAME.to_string(),
+        output_model: MODEL.to_string(),
+        mat_dir: MAT_DIR.to_string(),
+        particles: PARTICLES.iter().map(|s| (*s).to_string()).collect(),
+        target_span: None,
+        atlas_px: 512,
+        // The soul orb is an emissive glowing prop; a relief normal would fight its
+        // look. Keep the flat default (legacy behavior).
+        synth_normal: None,
+    }
+}
+
+/// Retarget the clone pipeline at the carryable Idol/urn objective: build into the
+/// soul-container envelope (the urn's own format is not editable), pack at the urn's
+/// model + material paths, ship no particles. `span` sets the in-game size in Source
+/// units (the urn is bigger than a soul orb, so the soul envelope's bounds are not used).
+#[must_use]
+pub fn urn_target(span: f32) -> CloneTarget {
+    CloneTarget {
+        envelope_model: MODEL.to_string(),
+        mesh_name: MESH_NAME.to_string(),
+        output_model: "models/props_gameplay/idol_urn/idol_urn.vmdl_c".to_string(),
+        mat_dir: "models/props_gameplay/idol_urn/materials".to_string(),
+        particles: Vec::new(),
+        target_span: Some(span),
+        atlas_px: 4096,
+        // Solid prop: give it real surface relief + glossy metal/ceramic roughness so
+        // it doesn't read as a soft, flat, matte blob (the flat-default look that made
+        // the first urn imports look "blurry" despite a high-res albedo).
+        synth_normal: Some(NormalSynthesis {
+            strength: 1.0,
+            roughness: 0.35,
+        }),
+    }
+}
+
 /// Diagnostics from a successful build, surfaced to the CLI/UI and stored in the
 /// imported mod's metadata so the transform is reproducible.
 #[derive(Debug, Clone)]
@@ -165,16 +274,30 @@ pub struct SoulImportReport {
 /// stock orb's bounds and writing it (plus material, atlas texture, and recolored
 /// particles) to `out`. `pak` is a base `pak01_dir.vpk` the stock model, donor
 /// textures, and particles are read from.
-#[allow(
-    clippy::too_many_lines,
-    clippy::many_single_char_names,
-    clippy::similar_names
-)]
 pub fn import_soul_container_clone(
     pak: impl AsRef<Path>,
     glb: &[u8],
     out: impl AsRef<Path>,
     opts: &SoulImportCloneOptions,
+) -> Result<SoulImportReport> {
+    import_clone(pak, glb, out, opts, &soul_target())
+}
+
+/// Generalized clone: build the GLB into `target.envelope_model` and pack the
+/// result at `target.output_model` (plus material, atlas texture, and any
+/// particles). See [`import_soul_container_clone`] for the soul-container default
+/// and [`urn_target`] for the urn override.
+#[allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::similar_names
+)]
+pub fn import_clone(
+    pak: impl AsRef<Path>,
+    glb: &[u8],
+    out: impl AsRef<Path>,
+    opts: &SoulImportCloneOptions,
+    target: &CloneTarget,
 ) -> Result<SoulImportReport> {
     let name = &opts.name;
     let doc = glb_json(glb)?;
@@ -223,7 +346,11 @@ pub fn import_soul_container_clone(
     //        PNG_RGBA8888 albedo minted from scratch decodes fine offline but the
     //        Deadlock engine REJECTS it on a model material and renders the
     //        missing-texture purple (in-game verified). Keep the BCn donor path. ---
-    let (atlas, donor_entry) = if vpk.get_file(COLOR_DONOR).is_ok() {
+    let (atlas, donor_entry) = if target.atlas_px >= 4096 && vpk.get_file(COLOR_DONOR_4K).is_ok() {
+        (4096u32, COLOR_DONOR_4K)
+    } else if target.atlas_px >= 2048 && vpk.get_file(COLOR_DONOR_2K).is_ok() {
+        (2048u32, COLOR_DONOR_2K)
+    } else if vpk.get_file(COLOR_DONOR).is_ok() {
         (512u32, COLOR_DONOR)
     } else {
         (64u32, FLAT_DONOR)
@@ -278,20 +405,25 @@ pub fn import_soul_container_clone(
     }
     merged.element_count = merged.positions.len();
 
-    // --- 4. fit to the orb's bounds ---
-    let model_bytes = read(MODEL)?;
+    // --- 4. fit to the envelope's bounds (or an explicit target span) ---
+    let model_bytes = read(&target.envelope_model)?;
     let orb = morphic::model::decode(&model_bytes)
-        .map_err(|e| anyhow!("decode orb: {e}"))?
+        .map_err(|e| anyhow!("decode envelope: {e}"))?
         .position_bounds()
-        .ok_or_else(|| anyhow!("orb has no positions"))?;
+        .ok_or_else(|| anyhow!("envelope has no positions"))?;
     let orb_center = [
         midpoint(orb.min[0], orb.max[0]),
         midpoint(orb.min[1], orb.max[1]),
         midpoint(orb.min[2], orb.max[2]),
     ];
-    let orb_size = (0..3)
-        .map(|k| orb.max[k] - orb.min[k])
-        .fold(0.0_f32, f32::max);
+    // The fit span defaults to the envelope's own largest axis (right for the soul
+    // container, which is its own output). For a retargeted output (the urn) the
+    // envelope is soul-sized, so an explicit target span sets the in-game scale.
+    let orb_size = target.target_span.unwrap_or_else(|| {
+        (0..3)
+            .map(|k| orb.max[k] - orb.min[k])
+            .fold(0.0_f32, f32::max)
+    });
     let (mc, ms) = bounds_center_extent(&merged.positions);
     let scale = if ms > 0.0 { orb_size / ms } else { 1.0 };
     for p in &mut merged.positions {
@@ -329,9 +461,10 @@ pub fn import_soul_container_clone(
 
     // --- 5. swap mesh in (UNCOMPRESSED) + repoint the single draw call ---
     let (mesh_swapped, _rep) =
-        replace_mesh_part_uncompressed(&model_bytes, "soul_container", &merged, &indices)
+        replace_mesh_part_uncompressed(&model_bytes, &target.mesh_name, &merged, &indices)
             .map_err(|e| anyhow!("replacing mesh: {e}"))?;
-    let vmat_path = format!("{MAT_DIR}/{name}.vmat");
+    let mat_dir = &target.mat_dir;
+    let vmat_path = format!("{mat_dir}/{name}.vmat");
     let edited_model = set_model_material(&mesh_swapped, &vmat_path)
         .map_err(|e| anyhow!("repoint material: {e}"))?;
 
@@ -348,8 +481,8 @@ pub fn import_soul_container_clone(
             g.color,
         );
     }
-    let color_vtex = format!("{MAT_DIR}/{name}_color.vtex");
-    let color_entry = format!("{MAT_DIR}/{name}_color.vtex_c");
+    let color_vtex = format!("{mat_dir}/{name}_color.vtex");
+    let color_entry = format!("{mat_dir}/{name}_color.vtex_c");
     let color_tex = replace_mip_chain(
         &donor,
         &Image {
@@ -359,7 +492,41 @@ pub fn import_soul_container_clone(
         },
     )
     .map_err(|e| anyhow!("encoding atlas: {e}"))?;
-    let vmat = build_material(&color_vtex)?;
+
+    // --- 6b. optional g_tNormalRoughness: synthesize relief + roughness so the prop
+    //         doesn't render as a flat matte blob. Same atlas layout/resolution as the
+    //         color atlas (UVs are shared), spliced into the same BCn donor. The shader
+    //         samples this slot linearly, so the donor's sRGB-vs-linear is irrelevant. ---
+    let mut normal_vtex_entry: Option<(String, String, Vec<u8>)> = None;
+    if let Some(ns) = target.synth_normal {
+        let mut npx = vec![0u8; (atlas * atlas * 4) as usize];
+        for (gi, g) in groups.iter().enumerate() {
+            let (x0, y0, w, h) = cell_rect(gi);
+            paint_normal_cell(
+                &mut npx,
+                atlas,
+                AtlasCell::new(x0, y0, w, h),
+                g.albedo.as_ref().map(|a| &a.image),
+                ns,
+            );
+        }
+        let normal_vtex = format!("{mat_dir}/{name}_normal.vtex");
+        let normal_entry = format!("{mat_dir}/{name}_normal.vtex_c");
+        let normal_tex = replace_mip_chain(
+            &donor,
+            &Image {
+                width: atlas,
+                height: atlas,
+                data: ImageData::Rgba8(npx),
+            },
+        )
+        .map_err(|e| anyhow!("encoding normal atlas: {e}"))?;
+        normal_vtex_entry = Some((normal_vtex, normal_entry, normal_tex));
+    }
+    let vmat = build_material(
+        &color_vtex,
+        normal_vtex_entry.as_ref().map(|(v, _, _)| v.as_str()),
+    )?;
 
     // --- 7. recolor the soul-glow particles to the import's dominant hue ---
     let dom = groups.iter().max_by_key(|g| g.index_count);
@@ -392,16 +559,20 @@ pub fn import_soul_container_clone(
 
     // --- 8. pack: model + material + atlas + recolored particles ---
     let mut entries: Vec<(String, Vec<u8>)> = vec![
-        (MODEL.to_string(), edited_model),
-        (format!("{MAT_DIR}/{name}.vmat_c"), vmat),
+        (target.output_model.clone(), edited_model),
+        (format!("{mat_dir}/{name}.vmat_c"), vmat),
         (color_entry, color_tex),
     ];
+    if let Some((_, normal_entry, normal_tex)) = normal_vtex_entry {
+        entries.push((normal_entry, normal_tex));
+    }
     // SoulGlow::Off = don't ship glow particles (base game gold glow plays);
     // Base = ship unchanged (isolation); Recolor (default) = recolor to hue.
-    // PARTICLES[0] (`holding_gold_neutral_model`) is also the one carrying the
-    // orientation ops, so we still ship it (alone) when only `orient_upright` is
-    // set, even with glow off.
-    for (pi, p) in PARTICLES.iter().enumerate() {
+    // Iterate the target's own particle list, so targets with no particles
+    // (e.g. the urn) skip this entirely. The first particle
+    // (`holding_gold_neutral_model`) carries the orientation ops, so we still
+    // ship it (alone) when only `orient_upright` is set, even with glow off.
+    for (pi, p) in target.particles.iter().enumerate() {
         let is_model = pi == 0;
         if opts.glow == SoulGlow::Off && !(opts.orient_upright && is_model) {
             continue;
@@ -415,7 +586,7 @@ pub fn import_soul_container_clone(
             if opts.orient_upright && is_model {
                 bytes = orient_particle_upright(&bytes)?;
             }
-            entries.push((p.to_string(), bytes));
+            entries.push((p.clone(), bytes));
         }
     }
     let refs: Vec<(&str, &[u8])> = entries
@@ -564,10 +735,10 @@ fn bounds_center_extent(positions: &[[f32; 3]]) -> ([f32; 3], f32) {
 type Mat3 = [[f32; 3]; 3];
 type Mat4 = [[f32; 4]; 4];
 
-pub(crate) struct ImportPrimitive {
-    pub(crate) material_name: Option<String>,
-    pub(crate) vertex_buffer: VertexBuffer,
-    pub(crate) indices: Vec<u32>,
+pub struct ImportPrimitive {
+    pub material_name: Option<String>,
+    pub vertex_buffer: VertexBuffer,
+    pub indices: Vec<u32>,
 }
 
 struct Orientation {
@@ -575,7 +746,7 @@ struct Orientation {
     matrix: Mat3,
 }
 
-pub(crate) fn glb_json(glb: &[u8]) -> Result<Json> {
+pub fn glb_json(glb: &[u8]) -> Result<Json> {
     if glb.get(0..4) != Some(b"glTF") {
         return Err(anyhow!("not a binary glTF"));
     }
@@ -597,7 +768,7 @@ fn glb_bin(glb: &[u8]) -> Option<&[u8]> {
     None
 }
 
-pub(crate) fn material_index_by_name(doc: &Json) -> HashMap<String, usize> {
+pub fn material_index_by_name(doc: &Json) -> HashMap<String, usize> {
     let mut map = HashMap::new();
     if let Some(mats) = doc.get("materials").and_then(Json::as_array) {
         for (i, m) in mats.iter().enumerate() {
@@ -609,7 +780,7 @@ pub(crate) fn material_index_by_name(doc: &Json) -> HashMap<String, usize> {
     map
 }
 
-pub(crate) fn base_color_factor(doc: &Json, mat_idx: usize) -> [f64; 4] {
+pub fn base_color_factor(doc: &Json, mat_idx: usize) -> [f64; 4] {
     let mut color = [1.0; 4];
     let mat = doc
         .get("materials")
@@ -839,12 +1010,61 @@ pub(crate) fn paint_atlas_cell(
     debug_assert!(iy + ih <= cell.y + cell.h);
 }
 
+/// Paint one atlas cell of a `g_tNormalRoughness` map. The normal is a tangent-space
+/// bump derived from the (resized) albedo's luminance via a Sobel height gradient;
+/// roughness is the uniform `ns.roughness` packed into B. Deadlock `pbr.vfx` packs
+/// R,G = normal.xy (0.5 = flat), B = roughness, A = 1. Cells without an albedo image
+/// (flat-color groups) get a flat normal at the target roughness.
+///
+/// Mirrors [`paint_atlas_cell`]'s resize + gutter footprint so the normal aligns
+/// texel-for-texel with the color atlas under the shared UVs.
+pub(crate) fn paint_normal_cell(
+    px: &mut [u8],
+    atlas: u32,
+    cell: AtlasCell,
+    image: Option<&image::RgbaImage>,
+    ns: NormalSynthesis,
+) {
+    let rough = (ns.roughness.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let flat = [128u8, 128, rough, 255];
+    let (_, _, iw, ih) = cell.inner();
+    let Some(img) = image else {
+        for yy in 0..cell.h {
+            for xx in 0..cell.w {
+                write_atlas_pixel(px, atlas, cell.x + xx, cell.y + yy, flat);
+            }
+        }
+        return;
+    };
+    let resized = image::imageops::resize(img, iw, ih, image::imageops::FilterType::Lanczos3);
+    // Luminance height field over the resized cell image.
+    let lum = |x: u32, y: u32| -> f32 {
+        let p = resized.get_pixel(x.min(iw - 1), y.min(ih - 1)).0;
+        (0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2])) / 255.0
+    };
+    for yy in 0..cell.h {
+        let sy = yy.saturating_sub(cell.gutter).min(ih - 1);
+        for xx in 0..cell.w {
+            let sx = xx.saturating_sub(cell.gutter).min(iw - 1);
+            // Central differences (clamped at edges) -> tangent-space normal.
+            let dx = lum(sx + 1, sy) - lum(sx.saturating_sub(1), sy);
+            let dy = lum(sx, sy + 1) - lum(sx, sy.saturating_sub(1));
+            let nx = -dx * ns.strength;
+            let ny = -dy * ns.strength;
+            let inv = 1.0 / (nx * nx + ny * ny + 1.0).sqrt();
+            let r = ((nx * inv * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            let g = ((ny * inv * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            write_atlas_pixel(px, atlas, cell.x + xx, cell.y + yy, [r, g, rough, 255]);
+        }
+    }
+}
+
 fn write_atlas_pixel(px: &mut [u8], atlas: u32, x: u32, y: u32, rgba: [u8; 4]) {
     let o = ((y * atlas + x) * 4) as usize;
     px[o..o + 4].copy_from_slice(&rgba);
 }
 
-pub(crate) fn read_glb_primitives(
+pub fn read_glb_primitives(
     glb: &[u8],
     orient: SoulOrient,
     rotate: Option<[f32; 3]>,
@@ -1174,9 +1394,10 @@ fn texture_pvalue_path(mat: &Kv3, slot: &str) -> Option<Vec<Seg>> {
     ])
 }
 
-/// Clean material = donor copy, `g_tColor` -> our atlas, prop-local normal -> flat
-/// default. Byte-faithful blob-aware string add (no re-encode).
-pub(crate) fn build_material(color_vtex: &str) -> Result<Vec<u8>> {
+/// Clean material = donor copy, `g_tColor` -> our atlas. `g_tNormalRoughness` is
+/// repointed to `normal_vtex` when given (a synthesized relief+roughness map), else
+/// reset to the flat default. Byte-faithful blob-aware string add (no re-encode).
+pub(crate) fn build_material(color_vtex: &str, normal_vtex: Option<&str>) -> Result<Vec<u8>> {
     let vmat =
         morphic::decode_kv3_resource(DONOR_VMAT).map_err(|e| anyhow!("decoding donor: {e}"))?;
     let mut edits: Vec<(Vec<Seg>, String)> = Vec::new();
@@ -1184,7 +1405,11 @@ pub(crate) fn build_material(color_vtex: &str) -> Result<Vec<u8>> {
         texture_pvalue_path(&vmat, "g_tColor").ok_or_else(|| anyhow!("donor has no g_tColor"))?;
     edits.push((color_path, color_vtex.to_string()));
     if let Some(p) = texture_pvalue_path(&vmat, "g_tNormalRoughness") {
-        if texture_param(&vmat, "g_tNormalRoughness")
+        // With a synthesized normal, always repoint to it. Otherwise only overwrite a
+        // prop-local donor normal with the flat default (a default path is left as-is).
+        if let Some(nv) = normal_vtex {
+            edits.push((p, nv.to_string()));
+        } else if texture_param(&vmat, "g_tNormalRoughness")
             .is_some_and(|p| !p.starts_with("materials/default/"))
         {
             edits.push((p, DEFAULT_NORMAL.to_string()));
@@ -1195,6 +1420,11 @@ pub(crate) fn build_material(color_vtex: &str) -> Result<Vec<u8>> {
     let check = morphic::decode_kv3_resource(&patched).map_err(|e| anyhow!("re-decode: {e}"))?;
     if texture_param(&check, "g_tColor").as_deref() != Some(color_vtex) {
         return Err(anyhow!("g_tColor repoint did not take"));
+    }
+    if let Some(nv) = normal_vtex {
+        if texture_param(&check, "g_tNormalRoughness").as_deref() != Some(nv) {
+            return Err(anyhow!("g_tNormalRoughness repoint did not take"));
+        }
     }
     Ok(patched)
 }
@@ -1211,6 +1441,54 @@ struct Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normal_cell_packs_roughness_in_blue_and_flat_normal_without_image() {
+        // Deadlock pbr.vfx g_tNormalRoughness: R,G = normal.xy (128 = flat),
+        // B = roughness, A = 255. A flat-color group (no image) must emit a flat
+        // normal at the target roughness across the whole cell.
+        let atlas = 8u32;
+        let mut px = vec![0u8; (atlas * atlas * 4) as usize];
+        let ns = NormalSynthesis {
+            strength: 1.0,
+            roughness: 0.5,
+        };
+        paint_normal_cell(&mut px, atlas, AtlasCell::new(0, 0, 8, 8), None, ns);
+        for p in px.chunks_exact(4) {
+            assert_eq!(p, [128, 128, 128, 255]); // 0.5 roughness -> B = 128
+        }
+    }
+
+    #[test]
+    fn normal_cell_emits_relief_from_image_contrast() {
+        // A cell with a hard light/dark luminance edge must produce normals that
+        // deviate from flat (128) at the edge, while roughness stays pinned in B.
+        let atlas = 16u32;
+        let mut img = image::RgbaImage::new(16, 16);
+        for (x, _y, p) in img.enumerate_pixels_mut() {
+            let v = if x < 8 { 0 } else { 255 };
+            *p = image::Rgba([v, v, v, 255]);
+        }
+        let mut px = vec![0u8; (atlas * atlas * 4) as usize];
+        let ns = NormalSynthesis {
+            strength: 4.0,
+            roughness: 0.25,
+        };
+        paint_normal_cell(&mut px, atlas, AtlasCell::new(0, 0, 16, 16), Some(&img), ns);
+        let rough = (0.25 * 255.0_f32).round() as u8;
+        let mut saw_relief = false;
+        for p in px.chunks_exact(4) {
+            assert_eq!(p[2], rough, "roughness must be pinned in B");
+            assert_eq!(p[3], 255);
+            if p[0] != 128 || p[1] != 128 {
+                saw_relief = true;
+            }
+        }
+        assert!(
+            saw_relief,
+            "a luminance edge should bend the normal off flat"
+        );
+    }
 
     #[test]
     fn atlas_uv_repeat_and_clamp_follow_gltf_sampler_modes() {

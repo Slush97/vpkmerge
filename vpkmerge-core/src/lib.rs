@@ -84,7 +84,8 @@ pub use soul_container::{
 
 pub mod soul_import_clone;
 pub use soul_import_clone::{
-    import_soul_container_clone, SoulGlow, SoulImportCloneOptions, SoulImportReport, SoulOrient,
+    import_clone, import_soul_container_clone, soul_target, urn_target, CloneTarget,
+    NormalSynthesis, SoulGlow, SoulImportCloneOptions, SoulImportReport, SoulOrient,
 };
 
 #[derive(Debug, Clone)]

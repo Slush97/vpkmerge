@@ -84,11 +84,16 @@ pub fn bake_pose_named<S: std::hash::BuildHasher>(
         .skeleton
         .bones
         .iter()
-        .map(|b| match pose_by_name.get(&b.name) {
-            Some(lp) => Mat4::from_scale(lp.scale)
-                .mul(&Mat4::from_quaternion(lp.rotation))
-                .mul(&Mat4::from_translation(lp.translation)),
-            None => b.local_bind,
+        .map(|b| {
+            if is_secondary_motion_bone(&b.name) {
+                return b.local_bind;
+            }
+            match pose_by_name.get(&b.name) {
+                Some(lp) => Mat4::from_scale(lp.scale)
+                    .mul(&Mat4::from_quaternion(lp.rotation))
+                    .mul(&Mat4::from_translation(lp.translation)),
+                None => b.local_bind,
+            }
         })
         .collect::<Vec<_>>();
     let palette = finish_palette(&model.skeleton, &posed_local);
@@ -125,7 +130,13 @@ fn self_palette(model: &Model, clips: &[&str], frame: usize) -> Option<Vec<Mat4>
     let posed_local = bones
         .iter()
         .enumerate()
-        .map(|(i, b)| posed_local(b, track_for[i], f))
+        .map(|(i, b)| {
+            if is_secondary_motion_bone(&b.name) {
+                b.local_bind
+            } else {
+                posed_local(b, track_for[i], f)
+            }
+        })
         .collect::<Vec<_>>();
     Some(finish_palette(&model.skeleton, &posed_local))
 }
@@ -147,9 +158,39 @@ fn donor_palette(model: &Model, donor: &Model, clips: &[&str], frame: usize) -> 
         .skeleton
         .bones
         .iter()
-        .map(|b| posed_local(b, by_name.get(b.name.as_str()).copied(), f))
+        .map(|b| {
+            if is_secondary_motion_bone(&b.name) {
+                b.local_bind
+            } else {
+                posed_local(b, by_name.get(b.name.as_str()).copied(), f)
+            }
+        })
         .collect::<Vec<_>>();
     Some(finish_palette(&model.skeleton, &posed_local))
+}
+
+/// Bones whose final render pose is normally resolved by Source 2 secondary
+/// motion / cloth rather than by treating the animation track as an ordinary
+/// authored bone pose. For static preview GLBs there is no PHYS solver, so using
+/// these tracks literally can freeze fabric mid-sim and detach coat tails,
+/// skirts, or ribbons from the posed body. Keeping their local bind transform
+/// lets the already-posed parent bone carry the chain while preserving the
+/// authored resting shape.
+fn is_secondary_motion_bone(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("$cloth")
+        || lower.starts_with("cloth")
+        || lower.starts_with("tail_")
+        || lower == "tail"
+        || lower == "tail_end"
+        || lower.starts_with("coattail")
+        || lower.starts_with("coat_tail")
+        || lower.contains("skirt")
+        || lower.contains("cape")
+        || lower.contains("scarf")
+        || lower.contains("tassel")
+        || lower.starts_with("flap")
+        || lower.starts_with("ribbon")
 }
 
 /// First clip whose name matches a candidate (case-insensitive, in priority order).

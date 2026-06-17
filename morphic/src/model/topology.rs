@@ -774,6 +774,30 @@ pub fn replace_mesh_group(
     selections: &[PrimitiveSelection],
     donor_primitives: &[EditedPrimitive],
 ) -> Result<(Vec<u8>, ReplacedMeshGroup), DecodeError> {
+    replace_mesh_group_impl(vmdl_bytes, selections, donor_primitives, true)
+}
+
+/// Like [`replace_mesh_group`], but writes each rebuilt part's vertex/index
+/// buffers **uncompressed** and flips their `m_bMeshoptCompressed` flags to false
+/// (the engine-loadable path). [`replace_mesh_group`] re-emits morphic's meshopt
+/// codec v1, which Deadlock's decoder garbles; use this when the multi-draw-call
+/// part must run in game (e.g. attaching geometry to a hero's skeleton). Same
+/// flag-flip discipline as [`replace_mesh_part_uncompressed`], extended to a part
+/// that has one vertex/index buffer but several draw calls.
+pub fn replace_mesh_group_uncompressed(
+    vmdl_bytes: &[u8],
+    selections: &[PrimitiveSelection],
+    donor_primitives: &[EditedPrimitive],
+) -> Result<(Vec<u8>, ReplacedMeshGroup), DecodeError> {
+    replace_mesh_group_impl(vmdl_bytes, selections, donor_primitives, false)
+}
+
+fn replace_mesh_group_impl(
+    vmdl_bytes: &[u8],
+    selections: &[PrimitiveSelection],
+    donor_primitives: &[EditedPrimitive],
+    compressed: bool,
+) -> Result<(Vec<u8>, ReplacedMeshGroup), DecodeError> {
     if selections.is_empty() {
         return Err(DecodeError::Model(
             "replace group matched no target draw calls",
@@ -796,8 +820,13 @@ pub fn replace_mesh_group(
     let mut replaced_parts = Vec::new();
     let mut replaced_draw_calls = 0usize;
     for (mesh_index, primitive_indices) in by_mesh {
-        let (next, replaced) =
-            replace_mesh_group_part(&bytes, mesh_index, &primitive_indices, donor_primitives)?;
+        let (next, replaced) = replace_mesh_group_part(
+            &bytes,
+            mesh_index,
+            &primitive_indices,
+            donor_primitives,
+            compressed,
+        )?;
         replaced_draw_calls += primitive_indices.len();
         replaced_parts.push(replaced);
         bytes = next;
@@ -818,6 +847,7 @@ fn replace_mesh_group_part(
     mesh_index: usize,
     selected_primitives: &std::collections::BTreeSet<usize>,
     donor_primitives: &[EditedPrimitive],
+    compressed: bool,
 ) -> Result<(Vec<u8>, ReplacedMeshPart), DecodeError> {
     let (resource, embedded) = parse_embedded(vmdl_bytes)?;
     let mesh_pos = embedded
@@ -919,14 +949,46 @@ fn replace_mesh_group_part(
     }
 
     let mut swaps: Vec<(usize, Vec<u8>)> = Vec::with_capacity(4);
-    if !ctrl_edits.is_empty() {
-        swaps.push((ctrl_idx, kv3::set_scalars(ctrl_bytes, &ctrl_edits)?));
+    // CTRL carries the scalar count/stride edits and, for the uncompressed path,
+    // the two m_bMeshoptCompressed flag flips. Both land on the same CTRL block,
+    // so apply scalars then bools to one working copy (mirrors
+    // replace_mesh_part_impl's uncompressed wedge).
+    let mut new_ctrl: Option<Vec<u8>> = if ctrl_edits.is_empty() {
+        None
+    } else {
+        Some(kv3::set_scalars(ctrl_bytes, &ctrl_edits)?)
+    };
+    if !compressed {
+        let base = new_ctrl.as_deref().unwrap_or(ctrl_bytes);
+        let vb_flag = vec![
+            seg("embedded_meshes"),
+            Seg::Index(mesh_pos),
+            seg("m_vertexBuffers"),
+            Seg::Index(0),
+            seg("m_bMeshoptCompressed"),
+        ];
+        let ib_flag = vec![
+            seg("embedded_meshes"),
+            Seg::Index(mesh_pos),
+            seg("m_indexBuffers"),
+            Seg::Index(0),
+            seg("m_bMeshoptCompressed"),
+        ];
+        new_ctrl = Some(kv3::set_bools(base, &[(vb_flag, false), (ib_flag, false)])?);
+    }
+    if let Some(ctrl) = new_ctrl {
+        swaps.push((ctrl_idx, ctrl));
     }
     if !mdat_edits.is_empty() {
         swaps.push((em.data_block, kv3::set_scalars(mdat_bytes, &mdat_edits)?));
     }
-    swaps.push((vb_desc.block_index, enc.mvtx));
-    swaps.push((ib_desc.block_index, enc.midx));
+    let (vtx_payload, idx_payload) = if compressed {
+        (enc.mvtx, enc.midx)
+    } else {
+        (enc.mvtx_raw, enc.midx_raw)
+    };
+    swaps.push((vb_desc.block_index, vtx_payload));
+    swaps.push((ib_desc.block_index, idx_payload));
 
     let mut bytes = vmdl_bytes.to_vec();
     for (idx, payload) in swaps {
@@ -951,6 +1013,199 @@ fn replace_mesh_group_part(
             index_size: enc.index_size,
         },
     ))
+}
+
+/// Appends an independently-materialed draw call to an existing mesh part: welds
+/// `new_mesh` (skinned, with `JOINTS_0` in MODEL skeleton-bone space) into the
+/// part's shared vertex/index buffers and registers one extra draw call rendering
+/// `material` over the welded range. This is the engine-loadable *additive insert*
+/// (raw buffers, `m_bMeshoptCompressed=false`), the primitive behind hero
+/// cosmetics: e.g. a hat skinned 100% to the head bone with its own texture,
+/// distinct from the head's face material. The whole part buffer is re-encoded
+/// (existing primitives + the hat), matching the soul/box-proven path, rather than
+/// splicing raw meshopt bytes (which the engine rejects).
+///
+/// The part must have exactly one vertex buffer and one index buffer (several
+/// draw calls over them are fine, unlike the single-wedge
+/// [`replace_mesh_part_uncompressed`]). The welded vertices keep the existing
+/// index width, so the post-weld vertex count must still fit it (16-bit buffers
+/// cap at 65535). Mirrors [`set_draw_call_groups`]'s byte-faithful draw-call
+/// growth (clone a template draw call, BAKE the range + material into the clone
+/// so its tagless-0 fields gain real data lanes, then [`kv3::insert_array_element_adding`]),
+/// plus the uncompressed flag-flip discipline of [`replace_mesh_part_uncompressed`].
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
+pub fn append_skinned_draw_call(
+    vmdl_bytes: &[u8],
+    part_name: &str,
+    new_mesh: &VertexBuffer,
+    indices: &[u32],
+    material: &str,
+) -> Result<Vec<u8>, DecodeError> {
+    let (resource, embedded) = parse_embedded(vmdl_bytes)?;
+    let mesh_pos = embedded
+        .iter()
+        .position(|em| em.name == part_name)
+        .ok_or(DecodeError::Model("no embedded mesh part with that name"))?;
+    let em = &embedded[mesh_pos];
+    if em.vertex_buffers.len() != 1 || em.index_buffers.len() != 1 {
+        return Err(DecodeError::Model(
+            "append-draw-call needs a part with exactly one vertex buffer and one index buffer",
+        ));
+    }
+    let vb_desc = &em.vertex_buffers[0];
+    let ib_desc = &em.index_buffers[0];
+
+    // Re-encode the WHOLE part buffer (every existing primitive + the hat) the way
+    // the soul/box-proven path does, rather than splicing raw meshopt bytes onto
+    // the decoded buffer: morphic's meshopt decode is not guaranteed byte-faithful
+    // to the on-disk uncompressed layout, and a mismatched buffer makes the engine
+    // reject the model outright.
+    let data = kv3::decode(resource.data_block()?)?;
+    let remap = skeleton::remap_table(&data, em.mesh_index);
+    let part = mesh::assemble(em, &resource, remap.as_deref())?;
+
+    let mut sources = Vec::with_capacity(part.primitives.len() + 1);
+    for prim in &part.primitives {
+        let vb = part
+            .vertex_buffers
+            .get(prim.vertex_buffer)
+            .ok_or(DecodeError::Model("primitive vertex buffer out of range"))?
+            .clone();
+        sources.push(PrimitiveSource {
+            vb,
+            indices: prim.indices.clone(),
+        });
+    }
+    sources.push(PrimitiveSource {
+        vb: new_mesh.clone(),
+        indices: indices.to_vec(),
+    });
+
+    let (combined, all_indices, ranges) = combine_primitive_sources(&sources)?;
+    let mut localv = combined;
+    if !localv.joints.is_empty() {
+        let table = remap.as_deref().ok_or(DecodeError::Model(
+            "appended mesh is skinned but the target part has no bone remap table",
+        ))?;
+        let weights =
+            (localv.weights.len() == localv.element_count).then_some(localv.weights.as_slice());
+        localv.joints = skeleton::localize_joints(&localv.joints, weights, table)?;
+    }
+
+    let enc = build_mesh_buffers_to_layout(&localv, &all_indices, &vb_desc.fields)?;
+
+    // CTRL: element counts/stride + flip both meshopt flags off (raw payload).
+    let ctrl_idx = resource
+        .blocks()
+        .iter()
+        .position(|b| &b.kind == b"CTRL")
+        .ok_or(DecodeError::Model("model has no CTRL block"))?;
+    let ctrl_bytes = resource
+        .find_block(*b"CTRL")
+        .ok_or(DecodeError::Model("model has no CTRL block"))?;
+    let ctrl_edits = ctrl_edits_for(mesh_pos, vb_desc, ib_desc, &enc)?;
+    let ctrl_after_scalars = if ctrl_edits.is_empty() {
+        ctrl_bytes.to_vec()
+    } else {
+        kv3::set_scalars(ctrl_bytes, &ctrl_edits)?
+    };
+    let vb_flag = vec![
+        seg("embedded_meshes"),
+        Seg::Index(mesh_pos),
+        seg("m_vertexBuffers"),
+        Seg::Index(0),
+        seg("m_bMeshoptCompressed"),
+    ];
+    let ib_flag = vec![
+        seg("embedded_meshes"),
+        Seg::Index(mesh_pos),
+        seg("m_indexBuffers"),
+        Seg::Index(0),
+        seg("m_bMeshoptCompressed"),
+    ];
+    let ctrl = kv3::set_bools(&ctrl_after_scalars, &[(vb_flag, false), (ib_flag, false)])?;
+
+    // MDAT: re-range every existing draw call against the rebuilt buffer, then
+    // insert one new draw call for the hat (the last combined primitive).
+    let mdat_bytes = resource
+        .get_block_by_index(em.data_block)
+        .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+    let mdat = kv3::decode(mdat_bytes)?;
+    let draw_calls = locate_draw_calls(&mdat)?;
+    if draw_calls.len() != part.primitives.len() {
+        return Err(DecodeError::Model(
+            "decoded primitive count does not match MDAT draw-call count",
+        ));
+    }
+    let mut mdat_edits = Vec::new();
+    for (i, (so_idx, dc_idx, draw_call)) in draw_calls.iter().enumerate() {
+        let r = ranges
+            .get(i)
+            .ok_or(DecodeError::Model("missing rebuilt primitive range"))?;
+        mdat_edits.extend(mdat_edits_for_range(
+            *so_idx,
+            *dc_idx,
+            draw_call,
+            enc.vertex_count,
+            r.index_count,
+            r.start_index,
+            0,
+        )?);
+    }
+    let mdat_ranged = if mdat_edits.is_empty() {
+        mdat_bytes.to_vec()
+    } else {
+        kv3::set_scalars(mdat_bytes, &mdat_edits)?
+    };
+
+    let hat_range = ranges
+        .last()
+        .ok_or(DecodeError::Model("no rebuilt hat range"))?;
+    let (so_idx, _, template) = draw_calls
+        .first()
+        .ok_or(DecodeError::Model("part has no draw call to clone"))?;
+    let so_idx = *so_idx;
+    let mut clone = (*template).clone();
+    let mat_key = if clone.get("m_material").is_some() {
+        "m_material"
+    } else if clone.get("m_pMaterial").is_some() {
+        "m_pMaterial"
+    } else {
+        return Err(DecodeError::Model("draw call has no material field"));
+    };
+    let group = DrawCallGroup {
+        material: material.to_string(),
+        start_index: hat_range.start_index,
+        index_count: hat_range.index_count,
+        vertex_start: 0,
+        vertex_end: enc.vertex_count,
+    };
+    bake_draw_call(&mut clone, &group, mat_key);
+    let dcs_path = vec![
+        seg("m_sceneObjects"),
+        Seg::Index(so_idx),
+        seg("m_drawCalls"),
+    ];
+    let mdat_new =
+        kv3::insert_array_element_adding(&mdat_ranged, &dcs_path, part.primitives.len(), &clone)?;
+
+    // Splice every changed block. Block order/count is preserved, so block
+    // indices stay valid across each rebuild.
+    let mut bytes = vmdl_bytes.to_vec();
+    for (idx, payload) in [
+        (ctrl_idx, ctrl),
+        (em.data_block, mdat_new),
+        (vb_desc.block_index, enc.mvtx_raw),
+        (ib_desc.block_index, enc.midx_raw),
+    ] {
+        let res = Resource::parse(&bytes)?;
+        bytes = res.rebuild_with_block(idx, &payload)?;
+    }
+    Ok(bytes)
 }
 
 struct PrimitiveSource {

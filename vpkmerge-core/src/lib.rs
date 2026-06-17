@@ -87,6 +87,8 @@ pub use soul_import_clone::{
     import_clone, import_soul_container_clone, soul_target, urn_target, CloneTarget,
     NormalSynthesis, SoulGlow, SoulImportCloneOptions, SoulImportReport, SoulOrient,
 };
+pub mod hat_import;
+pub use hat_import::{import_hero_hat, HatImportOptions, HatImportReport};
 
 #[derive(Debug, Clone)]
 pub struct ModInfo {

@@ -52,10 +52,11 @@ pub use nm::{
 pub use pose::{bake_pose, bake_pose_from, bake_pose_named, LocalPose};
 pub use skeleton::{invert_remap, localize_joints, remap_table, Bone, Skeleton};
 pub use topology::{
-    draw_call_targets, reencode_all_mdat_identity, remove_draw_calls_by_material,
-    replace_mesh_group, replace_mesh_part, replace_mesh_part_uncompressed, set_draw_call_groups,
-    set_model_material, DrawCallGroup, DrawCallInfo, PrimitiveSelection, RemovedDrawCall,
-    ReplacedMeshGroup, ReplacedMeshPart,
+    append_skinned_draw_call, draw_call_targets, reencode_all_mdat_identity,
+    remove_draw_calls_by_material, replace_mesh_group, replace_mesh_group_uncompressed,
+    replace_mesh_part, replace_mesh_part_uncompressed, set_draw_call_groups, set_model_material,
+    DrawCallGroup, DrawCallInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup,
+    ReplacedMeshPart,
 };
 pub use uvmask::{
     atlas_png, mask_png, segment_color, segment_coverage, segments, Segment, SegmentBy,

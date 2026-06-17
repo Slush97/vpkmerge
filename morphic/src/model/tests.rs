@@ -933,6 +933,10 @@ mod pose_bake {
     }
 
     fn skinned_vertex(pos: [f32; 3]) -> VertexBuffer {
+        skinned_vertex_on_joint(pos, 0)
+    }
+
+    fn skinned_vertex_on_joint(pos: [f32; 3], joint: u16) -> VertexBuffer {
         VertexBuffer {
             element_count: 1,
             stride: 0,
@@ -941,7 +945,7 @@ mod pose_bake {
             tangents: vec![],
             texcoords: vec![],
             colors: vec![],
-            joints: vec![[0, 0, 0, 0]],
+            joints: vec![[joint, 0, 0, 0]],
             weights: vec![[1.0, 0.0, 0.0, 0.0]],
             layout: vec![],
         }
@@ -977,6 +981,44 @@ mod pose_bake {
                 rotations: Some(vec![ID]),
                 scales: None,
             }],
+        }
+    }
+
+    fn child_bone(name: &str, parent: usize, position: Vec3) -> Bone {
+        let local_bind = Mat4::from_translation(position);
+        let inverse_bind = local_bind.invert().expect("child bind inverse");
+        Bone {
+            name: name.into(),
+            parent: Some(parent),
+            flags: 0,
+            position,
+            rotation: ID,
+            local_bind,
+            global_bind: local_bind,
+            inverse_bind,
+        }
+    }
+
+    fn two_bone_clip(name: &str, root_t: Vec3, child_t: Vec3) -> Clip {
+        Clip {
+            name: name.into(),
+            fps: 30.0,
+            frame_count: 1,
+            looping: false,
+            tracks: vec![
+                BoneTrack {
+                    bone: 0,
+                    translations: Some(vec![root_t]),
+                    rotations: Some(vec![ID]),
+                    scales: None,
+                },
+                BoneTrack {
+                    bone: 1,
+                    translations: Some(vec![child_t]),
+                    rotations: Some(vec![ID]),
+                    scales: None,
+                },
+            ],
         }
     }
 
@@ -1026,6 +1068,45 @@ mod pose_bake {
         approx(
             baked.meshes[0].vertex_buffers[0].positions[0],
             [11.0, 2.0, 3.0],
+        );
+    }
+
+    #[test]
+    fn secondary_motion_bones_keep_bind_local_under_posed_parent() {
+        let root = root_bone();
+        let tail = child_bone(
+            "tail_0",
+            0,
+            Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        let model = Model {
+            skeleton: Skeleton {
+                bones: vec![root, tail],
+            },
+            meshes: vec![one_part(skinned_vertex_on_joint([1.0, 0.0, 0.0], 1))],
+            animations: vec![two_bone_clip(
+                "ui_hero_pose",
+                Vec3 {
+                    x: 10.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                Vec3 {
+                    x: 100.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            )],
+        };
+
+        let baked = bake_pose(&model, &["ui_hero_pose"], 0);
+        approx(
+            baked.meshes[0].vertex_buffers[0].positions[0],
+            [11.0, 0.0, 0.0],
         );
     }
 

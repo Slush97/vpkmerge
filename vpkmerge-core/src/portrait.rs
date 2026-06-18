@@ -36,6 +36,13 @@ pub enum PortraitVariant {
     CardGloat,
     /// Tall vertical portrait (`_vertical`).
     Vertical,
+    /// Full hero-select scene background (`_bg`), under the `backgrounds/`
+    /// subfolder. Unlike the card variants this carries no character art, so it
+    /// is the natural clean backdrop for a composited 3D render. Note its
+    /// codename namespace diverges from the card art (e.g. Paige's card is
+    /// `bookworm` but her background is `patience`; Abrams card `atlas` vs bg
+    /// `abrams`).
+    Background,
     /// Under the portrait prefix but an unrecognized suffix.
     Other,
 }
@@ -50,6 +57,7 @@ impl PortraitVariant {
             Self::CardCritical => "card_critical",
             Self::CardGloat => "card_gloat",
             Self::Vertical => "vertical",
+            Self::Background => "background",
             Self::Other => "other",
         }
     }
@@ -93,6 +101,9 @@ fn parse_variant_codename(source_path: &str) -> (String, PortraitVariant) {
         ("_vertical", PortraitVariant::Vertical),
         ("_mm", PortraitVariant::Minimap),
         ("_sm", PortraitVariant::Small),
+        // `_bg` (hero-select backgrounds, under `backgrounds/`). Checked after
+        // the card suffixes; its codename namespace differs from the card art.
+        ("_bg", PortraitVariant::Background),
     ];
     for (suffix, variant) in candidates {
         if let Some(codename) = stem.strip_suffix(suffix) {
@@ -245,6 +256,14 @@ mod tests {
                 "panorama/images/heroes/hornet_sm_png.vtex_c",
                 "hornet",
                 PortraitVariant::Small,
+            ),
+            // Background lives under `backgrounds/` with a divergent codename
+            // (Paige card `bookworm` vs background `patience`) and must parse to
+            // the bare codename so `--hero patience` matches it.
+            (
+                "panorama/images/heroes/backgrounds/patience_bg_psd.vtex_c",
+                "patience",
+                PortraitVariant::Background,
             ),
         ];
         for (path, codename, variant) in cases {

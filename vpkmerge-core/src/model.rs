@@ -207,6 +207,16 @@ fn export_resolved(
                 );
             }
         }
+        if let Some(pose_source) = if has_own_clip {
+            Some(&model)
+        } else if donor_has_clip {
+            donor.as_ref()
+        } else {
+            None
+        } {
+            emit_secondary_motion_pose_warning(entry, &model, pose_source, &candidates);
+        }
+
         model = if has_own_clip {
             morphic::model::bake_pose(&model, &candidates, pose.frame)
         } else if let Some(nm) = nm_posed {
@@ -230,6 +240,166 @@ fn export_resolved(
     }
     std::fs::write(out, &glb).with_context(|| format!("writing {}", out.display()))?;
     Ok(())
+}
+
+fn emit_secondary_motion_pose_warning(
+    entry: &str,
+    model: &morphic::model::Model,
+    pose_source: &morphic::model::Model,
+    candidates: &[&str],
+) {
+    let Some(report) = morphic::model::secondary_motion_pose_report(model, pose_source, candidates)
+    else {
+        return;
+    };
+    if report.vertices_majority_root_secondary == 0 && report.animated_secondary_bone_count > 0 {
+        return;
+    }
+
+    eprintln!(
+        "warning: {entry} pose `{}` has unresolved secondary-motion geometry: {} vertices use cloth/hair-style bones ({} majority; {} root-secondary majority), while the clip animates {}/{} secondary bones",
+        report.clip_name,
+        report.vertices_with_secondary,
+        report.vertices_majority_secondary,
+        report.vertices_majority_root_secondary,
+        report.animated_secondary_bone_count,
+        report.secondary_bone_count,
+    );
+    for mat in report.materials.iter().take(3) {
+        eprintln!(
+            "  affected material: {} ({} skinned verts, {} secondary, {} root-secondary majority)",
+            mat.material,
+            mat.skinned_vertices,
+            mat.vertices_with_secondary,
+            mat.vertices_majority_root_secondary,
+        );
+    }
+    if !report.top_bones.is_empty() {
+        let bones = report
+            .top_bones
+            .iter()
+            .take(5)
+            .map(|b| {
+                if b.is_root {
+                    format!("{}:{:.1} root", b.bone, b.weight_sum)
+                } else {
+                    format!("{}:{:.1}", b.bone, b.weight_sum)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("  top secondary influences: {bones}");
+    }
+}
+
+/// One enumerated animation clip, the fields a pose/snapshot authoring UI needs
+/// to bound a frame slider, show a clip's length, and preselect a default. The
+/// [`ClipSummary::name`] is usable verbatim as `model export --pose <name>` /
+/// `--clip <name>`.
+#[derive(Debug, Clone)]
+pub struct ClipSummary {
+    /// Clip name, usable directly in `--pose <name>` / `--clip <name>`.
+    pub name: String,
+    /// Number of keyframes (the upper bound for `--pose name@N`).
+    pub frame_count: usize,
+    /// Playback rate.
+    pub fps: f32,
+    /// Wall-clock length: `(frame_count - 1) / fps` (frame 0 at t=0), or `0.0`
+    /// for a single-frame or rateless clip.
+    pub duration_seconds: f32,
+    /// Whether the engine loops this clip.
+    pub looping: bool,
+    /// True for the clip a bare `--pose` would bake (the first
+    /// [`DEFAULT_POSE_CLIPS`] candidate this model carries). At most one clip in
+    /// the list is flagged; none is when the model carries no candidate pose.
+    pub default: bool,
+}
+
+/// Enumerate the animation clips a model carries at an explicit VPK `entry`, for
+/// pose/clip discovery (the read-only companion to [`export_model`]'s
+/// `--pose`/`--clip`). Resolution mirrors export: `vpk` first, then `base`. A
+/// clipless mesh skin (ships the rig but no clips) falls back to the base-pak
+/// donor's clips at the same entry. WIP heroes (`models/heroes_wip/...`) embed no
+/// clips and have a clipless donor, so they return an empty vec (`Ok(vec![])`,
+/// not an error) - the same models `--pose --require-pose` bails on.
+pub fn model_clips(
+    vpk: impl AsRef<Path>,
+    entry: &str,
+    base: Option<&Path>,
+) -> Result<Vec<ClipSummary>> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    if read_entry(&vpks, entry).is_none() {
+        anyhow::bail!("model entry {entry} not found in the given VPK(s)");
+    }
+    clips_resolved(&vpks, entry)
+}
+
+/// Like [`model_clips`] but discovers the hero's body model by `codename` instead
+/// of an explicit entry path (same discovery as [`export_hero_model`]).
+pub fn hero_model_clips(
+    vpk: impl AsRef<Path>,
+    codename: &str,
+    base: Option<&Path>,
+) -> Result<Vec<ClipSummary>> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    let entry = discover_hero_entry(&vpks, codename).with_context(|| {
+        format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
+    })?;
+    clips_resolved(&vpks, &entry)
+}
+
+/// Decodes `entry` and summarizes its clips, falling back to the base-pak donor
+/// at the same entry when the primary resolution is a clipless mesh skin. Mirrors
+/// the donor sourcing in [`export_resolved`]'s pose path.
+fn clips_resolved(vpks: &[valve_pak::VPK], entry: &str) -> Result<Vec<ClipSummary>> {
+    let bytes =
+        read_entry(vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
+    let model = morphic::model::decode(&bytes).with_context(|| format!("decoding {entry}"))?;
+    let mut anims = model.animations;
+    // Clipless mesh skin: the rig is here but the clips live in the base pak at
+    // the same entry (vpks after the first). Decode the donor only when needed.
+    if anims.is_empty() {
+        if let Some(donor_bytes) = read_entry(&vpks[1..], entry) {
+            anims = morphic::model::decode(&donor_bytes)
+                .with_context(|| format!("decoding base clips for {entry}"))?
+                .animations;
+        }
+    }
+    Ok(summarize_clips(&anims))
+}
+
+/// Projects decoded clips to [`ClipSummary`]s, flagging the default pose and
+/// sorting by name for a stable, UI-friendly order.
+#[allow(clippy::cast_precision_loss)] // frame counts are tiny (hundreds at most)
+fn summarize_clips(anims: &[morphic::model::Clip]) -> Vec<ClipSummary> {
+    // The bare-`--pose` winner: first DEFAULT_POSE_CLIPS candidate the model
+    // carries (case-insensitive), matching export's resolution.
+    let default_name = DEFAULT_POSE_CLIPS.iter().find_map(|cand| {
+        anims
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(cand))
+            .map(|a| a.name.clone())
+    });
+    let mut out: Vec<ClipSummary> = anims
+        .iter()
+        .map(|c| {
+            let duration = if c.fps > 0.0 && c.frame_count > 1 {
+                (c.frame_count - 1) as f32 / c.fps
+            } else {
+                0.0
+            };
+            ClipSummary {
+                name: c.name.clone(),
+                frame_count: c.frame_count,
+                fps: c.fps,
+                duration_seconds: duration,
+                looping: c.looping,
+                default: default_name.as_deref() == Some(c.name.as_str()),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Highest `_vN` suffix across a path's segments (`inferno_v4` -> 4,
@@ -1433,6 +1603,49 @@ mod tests {
     #![allow(clippy::float_cmp)]
 
     use super::*;
+
+    fn clip(name: &str, fps: f32, frame_count: usize, looping: bool) -> morphic::model::Clip {
+        morphic::model::Clip {
+            name: name.to_string(),
+            fps,
+            frame_count,
+            looping,
+            tracks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn summarize_clips_computes_duration_sorts_and_flags_default() {
+        // `ui_hero_pose` outranks `primary_stand_idle` in DEFAULT_POSE_CLIPS, so it
+        // is the flagged default even though both are present and it is the shorter
+        // clip. Output is sorted by name regardless of input order.
+        let anims = vec![
+            clip("primary_stand_idle", 30.0, 91, true),
+            clip("ui_hero_pose", 30.0, 1, false),
+            clip("ability_cast", 30.0, 31, false),
+        ];
+        let out = summarize_clips(&anims);
+        assert_eq!(
+            out.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["ability_cast", "primary_stand_idle", "ui_hero_pose"]
+        );
+        let idle = out.iter().find(|c| c.name == "primary_stand_idle").unwrap();
+        // (91 - 1) / 30 = 3.0s; single-frame poses are 0.0s.
+        assert_eq!(idle.duration_seconds, 3.0);
+        assert!(!idle.default);
+        let pose = out.iter().find(|c| c.name == "ui_hero_pose").unwrap();
+        assert_eq!(pose.duration_seconds, 0.0);
+        assert!(pose.default);
+        assert_eq!(out.iter().filter(|c| c.default).count(), 1);
+    }
+
+    #[test]
+    fn summarize_clips_flags_no_default_without_a_candidate_pose() {
+        let anims = vec![clip("ability_cast", 30.0, 31, false)];
+        let out = summarize_clips(&anims);
+        assert!(out.iter().all(|c| !c.default));
+        assert!(summarize_clips(&[]).is_empty());
+    }
 
     #[test]
     fn shared_centroid_is_the_mean_across_buffers() {

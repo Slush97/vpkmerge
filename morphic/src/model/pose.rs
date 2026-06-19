@@ -14,9 +14,9 @@
 //!   safe because it is the same hero (same rig); it is NOT the risky cross-hero
 //!   retarget (a different hero's skeleton).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::glb::default_weights;
+use super::glb::{default_weights, is_dropped};
 use super::math::{Mat4, Quat, Vec3};
 use super::mesh::{MeshPart, VertexBuffer};
 use super::skeleton::{Bone, Skeleton};
@@ -31,6 +31,42 @@ pub struct LocalPose {
     pub translation: Vec3,
     pub rotation: Quat,
     pub scale: f32,
+}
+
+/// Summary of secondary-motion geometry that a static pose bake cannot fully
+/// resolve. Source 2 normally drives these bones through cloth / spring systems;
+/// when a clip leaves them unanimated, a baked GLB can show fabric/hair offset
+/// from the posed body.
+#[derive(Debug, Clone)]
+pub struct SecondaryMotionPoseReport {
+    pub clip_name: String,
+    pub secondary_bone_count: usize,
+    pub animated_secondary_bone_count: usize,
+    pub root_secondary_bone_count: usize,
+    pub vertices_with_secondary: usize,
+    pub vertices_majority_secondary: usize,
+    pub vertices_with_root_secondary: usize,
+    pub vertices_majority_root_secondary: usize,
+    pub materials: Vec<SecondaryMotionMaterialReport>,
+    pub top_bones: Vec<SecondaryMotionBoneInfluence>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecondaryMotionMaterialReport {
+    pub material: String,
+    pub skinned_vertices: usize,
+    pub vertices_with_secondary: usize,
+    pub vertices_majority_secondary: usize,
+    pub vertices_with_root_secondary: usize,
+    pub vertices_majority_root_secondary: usize,
+    pub secondary_weight_sum: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecondaryMotionBoneInfluence {
+    pub bone: String,
+    pub weight_sum: f32,
+    pub is_root: bool,
 }
 
 /// Bakes a single frame of the first matching clip into the mesh, returning a
@@ -66,6 +102,194 @@ pub fn bake_pose_from(model: &Model, donor: &Model, clips: &[&str], frame: usize
     bake_with(model, palette.as_deref())
 }
 
+/// Detects secondary-motion vertices that may separate in a static posed export.
+///
+/// `pose_source` is the model that supplies the selected clip. For a normal hero
+/// this is `model`; for a clipless skin it is the base-game donor. The geometry
+/// and weights are always analyzed on `model`.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn secondary_motion_pose_report(
+    model: &Model,
+    pose_source: &Model,
+    clips: &[&str],
+) -> Option<SecondaryMotionPoseReport> {
+    if model.skeleton.bones.is_empty() {
+        return None;
+    }
+    let clip = pick_clip(&pose_source.animations, clips)?;
+
+    let mut secondary = HashSet::new();
+    let mut root_secondary = HashSet::new();
+    for (i, bone) in model.skeleton.bones.iter().enumerate() {
+        if is_secondary_motion_bone(&bone.name) {
+            let Ok(i) = u16::try_from(i) else {
+                continue;
+            };
+            secondary.insert(i);
+            if bone.parent.is_none() {
+                root_secondary.insert(i);
+            }
+        }
+    }
+    if secondary.is_empty() {
+        return None;
+    }
+
+    let animated_secondary: HashSet<&str> = clip
+        .tracks
+        .iter()
+        .filter_map(|track| pose_source.skeleton.bones.get(track.bone))
+        .filter(|bone| is_secondary_motion_bone(&bone.name))
+        .map(|bone| bone.name.as_str())
+        .collect();
+
+    let mut material_vertices: HashMap<String, HashSet<(usize, usize, usize)>> = HashMap::new();
+    for (mesh_i, mesh) in model.meshes.iter().enumerate() {
+        if is_dropped(&mesh.name) {
+            continue;
+        }
+        for prim in &mesh.primitives {
+            if is_dropped(&prim.material) {
+                continue;
+            }
+            let Some(vb) = mesh.vertex_buffers.get(prim.vertex_buffer) else {
+                continue;
+            };
+            let verts = material_vertices.entry(prim.material.clone()).or_default();
+            for &index in &prim.indices {
+                let vi = index as usize;
+                if vi < vb.element_count {
+                    verts.insert((mesh_i, prim.vertex_buffer, vi));
+                }
+            }
+        }
+    }
+
+    let mut materials = Vec::new();
+    let mut top_bones: HashMap<String, (f32, bool)> = HashMap::new();
+    let mut vertices_with_secondary = 0usize;
+    let mut vertices_majority_secondary = 0usize;
+    let mut vertices_with_root_secondary = 0usize;
+    let mut vertices_majority_root_secondary = 0usize;
+
+    for (material, vertices) in material_vertices {
+        let mut stat = SecondaryMotionMaterialReport {
+            material,
+            skinned_vertices: 0,
+            vertices_with_secondary: 0,
+            vertices_majority_secondary: 0,
+            vertices_with_root_secondary: 0,
+            vertices_majority_root_secondary: 0,
+            secondary_weight_sum: 0.0,
+        };
+
+        for (mesh_i, vb_i, vi) in vertices {
+            let Some(mesh) = model.meshes.get(mesh_i) else {
+                continue;
+            };
+            let Some(vb) = mesh.vertex_buffers.get(vb_i) else {
+                continue;
+            };
+            let Some(&joints) = vb.joints.get(vi) else {
+                continue;
+            };
+            let weights = vb.weights.get(vi).copied().unwrap_or_else(|| {
+                let rows = default_weights(1, mesh.bone_weight_count);
+                rows[0]
+            });
+
+            stat.skinned_vertices += 1;
+            let mut secondary_weight = 0.0f32;
+            let mut root_secondary_weight = 0.0f32;
+            for lane in 0..4 {
+                let bone = joints[lane];
+                let weight = weights[lane];
+                if weight <= 0.0 || !secondary.contains(&bone) {
+                    continue;
+                }
+                secondary_weight += weight;
+                if root_secondary.contains(&bone) {
+                    root_secondary_weight += weight;
+                }
+                if let Some(name) = model.skeleton.bones.get(usize::from(bone)).map(|b| &b.name) {
+                    let entry = top_bones.entry(name.clone()).or_insert((0.0, false));
+                    entry.0 += weight;
+                    entry.1 |= root_secondary.contains(&bone);
+                }
+            }
+
+            if secondary_weight > 0.0 {
+                stat.vertices_with_secondary += 1;
+                stat.secondary_weight_sum += secondary_weight;
+            }
+            if secondary_weight >= 0.5 {
+                stat.vertices_majority_secondary += 1;
+            }
+            if root_secondary_weight > 0.0 {
+                stat.vertices_with_root_secondary += 1;
+            }
+            if root_secondary_weight >= 0.5 {
+                stat.vertices_majority_root_secondary += 1;
+            }
+        }
+
+        if stat.vertices_with_secondary > 0 {
+            vertices_with_secondary += stat.vertices_with_secondary;
+            vertices_majority_secondary += stat.vertices_majority_secondary;
+            vertices_with_root_secondary += stat.vertices_with_root_secondary;
+            vertices_majority_root_secondary += stat.vertices_majority_root_secondary;
+            materials.push(stat);
+        }
+    }
+
+    if vertices_with_secondary == 0 {
+        return None;
+    }
+
+    materials.sort_by(|a, b| {
+        b.vertices_majority_root_secondary
+            .cmp(&a.vertices_majority_root_secondary)
+            .then(
+                b.vertices_majority_secondary
+                    .cmp(&a.vertices_majority_secondary),
+            )
+            .then_with(|| {
+                b.secondary_weight_sum
+                    .partial_cmp(&a.secondary_weight_sum)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let mut top_bones: Vec<_> = top_bones
+        .into_iter()
+        .map(
+            |(bone, (weight_sum, is_root))| SecondaryMotionBoneInfluence {
+                bone,
+                weight_sum,
+                is_root,
+            },
+        )
+        .collect();
+    top_bones.sort_by(|a, b| {
+        b.weight_sum
+            .partial_cmp(&a.weight_sum)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Some(SecondaryMotionPoseReport {
+        clip_name: clip.name.clone(),
+        secondary_bone_count: secondary.len(),
+        animated_secondary_bone_count: animated_secondary.len(),
+        root_secondary_bone_count: root_secondary.len(),
+        vertices_with_secondary,
+        vertices_majority_secondary,
+        vertices_with_root_secondary,
+        vertices_majority_root_secondary,
+        materials,
+        top_bones,
+    })
+}
+
 /// Bakes a single static pose whose per-bone local transforms are supplied by
 /// *bone name* (`pose_by_name`), mapping them onto `model`'s own skeleton. Bones
 /// absent from the map keep their bind local. This is the by-name path
@@ -80,7 +304,7 @@ pub fn bake_pose_named<S: std::hash::BuildHasher>(
     if model.skeleton.bones.is_empty() {
         return bake_with(model, None);
     }
-    let posed_local = model
+    let mut posed_local = model
         .skeleton
         .bones
         .iter()
@@ -96,7 +320,7 @@ pub fn bake_pose_named<S: std::hash::BuildHasher>(
             }
         })
         .collect::<Vec<_>>();
-    let palette = finish_palette(&model.skeleton, &posed_local);
+    let palette = finish_palette(&model.skeleton, &mut posed_local, model.cloth.as_ref());
     bake_with(model, Some(&palette))
 }
 
@@ -112,6 +336,7 @@ fn bake_with(model: &Model, palette: Option<&[Mat4]>) -> Model {
         skeleton: Skeleton { bones: Vec::new() },
         meshes,
         animations: Vec::new(),
+        cloth: None,
     }
 }
 
@@ -127,7 +352,7 @@ fn self_palette(model: &Model, clips: &[&str], frame: usize) -> Option<Vec<Mat4>
             track_for[tr.bone] = Some(tr);
         }
     }
-    let posed_local = bones
+    let mut posed_local = bones
         .iter()
         .enumerate()
         .map(|(i, b)| {
@@ -138,7 +363,11 @@ fn self_palette(model: &Model, clips: &[&str], frame: usize) -> Option<Vec<Mat4>
             }
         })
         .collect::<Vec<_>>();
-    Some(finish_palette(&model.skeleton, &posed_local))
+    Some(finish_palette(
+        &model.skeleton,
+        &mut posed_local,
+        model.cloth.as_ref(),
+    ))
 }
 
 /// Skin palette from a donor model's clips, mapped onto `model`'s skeleton by
@@ -154,7 +383,7 @@ fn donor_palette(model: &Model, donor: &Model, clips: &[&str], frame: usize) -> 
             by_name.insert(db.name.as_str(), tr);
         }
     }
-    let posed_local = model
+    let mut posed_local = model
         .skeleton
         .bones
         .iter()
@@ -166,7 +395,11 @@ fn donor_palette(model: &Model, donor: &Model, clips: &[&str], frame: usize) -> 
             }
         })
         .collect::<Vec<_>>();
-    Some(finish_palette(&model.skeleton, &posed_local))
+    Some(finish_palette(
+        &model.skeleton,
+        &mut posed_local,
+        model.cloth.as_ref(),
+    ))
 }
 
 /// Bones whose final render pose is normally resolved by Source 2 secondary
@@ -221,9 +454,58 @@ fn posed_local(bone: &Bone, track: Option<&BoneTrack>, f: usize) -> Mat4 {
 }
 
 /// Forward kinematics on `target` (posed global = posed local chained through
-/// parents; bones are topologically ordered) then the skinning matrix per bone,
+/// parents; bones are topologically ordered), then the skinning matrix per bone,
 /// `inverse_bind * posed_global`.
-fn finish_palette(target: &Skeleton, posed_local: &[Mat4]) -> Vec<Mat4> {
+///
+/// Secondary-motion children keep their bind local under the posed parent, which
+/// lets fabric/hair preserve its rest shape without freezing in world space. The
+/// hard case is Source 2 cloth rigs that put each cloth point on its own root
+/// `$cloth*` bone driven at runtime by the PHYS `FeModel` solver. A static GLB bake
+/// has no solver, so those roots would otherwise stay at bind while the body
+/// poses (fabric detaches). When the model carries `FeModel` `anchors`, each cloth
+/// root rigidly follows its *true* driver bone (the body bone the solver anchors
+/// that node to), reproducing the engine's settled rest drape. Without that data
+/// (no PHYS block) it falls back to the closest non-secondary bone, an
+/// approximation that keeps cloth attached but can swing it on a long lever arm.
+fn finish_palette(
+    target: &Skeleton,
+    posed_local: &mut [Mat4],
+    anchors: Option<&super::ClothAnchors>,
+) -> Vec<Mat4> {
+    let mut posed_global = posed_globals(target, posed_local);
+    let secondary: Vec<bool> = target
+        .bones
+        .iter()
+        .map(|b| is_secondary_motion_bone(&b.name))
+        .collect();
+
+    for (i, bone) in target.bones.iter().enumerate() {
+        if !secondary[i] || bone.parent.is_some() {
+            continue;
+        }
+        // Prefer the `FeModel`'s recorded anchor bone; only guess geometrically
+        // when the model ships no cloth physics for this bone.
+        let driver = anchors
+            .and_then(|a| a.anchor_of(&bone.name))
+            .and_then(|name| target.bones.iter().position(|b| b.name == name))
+            .or_else(|| nearest_non_secondary_bone(target, i, &secondary, &posed_global));
+        let Some(driver) = driver else {
+            continue;
+        };
+        let driver_palette = target.bones[driver].inverse_bind.mul(&posed_global[driver]);
+        posed_local[i] = bone.global_bind.mul(&driver_palette);
+    }
+
+    posed_global = posed_globals(target, posed_local);
+    target
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, bone)| bone.inverse_bind.mul(&posed_global[i]))
+        .collect()
+}
+
+fn posed_globals(target: &Skeleton, posed_local: &[Mat4]) -> Vec<Mat4> {
     let mut posed_global = vec![Mat4::IDENTITY; target.bones.len()];
     for (i, bone) in target.bones.iter().enumerate() {
         posed_global[i] = match bone.parent {
@@ -231,12 +513,64 @@ fn finish_palette(target: &Skeleton, posed_local: &[Mat4]) -> Vec<Mat4> {
             None => posed_local[i],
         };
     }
-    target
-        .bones
-        .iter()
-        .enumerate()
-        .map(|(i, bone)| bone.inverse_bind.mul(&posed_global[i]))
-        .collect()
+    posed_global
+}
+
+fn nearest_non_secondary_bone(
+    skeleton: &Skeleton,
+    bone_index: usize,
+    secondary: &[bool],
+    posed_global: &[Mat4],
+) -> Option<usize> {
+    nearest_non_secondary_bone_matching(skeleton, bone_index, secondary, |i| {
+        let palette = skeleton.bones[i].inverse_bind.mul(&posed_global[i]);
+        !matrix_near_identity(&palette)
+    })
+    .or_else(|| nearest_non_secondary_bone_matching(skeleton, bone_index, secondary, |_| true))
+}
+
+fn nearest_non_secondary_bone_matching(
+    skeleton: &Skeleton,
+    bone_index: usize,
+    secondary: &[bool],
+    mut accept: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    let p = bind_translation(&skeleton.bones[bone_index]);
+    let mut best = None;
+    let mut best_d2 = f32::MAX;
+    for (i, bone) in skeleton.bones.iter().enumerate() {
+        if i == bone_index || secondary.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        if !accept(i) {
+            continue;
+        }
+        let d2 = distance2(p, bind_translation(bone));
+        if d2 < best_d2 {
+            best = Some(i);
+            best_d2 = d2;
+        }
+    }
+    best
+}
+
+fn bind_translation(bone: &Bone) -> [f32; 3] {
+    [
+        bone.global_bind.m[12],
+        bone.global_bind.m[13],
+        bone.global_bind.m[14],
+    ]
+}
+
+fn distance2(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+}
+
+fn matrix_near_identity(m: &Mat4) -> bool {
+    const EPS: f32 = 1e-4;
+    m.m.iter()
+        .zip(Mat4::IDENTITY.m.iter())
+        .all(|(a, b)| (*a - *b).abs() <= EPS)
 }
 
 /// One channel sample at `frame`, or `default` when the channel is absent or

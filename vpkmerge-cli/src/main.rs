@@ -759,6 +759,46 @@ enum ModelAction {
     /// reskin builders consume as a region selector (in place of the AO
     /// heuristic). Segment by UV island (default), mesh part, or material.
     Mask(ModelMaskArgs),
+
+    /// List the animation clips a model carries (name, frame count, length), the
+    /// read-only discovery companion to `export --pose`/`--clip`. Each printed
+    /// name is usable verbatim as `--pose <name>` / `--clip <name>`; the frame
+    /// count bounds `--pose name@N`. A clipless mesh skin falls back to the
+    /// base-pak clips; WIP heroes (no embedded clips) print an empty list and
+    /// exit 0. `--json` emits a machine-readable array.
+    Clips(ModelClipsArgs),
+}
+
+#[derive(Args)]
+struct ModelClipsArgs {
+    /// VPK containing the `.vmdl_c` (a skin VPK, or the base pak itself).
+    #[arg(long, value_name = "VPK")]
+    vpk: PathBuf,
+
+    /// VPK-internal model path, e.g.
+    /// `models/heroes_staging/hornet_v3/hornet.vmdl_c`. Mutually exclusive with
+    /// `--hero`.
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "hero",
+        conflicts_with = "hero"
+    )]
+    entry: Option<String>,
+
+    /// Hero codename (e.g. `hornet`, `haze`) whose body model is auto-discovered.
+    /// Mutually exclusive with `--entry`.
+    #[arg(long, value_name = "CODENAME")]
+    hero: Option<String>,
+
+    /// Base `pak01_dir.vpk` to source clips from when `--vpk` is a clipless mesh
+    /// skin (ships the rig but no animation clips).
+    #[arg(long, value_name = "VPK")]
+    base: Option<PathBuf>,
+
+    /// Emit a machine-readable JSON array instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -1194,6 +1234,7 @@ fn run_model(args: ModelCmd) -> Result<()> {
         Some(ModelAction::Edit(e)) => return run_model_edit(e),
         Some(ModelAction::Recolor(e)) => return run_model_recolor(&e),
         Some(ModelAction::Mask(m)) => return run_model_mask(&m),
+        Some(ModelAction::Clips(c)) => return run_model_clips(&c),
         None => {}
     }
 
@@ -1349,6 +1390,60 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
         (None, None) => anyhow::bail!("model export: provide --entry or --hero"),
     }
     println!("wrote {}", e.out.display());
+    Ok(())
+}
+
+fn run_model_clips(c: &ModelClipsArgs) -> Result<()> {
+    let clips = match (&c.entry, &c.hero) {
+        (Some(entry), _) => vpkmerge_core::model_clips(&c.vpk, entry, c.base.as_deref())
+            .with_context(|| format!("listing clips for {entry} in {}", c.vpk.display()))?,
+        (None, Some(hero)) => vpkmerge_core::hero_model_clips(&c.vpk, hero, c.base.as_deref())
+            .with_context(|| format!("listing clips for hero {hero} in {}", c.vpk.display()))?,
+        (None, None) => anyhow::bail!("model clips: provide --entry or --hero"),
+    };
+
+    if c.json {
+        use serde_json::json;
+        let arr: Vec<serde_json::Value> = clips
+            .iter()
+            .map(|c| {
+                json!({
+                    "name": &c.name,
+                    "frameCount": c.frame_count,
+                    "fps": c.fps,
+                    "durationSeconds": c.duration_seconds,
+                    "looping": c.looping,
+                    "default": c.default,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&arr).context("serializing JSON")?
+        );
+        return Ok(());
+    }
+
+    if clips.is_empty() {
+        println!("no animation clips (the model embeds none and no base clips were found)");
+        return Ok(());
+    }
+    println!("{} clip(s):", clips.len());
+    println!(
+        "  {:<32} {:>7}  {:>6}  {:>8}  {:<5}  default",
+        "name", "frames", "fps", "seconds", "loop"
+    );
+    for clip in &clips {
+        println!(
+            "  {:<32} {:>7}  {:>6.1}  {:>8.2}  {:<5}  {}",
+            clip.name,
+            clip.frame_count,
+            clip.fps,
+            clip.duration_seconds,
+            if clip.looping { "yes" } else { "no" },
+            if clip.default { "<-" } else { "" },
+        );
+    }
     Ok(())
 }
 

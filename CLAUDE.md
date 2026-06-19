@@ -252,6 +252,28 @@ bleed reads as came. It bakes the masks in-process via the same
 `morphic::model::{segments, mask_png}` the CLI uses (`--png` previews, second
 positional arg bakes the addon VPK).
 
+## Animation clip discovery (`model clips`)
+
+Read-only companion to `model export`'s `--pose`/`--clip`: lists the animation
+clips a model carries so a caller can pick a `CLIP[@FRAME]` instead of guessing.
+Built for Grimoire's dev-only pose-authoring (hero-card snapshots): the static
+pose baker already works, this is the missing discovery half.
+
+`vpkmerge model clips --vpk <VPK> (--entry PATH | --hero CODENAME) [--base <VPK>]
+[--json]`. Resolution mirrors `model export` exactly (same `--hero`
+auto-discovery, same `--base` fallback), so the list is precisely what `export`
+would pose/animate for the same selector. A clipless mesh skin falls back to the
+base-pak donor's clips at the same entry; a model that embeds none and has no
+clip donor returns an **empty list, exit 0** (not an error) - the same models
+`--pose --require-pose` bails on. Default output is a table; `--json` emits an
+array of `{name, frameCount, fps, durationSeconds, looping, default}`. `name` is
+usable verbatim as `--pose <name>` / `--clip <name>`; `frameCount` bounds
+`--pose name@N`; `default: true` flags the clip a bare `--pose` would bake (first
+`DEFAULT_POSE_CLIPS` candidate the model carries). Core API:
+`model_clips` / `hero_model_clips` (-> `ClipSummary`). Note: `--hero <codename>`
+prefers the non-`heroes_wip` body, so WIP heroes still resolve to a clip-bearing
+model; pass the explicit `heroes_wip` `--entry` to inspect the clipless rig.
+
 ## Hero ability-VFX recolor (compose + prism)
 
 `vpkmerge_core::hero_recolor` is the composition layer over the three mechanisms

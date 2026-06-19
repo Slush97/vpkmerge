@@ -115,6 +115,7 @@ fn glb_writer_reader_round_trip() {
         skeleton,
         meshes: Vec::new(),
         animations: vec![clip],
+        cloth: None,
     };
 
     let glb = to_glb(&model).expect("export synthetic model to glb");

@@ -551,6 +551,7 @@ fn synthetic_model() -> Model {
         skeleton: skeleton::Skeleton { bones: vec![bone] },
         meshes: vec![part],
         animations: Vec::new(),
+        cloth: None,
     }
 }
 
@@ -910,7 +911,9 @@ mod pose_bake {
     use super::super::math::{Mat4, Quat, Vec3};
     use super::super::mesh::{MeshPart, Primitive, VertexBuffer};
     use super::super::skeleton::{Bone, Skeleton};
-    use super::super::{bake_pose, bake_pose_from, Model};
+    use super::super::{
+        bake_pose, bake_pose_from, bake_pose_named, secondary_motion_pose_report, LocalPose, Model,
+    };
 
     const ID: Quat = Quat {
         x: 0.0,
@@ -920,15 +923,21 @@ mod pose_bake {
     };
 
     fn root_bone() -> Bone {
+        root_bone_at("root", Vec3::default())
+    }
+
+    fn root_bone_at(name: &str, position: Vec3) -> Bone {
+        let local_bind = Mat4::from_translation(position);
+        let inverse_bind = local_bind.invert().expect("root bind inverse");
         Bone {
-            name: "root".into(),
+            name: name.into(),
             parent: None,
             flags: 0,
-            position: Vec3::default(),
+            position,
             rotation: ID,
-            local_bind: Mat4::IDENTITY,
-            global_bind: Mat4::IDENTITY,
-            inverse_bind: Mat4::IDENTITY,
+            local_bind,
+            global_bind: local_bind,
+            inverse_bind,
         }
     }
 
@@ -1036,6 +1045,7 @@ mod pose_bake {
             },
             meshes: vec![one_part(skinned_vertex([1.0, 2.0, 3.0]))],
             animations: vec![single_bone_clip("ui_hero_pose", Vec3::default())],
+            cloth: None,
         };
         let baked = bake_pose(&model, &["ui_hero_pose"], 0);
         assert!(baked.skeleton.bones.is_empty(), "skeleton stripped");
@@ -1063,6 +1073,7 @@ mod pose_bake {
                     z: 0.0,
                 },
             )],
+            cloth: None,
         };
         let baked = bake_pose(&model, &["ui_hero_pose"], 0);
         approx(
@@ -1101,6 +1112,7 @@ mod pose_bake {
                     z: 0.0,
                 },
             )],
+            cloth: None,
         };
 
         let baked = bake_pose(&model, &["ui_hero_pose"], 0);
@@ -1108,6 +1120,137 @@ mod pose_bake {
             baked.meshes[0].vertex_buffers[0].positions[0],
             [11.0, 0.0, 0.0],
         );
+    }
+
+    #[test]
+    fn root_secondary_motion_bones_follow_nearest_posed_body_bone() {
+        let root = root_bone();
+        let cloth = root_bone_at(
+            "$cloth_m0p1",
+            Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        let model = Model {
+            skeleton: Skeleton {
+                bones: vec![root, cloth],
+            },
+            meshes: vec![one_part(skinned_vertex_on_joint([1.0, 0.0, 0.0], 1))],
+            animations: vec![single_bone_clip(
+                "ui_hero_pose",
+                Vec3 {
+                    x: 10.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            )],
+            cloth: None,
+        };
+
+        let baked = bake_pose(&model, &["ui_hero_pose"], 0);
+        approx(
+            baked.meshes[0].vertex_buffers[0].positions[0],
+            [11.0, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn root_secondary_motion_bones_skip_nearest_unmoved_body_bone() {
+        let root = root_bone();
+        let pelvis = child_bone(
+            "pelvis",
+            0,
+            Vec3 {
+                x: 5.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        let cloth = root_bone_at(
+            "$cloth_m0p1",
+            Vec3 {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        let model = Model {
+            skeleton: Skeleton {
+                bones: vec![root, pelvis, cloth],
+            },
+            meshes: vec![one_part(skinned_vertex_on_joint([0.2, 0.0, 0.0], 2))],
+            animations: vec![Clip {
+                name: "ui_hero_pose".into(),
+                fps: 30.0,
+                frame_count: 1,
+                looping: false,
+                tracks: vec![
+                    BoneTrack {
+                        bone: 0,
+                        translations: Some(vec![Vec3::default()]),
+                        rotations: Some(vec![ID]),
+                        scales: None,
+                    },
+                    BoneTrack {
+                        bone: 1,
+                        translations: Some(vec![Vec3 {
+                            x: 15.0,
+                            y: 0.0,
+                            z: 0.0,
+                        }]),
+                        rotations: Some(vec![ID]),
+                        scales: None,
+                    },
+                ],
+            }],
+            cloth: None,
+        };
+
+        let baked = bake_pose(&model, &["ui_hero_pose"], 0);
+        approx(
+            baked.meshes[0].vertex_buffers[0].positions[0],
+            [10.2, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn secondary_motion_pose_report_flags_root_cloth_influences() {
+        let root = root_bone();
+        let mut cloth = root_bone();
+        cloth.name = "$cloth_m0p1".into();
+        let model = Model {
+            skeleton: Skeleton {
+                bones: vec![root, cloth],
+            },
+            meshes: vec![one_part(skinned_vertex_on_joint([1.0, 0.0, 0.0], 1))],
+            animations: vec![single_bone_clip(
+                "ui_hero_pose",
+                Vec3 {
+                    x: 10.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            )],
+            cloth: None,
+        };
+
+        let report =
+            secondary_motion_pose_report(&model, &model, &["ui_hero_pose"]).expect("report");
+        assert_eq!(report.clip_name, "ui_hero_pose");
+        assert_eq!(report.secondary_bone_count, 1);
+        assert_eq!(report.animated_secondary_bone_count, 0);
+        assert_eq!(report.root_secondary_bone_count, 1);
+        assert_eq!(report.vertices_with_secondary, 1);
+        assert_eq!(report.vertices_majority_secondary, 1);
+        assert_eq!(report.vertices_with_root_secondary, 1);
+        assert_eq!(report.vertices_majority_root_secondary, 1);
+        assert_eq!(report.materials.len(), 1);
+        assert_eq!(report.materials[0].material, "body");
+        assert_eq!(report.materials[0].vertices_majority_root_secondary, 1);
+        assert_eq!(report.top_bones[0].bone, "$cloth_m0p1");
+        assert!(report.top_bones[0].is_root);
     }
 
     #[test]
@@ -1125,6 +1268,7 @@ mod pose_bake {
                     z: 0.0,
                 },
             )],
+            cloth: None,
         };
         let baked = bake_pose(&model, &["ui_hero_pose"], 0);
         assert!(baked.skeleton.bones.is_empty());
@@ -1139,6 +1283,7 @@ mod pose_bake {
             skeleton: Skeleton { bones: vec![] },
             meshes: vec![one_part(skinned_vertex([5.0, 6.0, 7.0]))],
             animations: vec![],
+            cloth: None,
         };
         let baked = bake_pose(&model, &["ui_hero_pose"], 0);
         let vb = &baked.meshes[0].vertex_buffers[0];
@@ -1155,6 +1300,7 @@ mod pose_bake {
             },
             meshes: vec![one_part(skinned_vertex([1.0, 2.0, 3.0]))],
             animations: vec![],
+            cloth: None,
         };
         // The base hero supplies the clip; same bone name "root".
         let donor = Model {
@@ -1170,6 +1316,7 @@ mod pose_bake {
                     z: 0.0,
                 },
             )],
+            cloth: None,
         };
         let baked = bake_pose_from(&skin, &donor, &["ui_hero_pose"], 0);
         approx(
@@ -1186,6 +1333,7 @@ mod pose_bake {
             },
             meshes: vec![one_part(skinned_vertex([1.0, 2.0, 3.0]))],
             animations: vec![],
+            cloth: None,
         };
         let mut donor_bone = root_bone();
         donor_bone.name = "unrelated".into();
@@ -1202,6 +1350,7 @@ mod pose_bake {
                     z: 0.0,
                 },
             )],
+            cloth: None,
         };
         // The donor's clip targets "unrelated"; the skin has "root", so no bone
         // matches and the vertex stays at its bind position.
@@ -1214,7 +1363,6 @@ mod pose_bake {
 
     #[test]
     fn named_pose_shifts_matched_bone_and_binds_the_rest() {
-        use super::super::{bake_pose_named, LocalPose};
         use std::collections::HashMap;
 
         let model = Model {
@@ -1223,6 +1371,7 @@ mod pose_bake {
             },
             meshes: vec![one_part(skinned_vertex([1.0, 2.0, 3.0]))],
             animations: vec![],
+            cloth: None,
         };
 
         // A pose keyed by bone name (the NM path) translates the matched bone.
@@ -1265,6 +1414,49 @@ mod pose_bake {
         approx(
             bind.meshes[0].vertex_buffers[0].positions[0],
             [1.0, 2.0, 3.0],
+        );
+    }
+
+    #[test]
+    fn named_pose_carries_root_secondary_bones_with_nearest_body_bone() {
+        use std::collections::HashMap;
+
+        let root = root_bone();
+        let cloth = root_bone_at(
+            "$cloth_m0p1",
+            Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        let model = Model {
+            skeleton: Skeleton {
+                bones: vec![root, cloth],
+            },
+            meshes: vec![one_part(skinned_vertex_on_joint([1.0, 0.0, 0.0], 1))],
+            animations: vec![],
+            cloth: None,
+        };
+
+        let mut by_name = HashMap::new();
+        by_name.insert(
+            "root".to_string(),
+            LocalPose {
+                translation: Vec3 {
+                    x: 10.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rotation: ID,
+                scale: 1.0,
+            },
+        );
+
+        let baked = bake_pose_named(&model, &by_name);
+        approx(
+            baked.meshes[0].vertex_buffers[0].positions[0],
+            [11.0, 0.0, 0.0],
         );
     }
 }

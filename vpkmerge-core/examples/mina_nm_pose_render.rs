@@ -2,7 +2,11 @@
 // head mesh gray, welded hat red (swatch UV). Shows if the HEAD itself swings or
 // only the hat. usage:
 //   cargo run --release --example mina_nm_pose_render -- <baked_dir.vpk> <pak01> <clip> <out.png>
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 use morphic::model::{bake_pose, decode_nm_clip, decode_nm_skeleton, nm_clip_to_clip, Model};
 use vpkmerge_core::read_vpk_entry;
 
@@ -25,7 +29,10 @@ fn main() -> anyhow::Result<()> {
 
     let mut model = morphic::model::decode(&read_vpk_entry(&bake, ENTRY)?)?;
     let skel = decode_nm_skeleton(&read_vpk_entry(&pak, SKEL)?)?;
-    let nmclip = decode_nm_clip(&read_vpk_entry(&pak, &format!("models/heroes_wip/vampirebat/clips/{clip}.vnmclip_c"))?)?;
+    let nmclip = decode_nm_clip(&read_vpk_entry(
+        &pak,
+        &format!("models/heroes_wip/vampirebat/clips/{clip}.vnmclip_c"),
+    )?)?;
     let c = nm_clip_to_clip(&nmclip, &skel, &model.skeleton, "g");
     let frame = c.frame_count / 2;
     model.animations = vec![c];
@@ -45,7 +52,12 @@ fn render(m: &Model, out: &str) -> anyhow::Result<()> {
         .collect();
     // bounds of head region
     let (mut mn, mut mx) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-    for (p, _) in &pts { for k in 0..3 { mn[k] = mn[k].min(p[k]); mx[k] = mx[k].max(p[k]); } }
+    for (p, _) in &pts {
+        for k in 0..3 {
+            mn[k] = mn[k].min(p[k]);
+            mx[k] = mx[k].max(p[k]);
+        }
+    }
     let (w, h) = (520u32, 420u32);
     let pad = 22.0;
     let halfw = (w / 2) as f32;
@@ -58,18 +70,24 @@ fn render(m: &Model, out: &str) -> anyhow::Result<()> {
         let (ix, iy) = (px as i32, py as i32);
         if ix >= 0 && ix < w as i32 && iy >= 0 && iy < h as i32 {
             let o = ((iy as u32 * w + ix as u32) * 3) as usize;
-            img[o] = col[0]; img[o + 1] = col[1]; img[o + 2] = col[2];
+            img[o] = col[0];
+            img[o + 1] = col[1];
+            img[o + 2] = col[2];
         }
     };
     // LEFT = side (X horiz), RIGHT = front/back (Y horiz). Vertical = Z.
-    for (p, hat) in &pts { if !hat {
-        plot(p[0], p[2], 0, 0, [120, 120, 120], &mut img);
-        plot(p[1], p[2], 1, 1, [120, 120, 120], &mut img);
-    }}
-    for (p, hat) in &pts { if *hat {
-        plot(p[0], p[2], 0, 0, [235, 40, 40], &mut img);
-        plot(p[1], p[2], 1, 1, [235, 40, 40], &mut img);
-    }}
+    for (p, hat) in &pts {
+        if !hat {
+            plot(p[0], p[2], 0, 0, [120, 120, 120], &mut img);
+            plot(p[1], p[2], 1, 1, [120, 120, 120], &mut img);
+        }
+    }
+    for (p, hat) in &pts {
+        if *hat {
+            plot(p[0], p[2], 0, 0, [235, 40, 40], &mut img);
+            plot(p[1], p[2], 1, 1, [235, 40, 40], &mut img);
+        }
+    }
     image::save_buffer(out, &img, w, h, image::ColorType::Rgb8)?;
     Ok(())
 }

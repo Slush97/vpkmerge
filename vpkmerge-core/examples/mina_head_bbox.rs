@@ -16,13 +16,23 @@ fn main() -> anyhow::Result<()> {
     let shared = &head.vertex_buffers[0];
 
     // Full head part bbox.
-    bbox("head part (all 3 draw calls, shared VB)", shared.positions.iter());
+    bbox(
+        "head part (all 3 draw calls, shared VB)",
+        shared.positions.iter(),
+    );
 
     // Per primitive bbox (which is eyes/hair/face).
     for (pi, p) in head.primitives.iter().enumerate() {
         let mat = p.material.rsplit('/').next().unwrap_or(&p.material);
-        let verts: Vec<[f32; 3]> = p.indices.iter().map(|&i| shared.positions[i as usize]).collect();
-        bbox(&format!("  prim[{pi}] {mat} ({} idx)", p.indices.len()), verts.iter());
+        let verts: Vec<[f32; 3]> = p
+            .indices
+            .iter()
+            .map(|&i| shared.positions[i as usize])
+            .collect();
+        bbox(
+            &format!("  prim[{pi}] {mat} ({} idx)", p.indices.len()),
+            verts.iter(),
+        );
     }
 
     // Where is the head geometry vs the head bone? Look at verts skinned mostly to bone 16.
@@ -43,7 +53,11 @@ fn main() -> anyhow::Result<()> {
     if hx.2 > 0 {
         println!(
             "verts >50% head-skinned: {} | XY centroid=({:.2},{:.2}) | z {:.2}..{:.2}",
-            hx.2, sx / hx.2 as f32, sy / hx.2 as f32, hx.3, hx.4
+            hx.2,
+            sx / hx.2 as f32,
+            sy / hx.2 as f32,
+            hx.3,
+            hx.4
         );
     }
     Ok(())
@@ -61,7 +75,14 @@ fn bbox<'a>(label: &str, it: impl Iterator<Item = &'a [f32; 3]>) {
     }
     println!(
         "{label}: n={n} x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}] center=({:.2},{:.2},{:.2})",
-        mn[0], mx[0], mn[1], mx[1], mn[2], mx[2],
-        (mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5
+        mn[0],
+        mx[0],
+        mn[1],
+        mx[1],
+        mn[2],
+        mx[2],
+        (mn[0] + mx[0]) * 0.5,
+        (mn[1] + mx[1]) * 0.5,
+        (mn[2] + mx[2]) * 0.5
     );
 }

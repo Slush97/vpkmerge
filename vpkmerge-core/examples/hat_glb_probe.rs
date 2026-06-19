@@ -29,21 +29,34 @@ fn main() -> anyhow::Result<()> {
     println!("{path}: {n} verts, {} prim(s)", prims.len());
     println!(
         "NATIVE  x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]  (spans {:.2}/{:.2}/{:.2})",
-        mn[0], mx[0], mn[1], mx[1], mn[2], mx[2],
-        mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]
+        mn[0],
+        mx[0],
+        mn[1],
+        mx[1],
+        mn[2],
+        mx[2],
+        mx[0] - mn[0],
+        mx[1] - mn[1],
+        mx[2] - mn[2]
     );
     println!(
         "SWIZZLED[x,z,-y] -> Source  x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]  (spans {:.2}/{:.2}/{:.2})",
         sn[0], sx[0], sn[1], sx[1], sn[2], sx[2],
         sx[0]-sn[0], sx[1]-sn[1], sx[2]-sn[2]
     );
-    let tallest_native = ["X","Y","Z"][argmax([mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]])];
-    println!("tallest NATIVE axis = {tallest_native} (hats are usually tall along their crown axis)");
+    let tallest_native = ["X", "Y", "Z"][argmax([mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]])];
+    println!(
+        "tallest NATIVE axis = {tallest_native} (hats are usually tall along their crown axis)"
+    );
     Ok(())
 }
 
 fn argmax(a: [f32; 3]) -> usize {
     let mut m = 0;
-    for i in 1..3 { if a[i] > a[m] { m = i; } }
+    for i in 1..3 {
+        if a[i] > a[m] {
+            m = i;
+        }
+    }
     m
 }

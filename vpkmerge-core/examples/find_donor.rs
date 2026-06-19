@@ -24,6 +24,6 @@ fn main() -> Result<()> {
             }
         }
     }
-    eprintln!("{hits} square {want} textures", );
+    eprintln!("{hits} square {want} textures",);
     Ok(())
 }

@@ -406,7 +406,8 @@ fn parse_entry(e: &Value, dir: &Path, default_se: &str) -> Result<Entry> {
             fields
                 .iter()
                 .filter_map(|(key, value)| {
-                    let nums: Vec<f64> = value.as_array()?.iter().filter_map(Value::as_f64).collect();
+                    let nums: Vec<f64> =
+                        value.as_array()?.iter().filter_map(Value::as_f64).collect();
                     (!nums.is_empty()).then(|| (key.clone(), nums))
                 })
                 .collect()

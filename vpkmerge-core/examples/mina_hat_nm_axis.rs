@@ -20,16 +20,26 @@ fn swatch_uv(uv: [f32; 2]) -> bool {
 fn hat_idx(m: &Model) -> Vec<usize> {
     let h = m.meshes.iter().find(|p| p.name == "head").unwrap();
     let uv = &h.vertex_buffers[0].texcoords[0];
-    (0..h.vertex_buffers[0].element_count).filter(|&i| swatch_uv(uv[i])).collect()
+    (0..h.vertex_buffers[0].element_count)
+        .filter(|&i| swatch_uv(uv[i]))
+        .collect()
 }
 fn hat_pos(m: &Model, idx: &[usize]) -> Vec<[f32; 3]> {
     let h = m.meshes.iter().find(|p| p.name == "head").unwrap();
-    idx.iter().map(|&i| h.vertex_buffers[0].positions[i]).collect()
+    idx.iter()
+        .map(|&i| h.vertex_buffers[0].positions[i])
+        .collect()
 }
 fn centroid(p: &[[f32; 3]]) -> [f32; 3] {
     let mut c = [0.0; 3];
-    for v in p { for k in 0..3 { c[k] += v[k]; } }
-    for k in 0..3 { c[k] /= p.len().max(1) as f32; }
+    for v in p {
+        for k in 0..3 {
+            c[k] += v[k];
+        }
+    }
+    for k in 0..3 {
+        c[k] /= p.len().max(1) as f32;
+    }
     c
 }
 
@@ -45,7 +55,9 @@ fn main() -> anyhow::Result<()> {
             "vampirebat_outofcombat_stand_idle".into(),
             "vampirebat_weapon_crouch_run_n".into(),
         ]
-    } else { clips };
+    } else {
+        clips
+    };
 
     let model = morphic::model::decode(&read_vpk_entry(&bake, ENTRY)?)?;
     let idx = hat_idx(&model);
@@ -55,18 +67,26 @@ fn main() -> anyhow::Result<()> {
     let bind = hat_pos(&model, &idx);
     let cb = centroid(&bind);
     // crown reference vertex = max-z hat vert in bind (cone tip points +Z).
-    let apex = (0..idx.len()).max_by(|&i, &j| bind[i][2].total_cmp(&bind[j][2])).unwrap();
+    let apex = (0..idx.len())
+        .max_by(|&i, &j| bind[i][2].total_cmp(&bind[j][2]))
+        .unwrap();
     println!("bind crown dir ~ +Z (apex vert #{apex})\n");
 
     for clip in &clips {
         let entry = format!("{CLIPDIR}/{clip}.vnmclip_c");
         let bytes = match read_vpk_entry(&pak, &entry) {
             Ok(b) => b,
-            Err(_) => { println!("{clip}: <missing>"); continue; }
+            Err(_) => {
+                println!("{clip}: <missing>");
+                continue;
+            }
         };
         let nmclip = match decode_nm_clip(&bytes) {
             Ok(c) => c,
-            Err(e) => { println!("{clip}: <decode err: {e}>"); continue; }
+            Err(e) => {
+                println!("{clip}: <decode err: {e}>");
+                continue;
+            }
         };
         let clip_obj = nm_clip_to_clip(&nmclip, &nm_skel, &model.skeleton, "g");
         let frames = clip_obj.frame_count.max(1);
@@ -77,11 +97,14 @@ fn main() -> anyhow::Result<()> {
             let posed = bake_pose(&m2, &["g"], f);
             let q = hat_pos(&posed, &idx);
             let ci = centroid(&q);
-            let d = [q[apex][0]-ci[0], q[apex][1]-ci[1], q[apex][2]-ci[2]];
-            let l = (d[0]*d[0]+d[1]*d[1]+d[2]*d[2]).sqrt().max(1e-6);
-            let dir = [d[0]/l, d[1]/l, d[2]/l];
+            let d = [q[apex][0] - ci[0], q[apex][1] - ci[1], q[apex][2] - ci[2]];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+            let dir = [d[0] / l, d[1] / l, d[2] / l];
             let tilt = dir[2].clamp(-1.0, 1.0).acos().to_degrees();
-            print!("f{f}: ({:+.2},{:+.2},{:+.2}) tilt={:.0}deg   ", dir[0], dir[1], dir[2], tilt);
+            print!(
+                "f{f}: ({:+.2},{:+.2},{:+.2}) tilt={:.0}deg   ",
+                dir[0], dir[1], dir[2], tilt
+            );
         }
         println!();
     }

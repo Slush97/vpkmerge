@@ -145,6 +145,29 @@ pub fn extract_vsnd_mp3(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
     Ok(mp3.to_vec())
 }
 
+/// Whether a `.vsnd_c` clip is authored to loop, read from its `CTRL` block's
+/// `m_vSound.m_nLoopStart`. Source 2's convention (the same one [`encode_vsnd_c`]
+/// writes) is `-1` for a one-shot clip and `>= 0` for a looping one, so a caller
+/// swapping a clip can preserve the original's loop behavior instead of guessing
+/// (a `..._loop` / music clip stays looping; a VO line stays one-shot).
+///
+/// # Errors
+/// Fails if the input does not parse as a resource, lacks a `CTRL` block, or that
+/// block is not the expected `m_vSound` shape. A missing `m_nLoopStart` is treated
+/// as one-shot (`false`) rather than an error.
+pub fn vsnd_looped(data: &[u8]) -> Result<bool, DecodeError> {
+    let resource = Resource::parse(data)?;
+    let ctrl_bytes = resource
+        .find_block(BLOCK_CTRL)
+        .ok_or(DecodeError::BadResource("vsnd_c has no CTRL block"))?;
+    let root = kv3::decode(ctrl_bytes)?;
+    let sound = root
+        .get("m_vSound")
+        .ok_or(DecodeError::BadResource("vsnd_c CTRL has no m_vSound"))?;
+    let loop_start = sound.get("m_nLoopStart").and_then(Value::as_int);
+    Ok(matches!(loop_start, Some(s) if s >= 0))
+}
+
 /// Whether `data` starts like an MP3 stream: an `ID3` tag, or an MPEG audio frame
 /// sync (11 set bits: `0xFF` then top 3 bits of the next byte). Cheap guard so a
 /// non-MP3 codec surfaces as an error instead of unplayable `.mp3` bytes.

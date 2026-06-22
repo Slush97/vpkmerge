@@ -151,6 +151,32 @@ Built for a Grimoire per-ability sound picker (control `volume`/`pitch`/clip cho
 just swap the audio). Full writeup + the pending in-game verification step:
 [docs/spike-vsndevts-kv3.md](./docs/spike-vsndevts-kv3.md).
 
+## Sound swap (drop your own audio: `soundswap`)
+
+`vpkmerge soundswap --from-vpk <pak> --clip <ENTRY.vsnd_c> --audio <FILE.mp3>
+--encode-vpk <OUT_dir.vpk> [--loop auto|on|off] [--vpk-entry PATH]` replaces one clip's
+audio with a user file. It reads the clip at `--clip` from the pak as its own **donor
+template** (the same reuse-an-existing-asset model as `icon`), mints a new `.vsnd_c`
+around the supplied MP3 via `morphic::encode_vsnd_c`, and packs it at the clip's entry
+path so it overrides in place (the soundevent keeps pointing at the same path; the bytes
+there are now yours). This is the Foundry sound-swap backbone: drop audio -> mint -> addon
+VPK -> install as a managed local mod.
+
+- **Loop is auto-detected, not guessed.** `--loop auto` (default) inherits the donor
+  clip's own `m_vSound.m_nLoopStart` (`-1` = one-shot, `>= 0` = looping), so a `..._loop`
+  / music clip stays looping and a VO line stays one-shot; `on`/`off` force it. The loop
+  *points* don't survive a different-length substitution, so a swapped loop loops the
+  whole new clip (handled by the minter). Reader: `morphic::sound::vsnd_looped`.
+- **MP3 input, no ffmpeg.** v1 takes an MP3; the rate / channels / duration are parsed
+  from the MP3 frame headers in pure Rust (`vpkmerge_core::parse_mp3_params`), so the tool
+  stays a dependency-free standalone binary. Transcoding other formats to MP3 is a caller
+  concern (a later enhancement can add it).
+- Core API: `vpkmerge_core::{mint_swapped_clip, parse_mp3_params, donor_is_looped}`
+  (`src/soundswap.rs`). Verified on the live pak: loop auto-detect correct, the minted MP3
+  round-trips byte-identical (re-extract via `catalog voiceclip`), substitution works.
+  In-game rendering inherits the proven custom-`.vsnd_c` mint path; an independent in-game
+  reconfirm of a `soundswap`-built addon is still pending.
+
 **Ability music map (which ult fits a music swap):** `examples/ult_sound_map.rs`
 generates, from `scripts/heroes.vdata_c` (`ESlot_Signature_4` = ult) +
 `scripts/abilities.vdata_c` (sound fields + `AbilityDuration`/`AbilityChannelTime`),

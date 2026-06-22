@@ -68,6 +68,9 @@ pub use recolor::{
 pub mod icon;
 pub use icon::{build_icon_from_template, png_to_rgba8_image};
 
+pub mod soundswap;
+pub use soundswap::{donor_is_looped, mint_swapped_clip, parse_mp3_params};
+
 pub mod hero_recolor;
 pub use hero_recolor::{
     animate_particle_timing_bytes, insert_color_cycle_operator,

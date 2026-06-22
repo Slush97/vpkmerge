@@ -123,6 +123,13 @@ enum Command {
     /// Locker custom hero-card upload: pass one `--set` per card variant.
     Icon(IconCmd),
 
+    /// Swap one Deadlock sound clip with your own MP3. Reads the clip's `.vsnd_c`
+    /// from `--from-vpk` as a donor template, mints a new container around your
+    /// `--audio` MP3 (rate/channels/duration parsed from the MP3, no ffmpeg), and
+    /// packs it at the clip's entry path so it overrides in place. The Foundry
+    /// sound-swap backbone: drop audio -> mint -> addon VPK -> install.
+    Soundswap(SoundswapCmd),
+
     /// Build a custom soul-container override VPK from a user `.glb`. `import`
     /// clones the model's mesh into the stock soul container, atlases its
     /// materials into one albedo, fits it to the orb's bounds, and (by default)
@@ -367,6 +374,52 @@ struct IconCmd {
     /// so it overrides the base art in place.
     #[arg(long = "encode-vpk", value_name = "OUT_dir.vpk")]
     encode_vpk: PathBuf,
+}
+
+#[derive(Args)]
+struct SoundswapCmd {
+    /// VPK to read the donor clip from (the base `pak01_dir.vpk`, or any VPK that
+    /// ships the clip you target). The `.vsnd_c` at `--clip` is reused as the
+    /// container template (its format GUID, envelope, and loop info are kept).
+    #[arg(long = "from-vpk", value_name = "VPK")]
+    from_vpk: PathBuf,
+
+    /// Entry path of the clip `.vsnd_c` to swap, inside `--from-vpk`
+    /// (e.g. `sounds/abilities/abrams/...vsnd_c`). Also the pack target unless
+    /// `--vpk-entry` overrides it, so the result overrides this clip in place.
+    #[arg(long, value_name = "ENTRY")]
+    clip: String,
+
+    /// The replacement audio: an **MP3** file on disk. Its sample rate, channel
+    /// count, and duration are read from the MP3 frame headers (no ffmpeg).
+    #[arg(long, value_name = "FILE.mp3")]
+    audio: PathBuf,
+
+    /// Loop the minted clip: `auto` (default) inherits the donor clip's own loop
+    /// flag (so a `..._loop`/music clip stays looping and a one-shot VO line stays
+    /// one-shot); `on`/`off` force it.
+    #[arg(long = "loop", value_enum, default_value_t = LoopMode::Auto)]
+    loop_mode: LoopMode,
+
+    /// Pack the minted clip into this one addon VPK so it overrides in place.
+    #[arg(long = "encode-vpk", value_name = "OUT_dir.vpk")]
+    encode_vpk: PathBuf,
+
+    /// Entry path for the minted clip inside `--encode-vpk`. Defaults to `--clip`
+    /// (override only to pack at a different path than the donor was read from).
+    #[arg(long = "vpk-entry", value_name = "PATH")]
+    vpk_entry: Option<String>,
+}
+
+/// How `soundswap` decides whether the minted clip loops.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum LoopMode {
+    /// Inherit the donor clip's own loop flag (`m_nLoopStart`).
+    Auto,
+    /// Force the minted clip to loop.
+    On,
+    /// Force the minted clip to play once.
+    Off,
 }
 
 #[derive(Args)]
@@ -1569,6 +1622,7 @@ fn main() -> Result<()> {
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
         Some(Command::Vmat(args)) => run_vmat(&args),
         Some(Command::Icon(args)) => run_icon(&args),
+        Some(Command::Soundswap(args)) => run_soundswap(&args),
         Some(Command::SoulContainer(args)) => run_soul_container(&args),
         Some(Command::Catalog(args)) => run_catalog(&args),
         None => run_merge(cli),
@@ -3089,6 +3143,42 @@ fn run_icon(args: &IconCmd) -> Result<()> {
         args.encode_vpk.display(),
         refs.len(),
         if refs.len() == 1 { "y" } else { "ies" }
+    );
+    Ok(())
+}
+
+fn run_soundswap(args: &SoundswapCmd) -> Result<()> {
+    // The clip being swapped is its own donor template: read it from the pak for
+    // its container shape (format GUID, envelope, loop flag).
+    let donor = vpkmerge_core::read_vpk_entry(&args.from_vpk, &args.clip).with_context(|| {
+        format!(
+            "reading donor clip {} from {}",
+            args.clip,
+            args.from_vpk.display()
+        )
+    })?;
+
+    // Resolve whether the minted clip loops: inherit the donor's own flag unless
+    // forced. Inheriting keeps a `..._loop`/music clip looping and a VO line one-shot.
+    let looped = match args.loop_mode {
+        LoopMode::On => true,
+        LoopMode::Off => false,
+        LoopMode::Auto => vpkmerge_core::donor_is_looped(&donor)
+            .with_context(|| format!("reading the loop flag of donor {}", args.clip))?,
+    };
+
+    let audio = std::fs::read(&args.audio)
+        .with_context(|| format!("reading audio {}", args.audio.display()))?;
+    let minted = vpkmerge_core::mint_swapped_clip(&donor, &audio, looped)
+        .with_context(|| format!("minting {} from {}", args.clip, args.audio.display()))?;
+
+    let entry = args.vpk_entry.as_deref().unwrap_or(&args.clip);
+    vpkmerge_core::pack(&[(entry, minted.as_slice())], &args.encode_vpk)?;
+    eprintln!(
+        "wrote {}: {entry} ({}) <- {} overrides the clip in place",
+        args.encode_vpk.display(),
+        if looped { "looping" } else { "one-shot" },
+        args.audio.display(),
     );
     Ok(())
 }

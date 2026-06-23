@@ -406,8 +406,8 @@ mod tests {
 
     #[test]
     fn trim_keeps_frames_in_window() {
-        let mp3 = stream(20); // ~522 ms
-        // Ask for ~100..300 ms: snaps to frames 4..12 (4*26=104, stop at >=300).
+        // ~522 ms total. Ask for ~100..300 ms: snaps to frames 4..12 (4*26=104, stop at >=300).
+        let mp3 = stream(20);
         let out = trim_mp3(&mp3, 100, 300).expect("trim");
         let p = parse_mp3_params(&out, false).expect("parse trimmed");
         let frames = out.len() / 417;

@@ -171,11 +171,55 @@ VPK -> install as a managed local mod.
   from the MP3 frame headers in pure Rust (`vpkmerge_core::parse_mp3_params`), so the tool
   stays a dependency-free standalone binary. Transcoding other formats to MP3 is a caller
   concern (a later enhancement can add it).
+- **Trim + loudness gain, pure Rust, no decode.** `vpkmerge_core::{trim_mp3, apply_mp3_gain}`
+  (`src/mp3.rs`) edit the raw MPEG frames: `trim_mp3(bytes, start_ms, end_ms)` byte-copies
+  the frames in the window (frame-snapped, ~26 ms; kept audio bit-identical), and
+  `apply_mp3_gain(bytes, gain_db)` shifts every Layer III granule's `global_gain` (the
+  lossless mp3gain technique, ~1.505 dB/step, CRC recomputed) so a swap can match the
+  volume of the sound it replaces with no transcode. Both feed the existing mint path.
+  CLI: `soundswap --trim-start <MS> --trim-end <MS> --gain-db <DB>` (apply before mint, in
+  both clip and event mode). The GUI's import editor (Foundry SwapPanel) authors these:
+  a Web Audio waveform with draggable in/out handles, a play-selection preview, and a
+  "match volume" normalizer that measures the import's vs. the donor clip's RMS in the
+  renderer and passes the resulting `gainDb` through `foundry:swapSound`. A `--gain-db`-only
+  CLI normalizer (auto-measuring loudness) is deferred since it would need an MP3 decoder
+  in core; the GUI does the measurement. Verified: trim 200..700 ms -> 0.522 s frame-snap,
+  gain +6/-6 dB byte-identical round-trip on a live LAME clip. In-game reconfirm pending.
 - Core API: `vpkmerge_core::{mint_swapped_clip, parse_mp3_params, donor_is_looped}`
   (`src/soundswap.rs`). Verified on the live pak: loop auto-detect correct, the minted MP3
   round-trips byte-identical (re-extract via `catalog voiceclip`), substitution works.
   In-game rendering inherits the proven custom-`.vsnd_c` mint path; an independent in-game
   reconfirm of a `soundswap`-built addon is still pending.
+
+**Event mode (swap by soundevent, not by clip).** The catalog surfaces *events*
+(`catalog herosounds` / `catalog voiceline`), and most hero gameplay events are
+**randomizer pools** (10-35 clips), so a single `--clip` swap only replaces 1 of N.
+`vpkmerge soundswap --from-vpk <pak> --event <NAME> (--hero <CODE> | --soundevents
+<ENTRY>) --audio <FILE.mp3> --encode-vpk <OUT_dir.vpk> [--pool all|collapse]
+[--loop auto|on|off]` joins catalog -> swap: it resolves the event's clip pool from the
+`.vsndevts_c` itself and handles the whole pool. `--hero <code>` resolves to
+`soundevents/hero/<code>.vsndevts_c` (gameplay); pass `--soundevents <entry>` for VO or
+any other tree.
+- `--pool all` (default): mint your audio into **every** clip in the pool, each
+  overridden in place. The event still randomizes but every option is your sound, so it
+  always plays. The `.vsndevts_c` is untouched. Robust; pool clips that live in another
+  pak are left unchanged and reported (`EventSwap.skipped`), never a hard failure.
+- `--pool collapse`: mint **once** and rewrite the event's `vsnd_files` to that single
+  clip (no randomization). Packs the edited `.vsndevts_c` + the one clip. Smaller. With
+  `--vpk-entry <PATH>` it mints at a **new** clip path and repoints the event there
+  instead of overriding the first pool clip in place. This is how you swap a sound whose
+  clips are **shared** between heroes (e.g. `sounds/player/melee/shared/...` swing, used
+  by all 39 heroes) for **one** hero only: the event (`Seven.Melee.Swing`) lives in that
+  hero's `.vsndevts_c`, so repointing it to a fresh path leaves every other hero alone.
+- Core API: `vpkmerge_core::swap_event_audio(vpk, sndevts_entry, event, mp3,
+  looped_override, PoolPolicy, collapse_target)` -> `EventSwap`. Verified on the
+  live pak (`tests/soundswap_event_live.rs`, gated on `DEADLOCK_PAK`): replace-all mints
+  every present pool clip byte-identical to the input MP3, collapse rewrites the pool to
+  one clip; both via `catalog voiceclip` re-extract. Single-`--clip` mode is unchanged.
+  First real swap built + installed (Grimoire local mod "Seven Vine Boom Melee",
+  `sound-swaps/seven-vineboom-melee/`): collapse + custom path puts a downloaded vine-boom
+  MP3 on `Seven.Melee.Swing` only; in-game reconfirm pending. One event per invocation
+  (multi-event-per-hero in one addon would need chained soundevents edits, a follow-up).
 
 **Ability music map (which ult fits a music swap):** `examples/ult_sound_map.rs`
 generates, from `scripts/heroes.vdata_c` (`ESlot_Signature_4` = ult) +

@@ -68,8 +68,13 @@ pub use recolor::{
 pub mod icon;
 pub use icon::{build_icon_from_template, png_to_rgba8_image};
 
+pub mod mp3;
+pub use mp3::{apply_mp3_gain, trim_mp3};
+
 pub mod soundswap;
-pub use soundswap::{donor_is_looped, mint_swapped_clip, parse_mp3_params};
+pub use soundswap::{
+    donor_is_looped, mint_swapped_clip, parse_mp3_params, swap_event_audio, EventSwap, PoolPolicy,
+};
 
 pub mod hero_recolor;
 pub use hero_recolor::{

@@ -21,23 +21,39 @@ use crate::error::DecodeError;
 use crate::kv3::Value;
 
 use super::dxgi::DxgiFormat;
-use super::vbib::{BufferDesc, InputLayoutField, OnDiskBuffer};
+use super::vbib::{parse_vbib_block, BufferDesc, InputLayoutField, OnDiskBuffer};
 
-/// One embedded mesh from `CTRL` `embedded_meshes` (the modern `MVTX`/`MIDX`
-/// shape, keyed `m_Name` / `m_nDataBlock`).
+/// One embedded mesh from `CTRL` `embedded_meshes`. Modern Deadlock models use
+/// the `MVTX`/`MIDX` shape (keyed `m_Name` / `m_nDataBlock`, geometry in
+/// per-buffer blocks via [`vertex_buffers`]/[`index_buffers`]); older and
+/// decompile-recompiled mods use the legacy shape (un-prefixed keys, geometry in
+/// a single VBIB/`MBUF` block named by [`vbib_block`]).
+///
+/// [`vertex_buffers`]: EmbeddedMesh::vertex_buffers
+/// [`index_buffers`]: EmbeddedMesh::index_buffers
+/// [`vbib_block`]: EmbeddedMesh::vbib_block
 #[derive(Debug, Clone)]
 pub struct EmbeddedMesh {
     pub name: String,
     pub mesh_index: usize,
-    /// Global block index of this mesh's `MDAT`.
+    /// Global block index of this mesh's `MDAT` (the draw calls). Shared by both
+    /// layouts.
     pub data_block: usize,
+    /// Modern layout: one descriptor per `MVTX` block. Empty for the legacy
+    /// layout (see [`vbib_block`](EmbeddedMesh::vbib_block)).
     pub vertex_buffers: Vec<BufferDesc>,
+    /// Modern layout: one descriptor per `MIDX` block. Empty for the legacy
+    /// layout.
     pub index_buffers: Vec<BufferDesc>,
+    /// Legacy layout: global block index of the single VBIB/`MBUF` block holding
+    /// both vertex and index buffers. `None` for the modern layout.
+    pub vbib_block: Option<usize>,
 }
 
 impl EmbeddedMesh {
-    /// Parses every entry of `CTRL.embedded_meshes`. Errors if an entry uses
-    /// the legacy `vbib_block` shape, which Deadlock hero models do not.
+    /// Parses every entry of `CTRL.embedded_meshes`, accepting both the modern
+    /// (`m_`-prefixed keys, split `MVTX`/`MIDX` buffers) and legacy (un-prefixed
+    /// keys, single `vbib_block`) shapes.
     pub fn parse_all(ctrl: &Value) -> Result<Vec<EmbeddedMesh>, DecodeError> {
         let arr = ctrl
             .get("embedded_meshes")
@@ -46,29 +62,45 @@ impl EmbeddedMesh {
 
         let mut out = Vec::with_capacity(arr.len());
         for em in arr {
-            if em.get("vbib_block").is_some() || em.get("m_nDataBlock").is_none() {
-                return Err(DecodeError::Model("unsupported embedded-mesh layout"));
-            }
             let name = em
                 .get("m_Name")
+                .or_else(|| em.get("name"))
                 .and_then(Value::as_str)
-                .ok_or(DecodeError::Model("embedded mesh missing m_Name"))?
+                .ok_or(DecodeError::Model("embedded mesh missing name"))?
                 .to_owned();
             let mesh_index = usize::try_from(
                 em.get("m_nMeshIndex")
+                    .or_else(|| em.get("mesh_index"))
                     .and_then(Value::as_int)
-                    .ok_or(DecodeError::Model("embedded mesh missing m_nMeshIndex"))?,
+                    .ok_or(DecodeError::Model("embedded mesh missing mesh index"))?,
             )
             .map_err(|_| DecodeError::Model("negative mesh index"))?;
             let data_block = usize::try_from(
                 em.get("m_nDataBlock")
+                    .or_else(|| em.get("data_block"))
                     .and_then(Value::as_int)
-                    .ok_or(DecodeError::Model("embedded mesh missing m_nDataBlock"))?,
+                    .ok_or(DecodeError::Model("embedded mesh missing data block"))?,
             )
             .map_err(|_| DecodeError::Model("negative data block"))?;
 
-            let vertex_buffers = parse_buffer_list(em, "m_vertexBuffers")?;
-            let index_buffers = parse_buffer_list(em, "m_indexBuffers")?;
+            // The un-prefixed `vbib_block` marks the legacy single-block layout;
+            // its geometry is decoded from that block in `assemble`. (Modern
+            // models carry an `m_nVBIBBlock`, which we ignore.)
+            let vbib_block = em
+                .get("vbib_block")
+                .and_then(Value::as_int)
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|_| DecodeError::Model("negative vbib block"))?;
+
+            let (vertex_buffers, index_buffers) = if vbib_block.is_some() {
+                (Vec::new(), Vec::new())
+            } else {
+                (
+                    parse_buffer_list(em, "m_vertexBuffers")?,
+                    parse_buffer_list(em, "m_indexBuffers")?,
+                )
+            };
 
             out.push(EmbeddedMesh {
                 name,
@@ -76,6 +108,7 @@ impl EmbeddedMesh {
                 data_block,
                 vertex_buffers,
                 index_buffers,
+                vbib_block,
             });
         }
         Ok(out)
@@ -212,8 +245,15 @@ impl DrawCall {
             vertex_count: int_field(dc, "m_nVertexCount")?,
             index_count: int_field(dc, "m_nIndexCount")?,
             start_index: int_field(dc, "m_nStartIndex")?,
-            applied_index_offset: u32::try_from(int_field(dc, "m_nAppliedIndexOffset")?)
-                .map_err(|_| DecodeError::Model("applied index offset too large"))?,
+            // Older / recompiled models omit m_nAppliedIndexOffset; absent means
+            // no offset (indices are already global, see should_apply_index_offset).
+            applied_index_offset: dc
+                .get("m_nAppliedIndexOffset")
+                .and_then(Value::as_int)
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| DecodeError::Model("applied index offset too large"))?
+                .unwrap_or(0),
             base_vertex: u32::try_from(int_field(dc, "m_nBaseVertex")?)
                 .map_err(|_| DecodeError::Model("base vertex too large"))?,
             material,
@@ -333,23 +373,39 @@ pub fn assemble(
     let weight_count = bone_weight_count(&mdat);
     let skinned = weight_count > 0 && remap.is_some();
 
-    // Decode + deinterleave each vertex buffer once.
-    let mut vertex_buffers = Vec::with_capacity(embedded.vertex_buffers.len());
-    for desc in &embedded.vertex_buffers {
-        let raw = blocks
-            .block(desc.block_index)
-            .ok_or(DecodeError::Model("MVTX block index out of range"))?;
-        let on_disk = desc.decode(raw, true)?;
-        vertex_buffers.push(deinterleave(&on_disk, if skinned { remap } else { None })?);
-    }
+    // Resolve raw vertex + index buffers. The modern layout references one
+    // MVTX/MIDX block per buffer (descriptors from CTRL); the legacy layout
+    // packs everything into a single VBIB block. Both feed the same downstream
+    // deinterleave + MDAT draw-call assembly.
+    let (raw_vertex_buffers, index_buffers): (Vec<OnDiskBuffer>, Vec<OnDiskBuffer>) =
+        if let Some(vbib_index) = embedded.vbib_block {
+            let vbib = blocks
+                .block(vbib_index)
+                .ok_or(DecodeError::Model("VBIB block index out of range"))?;
+            parse_vbib_block(vbib)?
+        } else {
+            let mut vbs = Vec::with_capacity(embedded.vertex_buffers.len());
+            for desc in &embedded.vertex_buffers {
+                let raw = blocks
+                    .block(desc.block_index)
+                    .ok_or(DecodeError::Model("MVTX block index out of range"))?;
+                vbs.push(desc.decode(raw, true)?);
+            }
+            let mut ibs = Vec::with_capacity(embedded.index_buffers.len());
+            for desc in &embedded.index_buffers {
+                let raw = blocks
+                    .block(desc.block_index)
+                    .ok_or(DecodeError::Model("MIDX block index out of range"))?;
+                ibs.push(desc.decode(raw, false)?);
+            }
+            (vbs, ibs)
+        };
 
-    // Decode index buffers (kept raw for per-draw-call slicing).
-    let mut index_buffers = Vec::with_capacity(embedded.index_buffers.len());
-    for desc in &embedded.index_buffers {
-        let raw = blocks
-            .block(desc.block_index)
-            .ok_or(DecodeError::Model("MIDX block index out of range"))?;
-        index_buffers.push(desc.decode(raw, false)?);
+    // Deinterleave each vertex buffer once. Index buffers stay raw for
+    // per-draw-call slicing.
+    let mut vertex_buffers = Vec::with_capacity(raw_vertex_buffers.len());
+    for on_disk in &raw_vertex_buffers {
+        vertex_buffers.push(deinterleave(on_disk, if skinned { remap } else { None })?);
     }
 
     let scene_objects = SceneObject::parse_all(&mdat)?;
@@ -1726,5 +1782,83 @@ mod mesh_group_tests {
         // Fewer masks than indices: the unmasked index fails open (kept).
         let d = data(1, &[0b0100]); // index 0 = sleeping-only (dropped), index 1 = no entry
         assert_eq!(filter_default_mesh_group(&d, vec![0, 1]), vec![1]);
+    }
+}
+
+#[cfg(test)]
+mod legacy_layout_tests {
+    use super::*;
+
+    fn obj(pairs: Vec<(&str, Value)>) -> Value {
+        Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
+    /// Legacy / "optimized" models use un-prefixed CTRL keys and reference their
+    /// geometry through a single `vbib_block` instead of split MVTX/MIDX buffers.
+    #[test]
+    fn parse_all_reads_legacy_vbib_layout() {
+        let ctrl = obj(vec![(
+            "embedded_meshes",
+            Value::Array(vec![obj(vec![
+                ("name", Value::String("unnamed_1".into())),
+                ("mesh_index", Value::Int(0)),
+                ("data_block", Value::Int(0)),
+                ("vbib_block", Value::Int(1)),
+            ])]),
+        )]);
+        let meshes = EmbeddedMesh::parse_all(&ctrl).expect("parse legacy CTRL");
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].vbib_block, Some(1));
+        assert_eq!(meshes[0].data_block, 0);
+        assert_eq!(meshes[0].mesh_index, 0);
+        assert!(meshes[0].vertex_buffers.is_empty());
+        assert!(meshes[0].index_buffers.is_empty());
+    }
+
+    /// The modern m_-prefixed shape still parses as a split-buffer (non-VBIB) mesh.
+    #[test]
+    fn parse_all_still_reads_modern_layout() {
+        let ctrl = obj(vec![(
+            "embedded_meshes",
+            Value::Array(vec![obj(vec![
+                ("m_Name", Value::String("unnamed_1".into())),
+                ("m_nMeshIndex", Value::Int(0)),
+                ("m_nDataBlock", Value::Int(2)),
+                ("m_vertexBuffers", Value::Array(vec![])),
+                ("m_indexBuffers", Value::Array(vec![])),
+            ])]),
+        )]);
+        let meshes = EmbeddedMesh::parse_all(&ctrl).expect("parse modern CTRL");
+        assert_eq!(meshes[0].vbib_block, None);
+        assert_eq!(meshes[0].data_block, 2);
+    }
+
+    /// Older draw calls omit `m_nAppliedIndexOffset`; it must default to 0 (no
+    /// offset) rather than error, so legacy meshes assemble.
+    #[test]
+    fn draw_call_defaults_missing_applied_index_offset() {
+        let dc = obj(vec![
+            (
+                "m_vertexBuffers",
+                Value::Array(vec![obj(vec![("m_hBuffer", Value::Int(0))])]),
+            ),
+            ("m_indexBuffer", obj(vec![("m_hBuffer", Value::Int(0))])),
+            (
+                "m_material",
+                Value::String("models/props_gameplay/soul_container/x.vmat".into()),
+            ),
+            (
+                "m_nPrimitiveType",
+                Value::String("RENDER_PRIM_TRIANGLES".into()),
+            ),
+            ("m_nVertexCount", Value::Int(6004)),
+            ("m_nIndexCount", Value::Int(19776)),
+            ("m_nStartIndex", Value::Int(0)),
+            ("m_nBaseVertex", Value::Int(0)),
+        ]);
+        let parsed = DrawCall::parse(&dc).expect("parse legacy draw call");
+        assert_eq!(parsed.applied_index_offset, 0);
+        assert_eq!(parsed.vertex_count, 6004);
+        assert_eq!(parsed.index_count, 19776);
     }
 }

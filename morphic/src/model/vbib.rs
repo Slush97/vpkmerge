@@ -167,6 +167,120 @@ fn parse_field(f: &Value) -> Result<InputLayoutField, DecodeError> {
     })
 }
 
+fn read_u32(block: &[u8], pos: usize) -> Result<u32, DecodeError> {
+    let s = block
+        .get(pos..pos + 4)
+        .ok_or(DecodeError::Model("VBIB block truncated"))?;
+    Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+/// Reads a fixed 32-byte, null-terminated semantic name and upper-cases it to
+/// match [`parse_field`] (the deinterleaver keys on `POSITION`/`NORMAL`/...).
+fn read_semantic_name(name: &[u8]) -> String {
+    let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    String::from_utf8_lossy(&name[..end]).to_uppercase()
+}
+
+/// Parses a classic VBIB-format mesh-buffer block (FOURCC `MBUF`, or a `VBIB`
+/// block) into decoded vertex and index buffers, in declaration order.
+///
+/// This is the geometry layout `CTRL.embedded_meshes[].vbib_block` points at.
+/// Modern Deadlock models split geometry into one `MVTX`/`MIDX` block per buffer
+/// described by KV3 ([`BufferDesc::from_kv`]); older and decompile-recompiled
+/// mods ("optimized" soul containers) emit this single self-describing block
+/// instead, which the per-descriptor path can't read.
+///
+/// Layout (a port of VRF `Blocks/VBIB.cs`): a 16-byte header of
+/// `(vertexBuffer, indexBuffer)` `(offset, count)` pairs, each offset relative
+/// to its own field; then per buffer a 24-byte `OnDiskBufferData`
+/// `(elementCount, elementSize, attrRef{off,count}, dataRef{off,size})` with the
+/// refs relative to their own field; attributes are 56-byte
+/// `RenderInputLayoutField` records (32-byte semantic name, then `semanticIndex`,
+/// DXGI `format`, `offset`, `slot`, `slotType`, `instanceStepRate` -- only the
+/// first four are needed). A payload shorter than `elementCount * elementSize`
+/// is meshopt-compressed, mirroring the `MVTX`/`MIDX` path.
+pub fn parse_vbib_block(
+    block: &[u8],
+) -> Result<(Vec<OnDiskBuffer>, Vec<OnDiskBuffer>), DecodeError> {
+    let vb_count = read_u32(block, 4)? as usize;
+    let ib_count = read_u32(block, 12)? as usize;
+    // Header offsets are relative to their own u32 field (positions 0 and 8).
+    let vb_start = (read_u32(block, 0)? as usize)
+        .checked_add(0)
+        .ok_or(DecodeError::Model("VBIB offset overflow"))?;
+    let ib_start = (read_u32(block, 8)? as usize)
+        .checked_add(8)
+        .ok_or(DecodeError::Model("VBIB offset overflow"))?;
+    let vertices = parse_vbib_buffers(block, vb_start, vb_count, true)?;
+    let indices = parse_vbib_buffers(block, ib_start, ib_count, false)?;
+    Ok((vertices, indices))
+}
+
+fn parse_vbib_buffers(
+    block: &[u8],
+    start: usize,
+    count: usize,
+    is_vertex: bool,
+) -> Result<Vec<OnDiskBuffer>, DecodeError> {
+    const REC: usize = 24; // OnDiskBufferData header size
+    const FIELD: usize = 56; // RenderInputLayoutField size
+    let ovf = || DecodeError::Model("VBIB offset overflow");
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let pos = start
+            .checked_add(i.checked_mul(REC).ok_or_else(ovf)?)
+            .ok_or_else(ovf)?;
+        let element_count = read_u32(block, pos)? as usize;
+        let element_size = read_u32(block, pos + 4)? as usize;
+        let attr_off = read_u32(block, pos + 8)? as usize;
+        let attr_count = read_u32(block, pos + 12)? as usize;
+        let data_off = read_u32(block, pos + 16)? as usize;
+        let total_size = read_u32(block, pos + 20)? as usize;
+
+        // attrRef / dataRef are relative to their own fields (pos+8, pos+16).
+        let attr_start = (pos + 8).checked_add(attr_off).ok_or_else(ovf)?;
+        let mut fields = Vec::with_capacity(attr_count);
+        for a in 0..attr_count {
+            let fp = attr_start
+                .checked_add(a.checked_mul(FIELD).ok_or_else(ovf)?)
+                .ok_or_else(ovf)?;
+            let name = block
+                .get(fp..fp + 32)
+                .ok_or(DecodeError::Model("VBIB block truncated"))?;
+            let format_id = read_u32(block, fp + 36)?;
+            let format = DxgiFormat::from_u32(format_id)
+                .ok_or(DecodeError::Model("unsupported vertex format"))?;
+            fields.push(InputLayoutField {
+                semantic_name: read_semantic_name(name),
+                semantic_index: read_u32(block, fp + 32)? as i32,
+                format,
+                offset: read_u32(block, fp + 40)? as usize,
+            });
+        }
+
+        let data_start = (pos + 16).checked_add(data_off).ok_or_else(ovf)?;
+        let data = block
+            .get(data_start..data_start.checked_add(total_size).ok_or_else(ovf)?)
+            .ok_or(DecodeError::Model("VBIB block truncated"))?;
+
+        // VBIB records the on-disk size; a payload shorter than the unpacked
+        // size is meshopt-compressed (same rule the MVTX/MIDX path uses).
+        let unpacked = element_count
+            .checked_mul(element_size)
+            .ok_or(DecodeError::Model("buffer size overflow"))?;
+        let desc = BufferDesc {
+            block_index: 0,
+            element_count,
+            element_size,
+            meshopt: total_size < unpacked,
+            zstd: false,
+            fields,
+        };
+        out.push(desc.decode(data, is_vertex)?);
+    }
+    Ok(out)
+}
+
 /// Decoded normal + tangent attribute arrays. Tangents are empty when the
 /// normal format is uncompressed (a standalone `TANGENT` attribute carries them
 /// instead).
@@ -724,6 +838,76 @@ fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal classic VBIB block (1 vertex buffer, POSITION-only; 1 u16 index
+    /// buffer) parses and decodes, exercising the legacy `vbib_block`/`MBUF` path
+    /// that "optimized"/recompiled soul-container mods ship.
+    #[test]
+    fn parse_vbib_block_decodes_a_minimal_block() {
+        let positions: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let indices: [u16; 3] = [0, 1, 2];
+
+        // Section layout: 16B header, vb record @16, ib record @40, attr @64,
+        // vertex data @120, index data @156. Offsets are relative to their own
+        // field, matching VRF Blocks/VBIB.cs.
+        let attr_pos = 64usize;
+        let vdata_pos = attr_pos + 56;
+        let idata_pos = vdata_pos + positions.len() * 12;
+
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&16u32.to_le_bytes()); // vb_off (field @0) -> 16
+        b.extend_from_slice(&1u32.to_le_bytes()); // vb_count
+        b.extend_from_slice(&32u32.to_le_bytes()); // ib_off (field @8) -> 40
+        b.extend_from_slice(&1u32.to_le_bytes()); // ib_count
+                                                  // vertex buffer record @16
+        b.extend_from_slice(&(positions.len() as u32).to_le_bytes());
+        b.extend_from_slice(&12u32.to_le_bytes()); // stride
+        b.extend_from_slice(&((attr_pos - 24) as u32).to_le_bytes()); // attr_off (field @24)
+        b.extend_from_slice(&1u32.to_le_bytes()); // attr_count
+        b.extend_from_slice(&((vdata_pos - 32) as u32).to_le_bytes()); // data_off (field @32)
+        b.extend_from_slice(&((positions.len() * 12) as u32).to_le_bytes()); // total_size
+                                                                             // index buffer record @40
+        b.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes()); // index width
+        b.extend_from_slice(&0u32.to_le_bytes()); // attr_off (no attrs)
+        b.extend_from_slice(&0u32.to_le_bytes()); // attr_count
+        b.extend_from_slice(&((idata_pos - 56) as u32).to_le_bytes()); // data_off (field @56)
+        b.extend_from_slice(&((indices.len() * 2) as u32).to_le_bytes()); // total_size
+                                                                          // attribute record @64 (56 bytes)
+        assert_eq!(b.len(), attr_pos);
+        let mut name = [0u8; 32];
+        name[..8].copy_from_slice(b"POSITION");
+        b.extend_from_slice(&name);
+        b.extend_from_slice(&0i32.to_le_bytes()); // semanticIndex
+        b.extend_from_slice(&6u32.to_le_bytes()); // R32G32B32_FLOAT
+        b.extend_from_slice(&0u32.to_le_bytes()); // offset
+        b.extend_from_slice(&0i32.to_le_bytes()); // slot
+        b.extend_from_slice(&0u32.to_le_bytes()); // slotType
+        b.extend_from_slice(&0i32.to_le_bytes()); // instanceStepRate
+                                                  // vertex data @120
+        assert_eq!(b.len(), vdata_pos);
+        for p in &positions {
+            for c in p {
+                b.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        // index data @156
+        assert_eq!(b.len(), idata_pos);
+        for i in &indices {
+            b.extend_from_slice(&i.to_le_bytes());
+        }
+
+        let (vbs, ibs) = parse_vbib_block(&b).expect("parse VBIB");
+        assert_eq!(vbs.len(), 1);
+        assert_eq!(ibs.len(), 1);
+        assert_eq!(vbs[0].element_count, 3);
+        assert_eq!(vbs[0].element_size, 12);
+        assert_eq!(vbs[0].fields.len(), 1);
+        assert_eq!(vbs[0].fields[0].semantic_name, "POSITION");
+        assert_eq!(vbs[0].positions().unwrap(), positions);
+        assert_eq!(ibs[0].element_count, 3);
+        assert_eq!(ibs[0].element_size, 2);
+    }
 
     /// `write_positions` overwrites only the POSITION lane: the new positions
     /// read back, and every other byte of the stride is preserved.

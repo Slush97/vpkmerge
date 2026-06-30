@@ -14,9 +14,64 @@ pub(super) fn decompile_panorama_layout_xml(resource: &[u8]) -> Result<String> {
 pub(super) fn rebuild_panorama_layout_xml_resource(raw: &[u8], xml: &[u8]) -> Result<Vec<u8>> {
     let old_laco = resource_block(raw, *b"LaCo")?;
     let format = morphic::kv3::Format::from_payload(old_laco).context("reading LaCo KV3 format")?;
+
+    // Faithfulness gate. Our XML<->LaCo codec is canonicalizing, not byte-exact:
+    // it models the node types real Deadlock layouts use but does NOT yet
+    // reproduce every compiled detail (it normalizes single-child `child`
+    // containers to `vecChildren`, flattens reference-typed attribute values to
+    // plain values, and omits the `sourceLineColumn` source map). Rather than
+    // silently ship a layout whose structure we altered, we only rebuild a file
+    // we can prove we reproduce: decompile the ORIGINAL, recompile it, and
+    // require structural equality (ignoring the debug-only `sourceLineColumn`).
+    // If that fails, bail so the caller's --allow-stale-raw path keeps the
+    // original compiled bytes untouched. Verified against shipped HUD layouts:
+    // simple ones pass; ones using reference attributes / single-child
+    // containers correctly fall back instead of being silently rewritten.
+    let original = morphic::kv3::decode(old_laco).context("decoding original LaCo KV3")?;
+    if !layout_codec_reproduces(&original)? {
+        bail!(
+            "vpkmerge cannot losslessly rebuild this Panorama layout: its compiled form uses \
+             constructs the XML codec does not yet round-trip (reference-typed attributes or \
+             single-child containers). Re-pack with --allow-stale-raw to keep the original \
+             compiled layout."
+        );
+    }
+
     let layout = compile_panorama_layout_xml(xml)?;
     let new_laco = morphic::kv3::encode(&layout, &format);
     replace_resource_block(raw, *b"LaCo", &new_laco)
+}
+
+/// Whether decompiling `original` and recompiling the result reproduces the same
+/// layout AST, ignoring the debug-only `sourceLineColumn` source map (which the
+/// engine does not render from and which XML cannot carry). This is the proof
+/// that our codec fully models a given file's structure before we trust it to
+/// apply an edit.
+fn layout_codec_reproduces(original: &Value) -> Result<bool> {
+    let xml = print_panorama_layout_xml(original)?;
+    let recompiled = compile_panorama_layout_xml(xml.as_bytes())?;
+    Ok(strip_kv3_key(original, "sourceLineColumn")
+        == strip_kv3_key(&recompiled, "sourceLineColumn"))
+}
+
+/// Clone `value` with every object entry named `drop` removed, recursively.
+fn strip_kv3_key(value: &Value, drop: &str) -> Value {
+    match value {
+        Value::Object(pairs) => Value::Object(
+            pairs
+                .iter()
+                .filter(|(key, _)| key != drop)
+                .map(|(key, child)| (key.clone(), strip_kv3_key(child, drop)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|child| strip_kv3_key(child, drop))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 pub(super) fn compile_panorama_layout_xml(xml: &[u8]) -> Result<Value> {
@@ -406,4 +461,112 @@ fn escape_xml_attribute(value: &str) -> String {
         .replace('\'', "&apos;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The codec is a stable fixed point on the node types real layouts use:
+    /// decompiling a compiled layout and recompiling it reproduces the same AST.
+    /// This is the invariant `rebuild_panorama_layout_xml_resource` enforces.
+    #[test]
+    fn codec_round_trips_supported_node_types() {
+        let xml = br#"<root>
+	<styles>
+		<include src="s2r://panorama/styles/example.vcss_c" />
+	</styles>
+	<snippets>
+		<snippet name="Demo">
+			<Panel id="PanelA" class="foo" hittest="false" />
+		</snippet>
+	</snippets>
+	<Panel class="Bar">
+		<Label text="hi &amp; bye" />
+	</Panel>
+</root>
+"#;
+        let layout = compile_panorama_layout_xml(xml).expect("compile");
+        let printed = print_panorama_layout_xml(&layout).expect("print");
+        let recompiled = compile_panorama_layout_xml(printed.as_bytes()).expect("recompile");
+        let format = morphic::kv3::Format([1; 16]);
+        assert_eq!(
+            morphic::kv3::encode(&recompiled, &format),
+            morphic::kv3::encode(&layout, &format),
+            "compile->print->compile must be a fixed point"
+        );
+    }
+
+    /// The faithfulness gate passes for a layout built from our own compiler
+    /// (it carries no `sourceLineColumn` and only modeled node types).
+    #[test]
+    fn faithfulness_gate_accepts_codec_native_layout() {
+        let xml =
+            br#"<root><styles><include src="s2r://panorama/styles/a.vcss_c" /></styles></root>"#;
+        let layout = compile_panorama_layout_xml(xml).expect("compile");
+        assert!(layout_codec_reproduces(&layout).expect("gate"));
+    }
+
+    /// The gate rejects a layout whose compiled form uses a construct the codec
+    /// canonicalizes away. Here a single-child container stored as `child` (what
+    /// shipped HUD layouts do) recompiles to `vecChildren`, so the gate must fail
+    /// and the rebuild fall back to raw rather than silently restructure it.
+    #[test]
+    fn faithfulness_gate_rejects_single_child_container() {
+        let original = Value::Object(vec![(
+            "m_AST".to_owned(),
+            Value::Object(vec![(
+                "m_pRoot".to_owned(),
+                Value::Object(vec![
+                    ("eType".to_owned(), Value::String("ROOT".to_owned())),
+                    (
+                        "child".to_owned(),
+                        Value::Object(vec![(
+                            "eType".to_owned(),
+                            Value::String("STYLES".to_owned()),
+                        )]),
+                    ),
+                ]),
+            )]),
+        )]);
+        assert!(!layout_codec_reproduces(&original).expect("gate"));
+    }
+
+    /// Local fidelity audit against real compiled layouts. Gated on
+    /// `VPKMERGE_VXML_DIR` (a directory of `.vxml_c`), mirroring the repo's other
+    /// real-asset tests (`DEADLOCK_PAK`, `MORPHIC_MODEL_VPK`): a no-op in CI,
+    /// proof against shipped HUD layouts locally. The invariant we assert is the
+    /// safety one: a file is *either* faithfully reproducible (so a rebuild is
+    /// exact) *or* the gate rejects it (so the build falls back to raw). It is
+    /// never silently rewritten. Reports the faithful/fallback split.
+    #[test]
+    fn real_vxml_layouts_are_reproduced_or_rejected() {
+        let Ok(dir) = std::env::var("VPKMERGE_VXML_DIR") else {
+            return;
+        };
+        let (mut faithful, mut fallback) = (0u32, 0u32);
+        for entry in std::fs::read_dir(&dir).expect("read VPKMERGE_VXML_DIR") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("vxml_c") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("read vxml_c");
+            // Skip files morphic cannot even decompile (already raw-only on dump).
+            let Ok(original) =
+                morphic::kv3::decode(resource_block(&bytes, *b"LaCo").expect("LaCo block"))
+            else {
+                continue;
+            };
+            if layout_codec_reproduces(&original).expect("gate") {
+                faithful += 1;
+            } else {
+                fallback += 1;
+            }
+        }
+        eprintln!("vxml faithfulness: {faithful} reproduced, {fallback} fall back to raw");
+        assert!(
+            faithful + fallback > 0,
+            "no decodable .vxml_c found in {dir}"
+        );
+    }
 }

@@ -24,8 +24,9 @@ morphic = { path = "../morphic", version = "0.9.1" }
 # Decode + resize user PNGs for the custom icon/hero-card import (icon.rs).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Parse decompiled Panorama layout XML back into the LaCo KV3 AST for
-# workspace rebuilds.
-quick-xml = "0.38"
+# workspace rebuilds. Pinned to 0.39 to share the version `plist` already pulls
+# (avoids compiling two copies of quick-xml).
+quick-xml = "0.39"
 # Rust soul-container import prep reads user GLB files directly, replacing the
 # Blender-only normalization/material extraction stage for compiler source trees.
 gltf = { version = "1", features = ["names"] }

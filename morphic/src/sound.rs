@@ -284,9 +284,12 @@ pub fn vsnd_looped(data: &[u8]) -> Result<bool, DecodeError> {
 }
 
 /// Whether `data` starts like an MP3 stream. This accepts an optional `ID3v2` tag,
-/// then requires two structurally valid MPEG audio frames back-to-back. A loose
-/// sync-word check is too weak here: raw little-endian PCM commonly starts with
-/// bytes such as `FF FF 00 00`, which has the sync bits but is not MP3.
+/// then requires a structurally valid MPEG audio frame, confirmed either by a
+/// second valid frame back-to-back or, for a genuinely short clip, by that lone
+/// frame accounting for the rest of the stream (bar an optional `ID3v1` tag). A
+/// loose sync-word check is too weak here: raw little-endian PCM commonly starts
+/// with bytes such as `FF FF 00 00`, which has the sync bits but is not MP3 (its
+/// bitrate nibble is invalid, so the first frame already fails to parse).
 fn looks_like_mp3(data: &[u8]) -> bool {
     let Some(first) = first_mpeg_frame_offset(data) else {
         return false;
@@ -295,7 +298,15 @@ fn looks_like_mp3(data: &[u8]) -> bool {
         return false;
     };
     let second = first.saturating_add(first_len);
-    second < data.len() && mpeg_frame_len(data, second).is_some()
+    // Strong signal: a second structurally valid frame immediately follows.
+    if second < data.len() && mpeg_frame_len(data, second).is_some() {
+        return true;
+    }
+    // A single complete frame is still MP3 when it is the whole payload (a short,
+    // one-frame clip), allowing only a trailing ID3v1 tag. Random data is already
+    // rejected above, since its first frame fails to parse.
+    let rest = &data[second..];
+    rest.is_empty() || rest.starts_with(b"TAG")
 }
 
 fn first_mpeg_frame_offset(data: &[u8]) -> Option<usize> {
@@ -590,6 +601,34 @@ mod tests {
         mp3.extend_from_slice(&frame);
         mp3.extend_from_slice(&frame);
         assert!(looks_like_mp3(&mp3));
+    }
+
+    #[test]
+    fn mp3_guard_accepts_a_single_complete_frame() {
+        // A genuinely short clip is one frame with nothing trailing.
+        let mut frame = vec![0xFF, 0xFB, 0x90, 0x64];
+        frame.resize(417, 0);
+        assert!(looks_like_mp3(&frame));
+    }
+
+    #[test]
+    fn mp3_guard_accepts_single_frame_with_id3v1_tag() {
+        let mut data = vec![0xFF, 0xFB, 0x90, 0x64];
+        data.resize(417, 0);
+        let mut tag = b"TAG".to_vec();
+        tag.resize(128, 0);
+        data.extend_from_slice(&tag);
+        assert!(looks_like_mp3(&data));
+    }
+
+    #[test]
+    fn mp3_guard_rejects_a_lone_header_followed_by_garbage() {
+        // One plausible frame header but trailing bytes that are neither a second
+        // frame nor an ID3v1 tag: too weak to call MP3.
+        let mut data = vec![0xFF, 0xFB, 0x90, 0x64];
+        data.resize(417, 0);
+        data.extend_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9a]);
+        assert!(!looks_like_mp3(&data));
     }
 
     #[test]

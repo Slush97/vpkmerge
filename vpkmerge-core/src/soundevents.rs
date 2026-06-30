@@ -109,8 +109,17 @@ impl SoundEvents {
     }
 
     /// Replace the decoded tree from an edited JSON projection.
+    ///
+    /// The projection ([`to_json`](Self::to_json)) is lossy: KV3 distinguishes a
+    /// signed `Int` from an unsigned `UInt`, but both render as a bare JSON
+    /// number. A naive whole-tree rebuild would therefore re-type every unsigned
+    /// field to signed, so editing one event's `volume` could silently flip
+    /// unrelated `UInt` fields across the whole file. Instead this reconciles the
+    /// edited JSON against the existing tree key-by-key, holding each original
+    /// value's KV3 type wherever the edit still fits it; genuinely new keys or
+    /// array elements fall back to JSON-inferred types.
     pub fn replace_from_json(&mut self, json: serde_json::Value) {
-        self.root = value_from_json(json);
+        self.root = reconcile_json(&self.root, json);
     }
 
     /// Replace every clip path equal to `from` with `to`, anywhere in the tree.
@@ -257,6 +266,50 @@ pub(crate) fn value_from_json(v: serde_json::Value) -> Value {
     }
 }
 
+/// Merge an edited JSON value onto the original KV3 value, preserving the
+/// original's KV3 type where the edit is representable in it. This is what keeps
+/// the lossy JSON projection from re-typing unsigned values to signed on a
+/// soundevents round-trip (JSON has one number type; KV3 has `Int` and `UInt`).
+/// New subtrees (keys/elements absent from the original) use [`value_from_json`].
+pub(crate) fn reconcile_json(orig: &Value, json: serde_json::Value) -> Value {
+    use serde_json::Value as J;
+    match (orig, json) {
+        (Value::Object(orig_pairs), J::Object(mut map)) => {
+            let mut out = Vec::with_capacity(orig_pairs.len());
+            // Retained keys keep the original KV3 order and type.
+            for (key, orig_child) in orig_pairs {
+                if let Some(child) = map.remove(key) {
+                    out.push((key.clone(), reconcile_json(orig_child, child)));
+                }
+            }
+            // Keys added in the edited JSON have no original to match; append them.
+            for (key, child) in map {
+                out.push((key, value_from_json(child)));
+            }
+            Value::Object(out)
+        }
+        (Value::Array(orig_items), J::Array(items)) => Value::Array(
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(i, child)| match orig_items.get(i) {
+                    Some(orig_child) => reconcile_json(orig_child, child),
+                    None => value_from_json(child),
+                })
+                .collect(),
+        ),
+        // Numeric scalars: hold the original KV3 type when the edit fits it, so
+        // an untouched (or still-in-range) `UInt`/`Int`/`Double` does not drift.
+        (Value::UInt(_), J::Number(n)) if n.as_u64().is_some() => Value::UInt(n.as_u64().unwrap()),
+        (Value::Int(_), J::Number(n)) if n.as_i64().is_some() => Value::Int(n.as_i64().unwrap()),
+        (Value::Double(_), J::Number(n)) if n.as_f64().is_some() => {
+            Value::Double(n.as_f64().unwrap())
+        }
+        // Type changed (or a non-numeric edit): take the edit as JSON infers it.
+        (_, json) => value_from_json(json),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +398,52 @@ mod tests {
         let back = SoundEvents::from_bytes(bytes).expect("reload");
         let fire = back.root.get("Seven.Wpn.Fire").unwrap();
         assert_eq!(fire.get("volume").and_then(Value::as_f64), Some(-3.5));
+    }
+
+    #[test]
+    fn reconcile_preserves_untouched_kv3_number_types() {
+        // A tree mixing the three numeric KV3 types. The JSON projection collapses
+        // Int and UInt to one number type, so a naive rebuild would re-type `u`.
+        let orig = Value::Object(vec![
+            ("u".to_owned(), Value::UInt(48_000)),
+            ("i".to_owned(), Value::Int(-5)),
+            ("d".to_owned(), Value::Double(0.5)),
+        ]);
+        // Edit only `d`; `u` and `i` are unchanged in the projection.
+        let mut json = value_to_json(&orig);
+        json["d"] = serde_json::json!(0.75);
+
+        let merged = reconcile_json(&orig, json);
+        assert!(matches!(merged.get("u"), Some(Value::UInt(48_000))));
+        assert!(matches!(merged.get("i"), Some(Value::Int(-5))));
+        assert!(matches!(merged.get("d"), Some(Value::Double(_))));
+        assert_eq!(merged.get("d").and_then(Value::as_f64), Some(0.75));
+    }
+
+    #[test]
+    fn reconcile_keeps_type_for_in_range_numeric_edit() {
+        let orig = Value::Object(vec![
+            ("u".to_owned(), Value::UInt(10)),
+            ("d".to_owned(), Value::Double(1.0)),
+        ]);
+        let mut json = value_to_json(&orig);
+        json["u"] = serde_json::json!(20); // still non-negative -> stays UInt
+        json["d"] = serde_json::json!(4); // integer literal -> stays Double
+
+        let merged = reconcile_json(&orig, json);
+        assert!(matches!(merged.get("u"), Some(Value::UInt(20))));
+        assert!(matches!(merged.get("d"), Some(Value::Double(_))));
+    }
+
+    #[test]
+    fn reconcile_falls_back_for_new_keys_and_type_changes() {
+        let orig = Value::Object(vec![("u".to_owned(), Value::UInt(1))]);
+        let mut json = value_to_json(&orig);
+        json["u"] = serde_json::json!(-3); // negative -> no longer fits UInt
+        json["added"] = serde_json::json!(7); // brand-new key
+
+        let merged = reconcile_json(&orig, json);
+        assert!(matches!(merged.get("u"), Some(Value::Int(-3))));
+        assert!(matches!(merged.get("added"), Some(Value::Int(7))));
     }
 }

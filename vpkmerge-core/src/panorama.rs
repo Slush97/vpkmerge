@@ -861,6 +861,17 @@ fn ensure_png_matches_texture(template_vtex: &[u8], png: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// The leading CRC of a Panorama DATA block is CRC-32/ISO-HDLC over the source.
+// Verified against shipped Valve `.vcss_c`/`.vsvg_c` with no referenced names:
+// `crc32_ieee(source)` reproduces the stored value byte-for-byte. When the source
+// had `url(...)`/`@import` references, the compiler hoists them into the name
+// table ahead of `source_offset` and computes the CRC over the *original*
+// pre-hoist text, which is unrecoverable from the stripped DATA payload; for
+// those, this recomputed value is a best-effort that won't match. That is
+// harmless because the engine cannot be validating this CRC against the payload
+// (it would reject Valve's own referenced files): it is a build-time staleness
+// marker, not a runtime gate. We always preserve the original name table by
+// copying `old_data[..source_offset]` and only overwrite the 4-byte CRC.
 fn rebuild_named_panorama_data(old_data: &[u8], source: &[u8]) -> Result<Vec<u8>> {
     let source_offset = panorama_data_source_offset(old_data)
         .context("could not locate Panorama DATA source offset")?;

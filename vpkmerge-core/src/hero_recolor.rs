@@ -644,8 +644,17 @@ fn familiar_recipe() -> HeroRecolorRecipe {
 }
 
 /// Victor (`frank`): high-saturation ground projections from the ability audit,
-/// plus the Aura of Suffering membrane color map added by the 2026-06-11 update
-/// (`painaura_model_fade_color`, the chromatic layer of the green aura rework).
+/// plus the Aura of Suffering membrane color map (`painaura_model_fade_color`,
+/// the chromatic layer of the green aura). The aura's membrane glow is the
+/// particle COLOR fed into the model material's `g_vSelfIllumTint1 = $ILLUMCOLOR`
+/// (renderer `m_MaterialVars` maps it to particle field 17), and the sphere /
+/// ground rings are likewise particle-driven (`g_vColorTint1 = $COLORTINT`), so
+/// the particle prefix pass recolors the whole aura. The 2026-06-25 game update
+/// reworked these `frank_painaura_aura_*` files; the recipe still matches them by
+/// prefix, but any addon baked before that update must be re-baked to pick up the
+/// new/changed files. No material entry is pinned: `frank_painaura_sphere.vmat_c`
+/// carries no static `g_vColorTint` constant (its tint is the `$COLORTINT`
+/// expression the particles drive), so a material patch is a no-op there.
 fn frank_recipe() -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: "frank".to_string(),
@@ -662,9 +671,7 @@ fn frank_recipe() -> HeroRecolorRecipe {
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        material_entries: vec![
-            "materials/particle/abilities/frank/frank_painaura_sphere.vmat_c".to_string(),
-        ],
+        material_entries: Vec::new(),
         model_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/frank/frank_painaura_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c"
@@ -3616,7 +3623,7 @@ mod tests {
             ("drifter", 1, 0, "drifter_claw_ground_projected"),
             ("dynamo", 5, 2, "dynamo_void_sphere_projected"),
             ("familiar", 5, 0, "familiar_spotlight_ground_projected"),
-            ("frank", 4, 1, "frank_painaura_aoe_ground"),
+            ("frank", 4, 0, "frank_painaura_aoe_ground"),
             ("haze", 1, 0, "haze_tracer_self_illum"),
             ("kelvin", 3, 0, "kelvin_ice_dome_projected"),
             ("priest", 3, 0, "priest_snaptrap_ground"),

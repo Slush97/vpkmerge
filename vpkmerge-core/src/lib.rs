@@ -480,6 +480,14 @@ pub fn pack<O: AsRef<Path>>(files: &[(&str, &[u8])], output: O) -> Result<()> {
 /// file whose path collides with an existing entry (or with `addoninfo.txt`)
 /// overwrites it. Pass `&[]` for the plain identity-only tag.
 ///
+/// `drop_entries` names ORIGINAL input entries to omit from the extraction
+/// pass entirely (e.g. a legacy sidecar a new record supersedes). Dropping a
+/// path that is not present in `input` is a no-op, not an error. A dropped
+/// entry can still reappear in the output: `extra_files` is applied after the
+/// drop, so an `extra_files` entry at the SAME path as a dropped entry lands
+/// normally (the drop only ever removes the ORIGINAL bytes, never the extra
+/// one). Pass `&[]` to keep every original entry.
+///
 /// For a normal multi-input merge, prefer stamping the metadata directly via
 /// [`MergeOptions::metadata`] (and [`MergeOptions::extra_files`]) on [`merge`]
 /// so the addon never exists without its identity file in the first place.
@@ -495,6 +503,7 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     input: P,
     metadata: Option<&AddonMetadata>,
     extra_files: &[(&str, &[u8])],
+    drop_entries: &[String],
     output: O,
 ) -> Result<()> {
     let input = input.as_ref();
@@ -508,10 +517,14 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     }
 
     let vpk = valve_pak::open(input).with_context(|| format!("opening {}", input.display()))?;
-    let all_paths: Vec<String> = vpk.file_paths().cloned().collect();
+    // valve_pak already normalizes entry paths to forward slashes on read (see
+    // its utils::normalize_path), matching the same axis write_extra_files'
+    // safe_join writes on, so a caller-supplied drop entry normalizes the same
+    // way before comparing (a caller may pass a backslash path verbatim).
+    let dropped: HashSet<String> = drop_entries.iter().map(|e| normalize_entry(e)).collect();
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
-    for path in &all_paths {
+    for path in vpk.file_paths().filter(|p| !dropped.contains(normalize_entry(p).as_str())) {
         let mut vf = vpk
             .get_file(path)
             .with_context(|| format!("locating {path} in {}", input.display()))?;
@@ -541,6 +554,16 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
         .save(output)
         .with_context(|| format!("saving {}", output.display()))?;
     Ok(())
+}
+
+/// Normalize a VPK entry path for comparison: backslashes to forward slashes,
+/// the same axis `valve_pak` already normalizes real entry paths onto. Not
+/// case-folded: Source 2 entry paths are case-sensitive on Linux, and every
+/// existing comparison in this crate (the merge collision map, `safe_join`'s
+/// destination writes) is case-sensitive too, so `--drop-entry` matches on
+/// the same terms.
+fn normalize_entry(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 /// Read one entry's raw bytes out of a VPK.
@@ -1510,7 +1533,7 @@ mod tests {
             source_url: Some("https://gamebanana.com/mods/123456".to_string()),
             build_date: Some("2026-06-30T12:00:00Z".to_string()),
         };
-        embed_metadata(&input, Some(&metadata),&[], &output)?;
+        embed_metadata(&input, Some(&metadata), &[], &[], &output)?;
 
         assert_eq!(
             entry_set(&output)?,
@@ -1552,7 +1575,7 @@ mod tests {
             author: "Someone Else".to_string(),
             ..Default::default()
         };
-        embed_metadata(&input, Some(&metadata),&[], &output)?;
+        embed_metadata(&input, Some(&metadata), &[], &[], &output)?;
 
         assert_eq!(
             entry_set(&output)?,
@@ -1620,7 +1643,7 @@ mod tests {
             ("grimoire_meta.json", meta_json),
             ("nested/dir/extra.bin", nested),
         ];
-        embed_metadata(&input, Some(&metadata),&extra, &output)?;
+        embed_metadata(&input, Some(&metadata), &extra, &[], &output)?;
 
         assert_eq!(
             entry_set(&output)?,
@@ -1663,7 +1686,7 @@ mod tests {
         };
         let replaced: &[u8] = b"replaced";
         let extra: [(&str, &[u8]); 1] = [("data/cfg.txt", replaced)];
-        embed_metadata(&input, Some(&metadata),&extra, &output)?;
+        embed_metadata(&input, Some(&metadata), &extra, &[], &output)?;
 
         // The extra file wins over the colliding original, no duplicate entry.
         assert_eq!(
@@ -1671,6 +1694,94 @@ mod tests {
             vec!["addoninfo.txt".to_string(), "data/cfg.txt".to_string()]
         );
         assert_eq!(read_entry(&output, "data/cfg.txt")?.as_slice(), replaced);
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_drop_entries_removes_only_the_named_entry() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("grimoire_meta.json", b"legacy merge companion"),
+                ("materials/foo.txt", b"foo-content"),
+                ("models/bar.txt", b"bar-content"),
+            ],
+        )?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let drop = vec!["grimoire_meta.json".to_string()];
+        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+
+        // The dropped entry is gone; every other original entry survives
+        // byte-identical.
+        assert_eq!(
+            entry_set(&output)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "materials/foo.txt".to_string(),
+                "models/bar.txt".to_string(),
+            ]
+        );
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        assert_eq!(read_entry(&output, "models/bar.txt")?, b"bar-content");
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_drop_entries_nonexistent_is_a_no_op() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("materials/foo.txt", b"foo-content")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let drop = vec!["does/not/exist.txt".to_string()];
+        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "materials/foo.txt".to_string()]
+        );
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_extra_file_at_dropped_path_still_lands() -> Result<()> {
+        // Dropping an entry removes the ORIGINAL bytes at that path; an
+        // extra_files entry at the SAME path is written afterward and must
+        // still land (extra wins, drop only applies to the original).
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("grimoire_meta.json", b"legacy merge companion")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let replacement: &[u8] = b"new modinfo payload";
+        let extra: [(&str, &[u8]); 1] = [("grimoire_meta.json", replacement)];
+        let drop = vec!["grimoire_meta.json".to_string()];
+        embed_metadata(&input, Some(&metadata), &extra, &drop, &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "grimoire_meta.json".to_string()]
+        );
+        assert_eq!(
+            read_entry(&output, "grimoire_meta.json")?.as_slice(),
+            replacement
+        );
         Ok(())
     }
 

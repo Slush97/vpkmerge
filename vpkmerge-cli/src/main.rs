@@ -281,6 +281,16 @@ struct MetadataCmd {
     #[arg(long = "extra-file", value_name = "ENTRY=PATH")]
     extra_file: Vec<String>,
 
+    /// Omit an existing entry from the output: `--drop-entry ENTRY`
+    /// (repeatable). ENTRY is a VPK entry path (subdirectories allowed);
+    /// dropping a path the input does not have is a no-op, not an error. Lets
+    /// a caller retire a superseded sidecar (e.g. a legacy
+    /// `grimoire_meta.json`) in the same repack that adds its replacement.
+    /// Applies only to the ORIGINAL input entry: an `--extra-file` at the
+    /// same ENTRY still lands, since extras are written after the drop.
+    #[arg(long = "drop-entry", value_name = "ENTRY")]
+    drop_entry: Vec<String>,
+
     /// Output VPK path. Parent directory is created if missing. Must differ
     /// from `--vpk`; to replace the original, write elsewhere then move the
     /// result over it.
@@ -2907,6 +2917,20 @@ fn report_extra_files(entries: &[String]) {
     }
 }
 
+/// Print a one-line confirmation of the `--drop-entry` entries requested, if
+/// any. Requesting a drop is a no-op when the entry was never present, so
+/// this reports the request, not a verified removal.
+fn report_dropped_entries(entries: &[String]) {
+    if !entries.is_empty() {
+        println!(
+            "  dropped {} entr{}: {}",
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" },
+            entries.join(", ")
+        );
+    }
+}
+
 fn run_merge(cli: Cli) -> Result<()> {
     let Some(output) = cli.output else {
         anyhow::bail!("missing OUTPUT. Run `vpkmerge --help` for usage.");
@@ -3411,16 +3435,23 @@ fn run_metadata(args: &MetadataCmd) -> Result<()> {
         build_date: args.build_date.clone(),
     });
     let extra_files = read_extra_files(&args.extra_file)?;
-    if metadata.is_none() && extra_files.is_empty() {
+    if metadata.is_none() && extra_files.is_empty() && args.drop_entry.is_empty() {
         anyhow::bail!(
-            "nothing to embed: pass --title/--author for a generated addoninfo.txt, or at least one --extra-file"
+            "nothing to do: pass --title/--author for a generated addoninfo.txt, --extra-file, or --drop-entry"
         );
     }
     let extra_refs: Vec<(&str, &[u8])> = extra_files
         .iter()
         .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
         .collect();
-    embed_metadata(&args.vpk, metadata.as_ref(), &extra_refs, &args.output).with_context(|| {
+    embed_metadata(
+        &args.vpk,
+        metadata.as_ref(),
+        &extra_refs,
+        &args.drop_entry,
+        &args.output,
+    )
+    .with_context(|| {
         format!(
             "embedding addoninfo.txt from {} into {}",
             args.vpk.display(),
@@ -3442,6 +3473,7 @@ fn run_metadata(args: &MetadataCmd) -> Result<()> {
     }
     let extra_entries: Vec<String> = extra_files.iter().map(|(entry, _)| entry.clone()).collect();
     report_extra_files(&extra_entries);
+    report_dropped_entries(&args.drop_entry);
     Ok(())
 }
 

@@ -524,7 +524,10 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     let dropped: HashSet<String> = drop_entries.iter().map(|e| normalize_entry(e)).collect();
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
-    for path in vpk.file_paths().filter(|p| !dropped.contains(normalize_entry(p).as_str())) {
+    for path in vpk
+        .file_paths()
+        .filter(|p| !dropped.contains(normalize_entry(p).as_str()))
+    {
         let mut vf = vpk
             .get_file(path)
             .with_context(|| format!("locating {path} in {}", input.display()))?;
@@ -1776,7 +1779,10 @@ mod tests {
 
         assert_eq!(
             entry_set(&output)?,
-            vec!["addoninfo.txt".to_string(), "grimoire_meta.json".to_string()]
+            vec![
+                "addoninfo.txt".to_string(),
+                "grimoire_meta.json".to_string()
+            ]
         );
         assert_eq!(
             read_entry(&output, "grimoire_meta.json")?.as_slice(),

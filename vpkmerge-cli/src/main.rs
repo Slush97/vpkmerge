@@ -48,9 +48,12 @@ struct Cli {
 
     /// Embed an extra arbitrary file into the merged VPK: `--extra-file
     /// ENTRY=LOCALPATH` (repeatable). LOCALPATH is read from disk and written at
-    /// the VPK entry path ENTRY (subdirectories allowed). On a collision with a
-    /// merged entry the extra file wins. Lets a caller stamp its own files (e.g.
-    /// `addoninfo.txt`, `grimoire_meta.json`) without the tool understanding them.
+    /// the VPK entry path ENTRY (subdirectories allowed). Extras behave as one
+    /// final, highest-priority input: on a collision with a merged entry the
+    /// extra file wins, the override is counted and printed by `--verbose`, and
+    /// `--strict` refuses it like any other conflict. Lets a caller stamp its
+    /// own files (e.g. `addoninfo.txt`, `grimoire_meta.json`) without the tool
+    /// understanding them.
     #[arg(long = "extra-file", value_name = "ENTRY=PATH")]
     extra_file: Vec<String>,
 }
@@ -2962,6 +2965,12 @@ fn run_merge(cli: Cli) -> Result<()> {
             ..Default::default()
         },
     )?;
+
+    if cli.verbose {
+        for path in &report.extra_replaced_paths {
+            println!("override: {path} <- --extra-file");
+        }
+    }
 
     println!(
         "wrote {}: {} entries, {} paths overridden from {} inputs",

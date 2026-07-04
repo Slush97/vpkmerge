@@ -172,18 +172,29 @@ pub struct MergeOptions {
     /// caller (e.g. Grimoire) serializes its own `addoninfo.txt` /
     /// `grimoire_meta.json` and passes them here rather than the engine
     /// understanding any schema. Entry paths may contain subdirectories;
-    /// parents are created (path traversal is refused by `safe_join`). Written
-    /// after the merged entries (and after [`metadata`]'s `addoninfo.txt`), so
-    /// an extra file whose path collides with an existing entry overwrites it,
-    /// the same overwrite rule as `addoninfo.txt`.
+    /// parents are created (path traversal is refused by `safe_join`).
+    ///
+    /// Extras behave as one final, highest-priority synthetic input: under the
+    /// default `LastWins` an extra whose path collides with a merged entry
+    /// wins, the collision counts toward [`MergeReport::overridden_paths`] and
+    /// is listed in [`MergeReport::extra_replaced_paths`], and under
+    /// [`CollisionPolicy::Error`] it is refused like any other conflict.
+    /// Under `FirstWins` an earlier real input beats a colliding extra. The
+    /// exception is [`metadata`](Self::metadata)'s `addoninfo.txt`, which an
+    /// extra at the same path always beats (the caller's own file wins over
+    /// the typed block).
     pub extra_files: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MergeReport {
     pub total_entries: usize,
-    /// Number of distinct paths whose content was overridden by a later input.
+    /// Number of distinct paths owned by more than one source: a later input,
+    /// or an [`MergeOptions::extra_files`] entry colliding with an input.
     pub overridden_paths: usize,
+    /// Canonical paths where an [`MergeOptions::extra_files`] entry replaced a
+    /// path also owned by a real input. Empty when extras collide with nothing.
+    pub extra_replaced_paths: Vec<String>,
     pub inputs: usize,
     pub output_path: PathBuf,
 }
@@ -366,46 +377,59 @@ pub fn merge<P: AsRef<Path>, O: AsRef<Path>>(
     }
 
     let vpks = open_all(ordered_inputs)?;
-    let owners = compute_owners(&vpks);
+
+    // Caller-supplied opaque files (Grimoire serializes its own addoninfo.txt /
+    // grimoire_meta.json and passes them here) enter the collision machinery as
+    // one synthetic input appended after the real ones: they win under the
+    // default LastWins, count toward override reporting, and are refused by
+    // CollisionPolicy::Error like any other conflict. Canonicalize + dedupe up
+    // front; two spellings of one canonical path collapse to the last one
+    // given, matching write-order-wins.
+    let extra_idx = vpks.len();
+    let mut extras: BTreeMap<String, &[u8]> = BTreeMap::new();
+    for (entry, bytes) in &options.extra_files {
+        extras.insert(canonical_entry(entry)?, bytes.as_slice());
+    }
+
+    let mut owners = compute_owners(&vpks);
+    for path in extras.keys() {
+        owners.entry(path.clone()).or_default().push(extra_idx);
+    }
     validate_overrides(&owners, &options.overrides, ordered_inputs.len())?;
     let winners = resolve_winners(&owners, options.collision_policy, &options.overrides)?;
     let overridden_paths = owners.values().filter(|v| v.len() > 1).count();
+    let extra_replaced_paths: Vec<String> = winners
+        .iter()
+        .filter(|(path, idx)| **idx == extra_idx && owners[path.as_str()].len() > 1)
+        .map(|(path, _)| path.clone())
+        .collect();
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
     for (path, idx) in &winners {
-        copy_vpk_entry(&vpks[*idx], path, tmp.path(), &format!("input {idx}"))?;
+        if *idx == extra_idx {
+            write_entry(tmp.path(), path, extras[path.as_str()])?;
+        } else {
+            copy_vpk_entry(&vpks[*idx], path, tmp.path(), &format!("input {idx}"))?;
+        }
     }
 
+    // The typed metadata block stays outside the collision machinery (an
+    // unconditional add-or-replace, see MergeOptions::metadata), with one
+    // exception: when the caller brought its own addoninfo.txt via extra_files
+    // and it won the path, the caller's file beats the typed block, the same
+    // precedence extras have always had.
+    let extra_owns_addoninfo = winners
+        .get(ADDON_INFO_ENTRY)
+        .is_some_and(|idx| *idx == extra_idx);
     if let Some(metadata) = &options.metadata {
-        write_entry(
-            tmp.path(),
-            ADDON_INFO_ENTRY,
-            addon_info_text(metadata).as_bytes(),
-        )?;
+        if !extra_owns_addoninfo {
+            write_entry(
+                tmp.path(),
+                ADDON_INFO_ENTRY,
+                addon_info_text(metadata).as_bytes(),
+            )?;
+        }
     }
-
-    // Caller-supplied opaque files (Grimoire serializes its own addoninfo.txt /
-    // grimoire_meta.json and passes them here). Written last so an extra file
-    // overwrites a colliding merged entry, the same overwrite rule addoninfo.txt
-    // follows above.
-    let extra_refs: Vec<(&str, &[u8])> = options
-        .extra_files
-        .iter()
-        .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
-        .collect();
-    write_extra_files(tmp.path(), &extra_refs)?;
-
-    // Distinct output entries = merged winners, plus addoninfo.txt when a typed
-    // metadata block was stamped, plus every extra file. A set de-duplicates so
-    // an extra file (or addoninfo) overwriting a winner is not double-counted.
-    let mut entry_paths: HashSet<&str> = winners.keys().map(String::as_str).collect();
-    if options.metadata.is_some() {
-        entry_paths.insert(ADDON_INFO_ENTRY);
-    }
-    for (entry, _) in &options.extra_files {
-        entry_paths.insert(entry.as_str());
-    }
-    let total_entries = entry_paths.len();
 
     let merged = valve_pak::from_directory(tmp.path()).context("packing merged VPK")?;
     merged
@@ -413,8 +437,11 @@ pub fn merge<P: AsRef<Path>, O: AsRef<Path>>(
         .with_context(|| format!("saving {}", output.display()))?;
 
     Ok(MergeReport {
-        total_entries,
+        // Counted from the VPK actually packed, so spelling variants of one
+        // canonical path can never inflate the number.
+        total_entries: merged.file_count(),
         overridden_paths,
+        extra_replaced_paths,
         inputs: ordered_inputs.len(),
         output_path: output,
     })
@@ -1840,6 +1867,113 @@ mod tests {
         let report = merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
         assert_eq!(report.total_entries, 3);
         assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from extra");
+        Ok(())
+    }
+
+    #[test]
+    fn strict_refuses_extra_file_collision() -> Result<()> {
+        // Two disjoint inputs would merge fine under strict; the extra file
+        // colliding with input a's entry must now be refused, not silently
+        // written over it.
+        let tmp = tempdir()?;
+        let a = tmp.path().join("a_dir.vpk");
+        let b = tmp.path().join("b_dir.vpk");
+        let out = tmp.path().join("out_dir.vpk");
+        make_vpk(&a, &[("only_a/file.txt", b"a-only")])?;
+        make_vpk(&b, &[("only_b/file.txt", b"b-only")])?;
+        let opts = MergeOptions {
+            collision_policy: CollisionPolicy::Error,
+            extra_files: vec![("only_a/file.txt".to_string(), b"from extra".to_vec())],
+            ..Default::default()
+        };
+        let err = merge(&[&a, &b], &out, &opts).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unresolved path conflict"), "got: {msg}");
+        assert!(msg.contains("only_a/file.txt"), "got: {msg}");
+        Ok(())
+    }
+
+    #[test]
+    fn extra_file_collision_counts_as_override_and_replaces() -> Result<()> {
+        let tmp = tempdir()?;
+        let a = tmp.path().join("a_dir.vpk");
+        let b = tmp.path().join("b_dir.vpk");
+        let out = tmp.path().join("out_dir.vpk");
+        make_vpk(&a, &[("only_a/file.txt", b"a-only")])?;
+        make_vpk(&b, &[("only_b/file.txt", b"b-only")])?;
+        let opts = MergeOptions {
+            extra_files: vec![("only_a/file.txt".to_string(), b"from extra".to_vec())],
+            ..Default::default()
+        };
+        let report = merge(&[&a, &b], &out, &opts)?;
+        assert_eq!(report.total_entries, 2);
+        assert_eq!(report.overridden_paths, 1);
+        assert_eq!(
+            report.extra_replaced_paths,
+            vec!["only_a/file.txt".to_string()]
+        );
+        assert_eq!(read_entry(&out, "only_a/file.txt")?, b"from extra");
+        Ok(())
+    }
+
+    #[test]
+    fn extra_file_backslash_spelling_collides_with_winner() -> Result<()> {
+        // A backslash spelling of an input-owned path is the same output
+        // location on disk, so it must count as one entry and one override,
+        // not a phantom extra entry.
+        let fx = two_inputs()?;
+        let opts = MergeOptions {
+            extra_files: vec![("shared\\file.txt".to_string(), b"from extra".to_vec())],
+            ..Default::default()
+        };
+        let report = merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
+        assert_eq!(report.total_entries, 3);
+        assert_eq!(report.overridden_paths, 1);
+        assert_eq!(
+            report.extra_replaced_paths,
+            vec!["shared/file.txt".to_string()]
+        );
+        assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from extra");
+        Ok(())
+    }
+
+    #[test]
+    fn extra_file_dot_prefix_spelling_is_canonicalized() -> Result<()> {
+        let tmp = tempdir()?;
+        let a = tmp.path().join("a_dir.vpk");
+        let b = tmp.path().join("b_dir.vpk");
+        let out = tmp.path().join("out_dir.vpk");
+        make_vpk(&a, &[("only_a/file.txt", b"a-only")])?;
+        make_vpk(&b, &[("only_b/file.txt", b"b-only")])?;
+        let opts = MergeOptions {
+            extra_files: vec![("./root.txt".to_string(), b"root".to_vec())],
+            ..Default::default()
+        };
+        let report = merge(&[&a, &b], &out, &opts)?;
+        assert_eq!(report.total_entries, 3);
+        assert_eq!(report.overridden_paths, 0);
+        assert!(report.extra_replaced_paths.is_empty());
+        assert!(entry_set(&out)?.contains(&"root.txt".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_skipped_when_extras_carry_addoninfo() -> Result<()> {
+        // A caller-supplied addoninfo.txt extra beats the typed metadata
+        // block, the precedence rule extras have always had.
+        let fx = two_inputs()?;
+        let own_info: &[u8] = b"\"AddonInfo\"\n{\n}\n";
+        let opts = MergeOptions {
+            metadata: Some(AddonMetadata {
+                title: "Typed".to_string(),
+                author: "T".to_string(),
+                ..Default::default()
+            }),
+            extra_files: vec![("addoninfo.txt".to_string(), own_info.to_vec())],
+            ..Default::default()
+        };
+        merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
+        assert_eq!(read_entry(&fx.out, "addoninfo.txt")?.as_slice(), own_info);
         Ok(())
     }
 }

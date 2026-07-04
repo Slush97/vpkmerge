@@ -1,6 +1,6 @@
 [package]
 name = "vpkmerge-cli"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 license = "MIT"
 description = "Command-line tool to combine and split Valve Pak (VPK) files."
@@ -17,7 +17,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-vpkmerge-core = { path = "../vpkmerge-core", version = "0.18" }
+vpkmerge-core = { path = "../vpkmerge-core", version = "0.19" }
 
 [dev-dependencies]
 # Integration tests (tests/metadata_cli.rs) build fixture VPKs in temp dirs.

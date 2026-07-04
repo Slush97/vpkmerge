@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.19.0
+
+Caller-owned sidecar entries: embed and retire arbitrary files (identity records, manager metadata) in a VPK without the tool understanding them. Built to back Grimoire's self-identifying VPK imprinting. Contributed by @oldreceipt (#40), with a post-merge hardening pass (#41).
+
+### CLI (`vpkmerge` 0.19)
+
+- New `metadata` subcommand: patch identity into an already-built VPK. `--title`/`--author` (plus optional `--version`/`--description`/`--gamebanana-id`/`--source-url`/`--build-date`) generate a classic `addoninfo.txt`; repeatable `--extra-file ENTRY=PATH` embeds caller-owned files opaquely; repeatable `--drop-entry ENTRY` retires a superseded sidecar in the same repack. Whenever any typed field is given, `--title` and `--author` are required together, so a generated block can never carry empty identity fields over existing provenance.
+- Bare merge gains the same repeatable `--extra-file ENTRY=PATH`. Extras behave as one final, highest-priority input: they win collisions, the override is counted and printed by `--verbose`, and `--strict` refuses it like any other conflict.
+- The `metadata` report states what actually happened, never the request: entries actually dropped, drop requests that matched nothing, originals replaced, and an entry count taken from the VPK actually written.
+
+### Library (`vpkmerge-core` 0.19)
+
+- `embed_metadata(input, Option<&AddonMetadata>, extra_files, drop_entries, output) -> Result<EmbedReport>`: repack an already-built VPK with an optional typed `addoninfo.txt`, opaque extra files, and dropped entries. Drop matching happens on the same canonical path axis entries are written on (`./x`, `x`, and `.\x` name the same entry).
+- `MergeOptions::extra_files`: opaque caller files embedded during a merge, riding the collision machinery as a synthetic highest-priority input. `MergeReport` gains `extra_replaced_paths`.
+- One canonical entry-path normalization (`canonical_entry`) now backs traversal refusal, drop matching, collision detection, and disk writes, so those axes cannot drift apart.
+
 ## v0.18.0
 
 Panorama (HUD/UI) workspace round-tripping, plus broader model decode coverage and a Victor VFX recolor fix. CLI-only release; all pre-existing commands are unchanged.

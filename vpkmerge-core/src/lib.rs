@@ -373,22 +373,15 @@ pub fn merge<P: AsRef<Path>, O: AsRef<Path>>(
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
     for (path, idx) in &winners {
-        let mut vf = vpks[*idx]
-            .get_file(path)
-            .with_context(|| format!("locating {path} in input {idx}"))?;
-        let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
-        let dst = safe_join(tmp.path(), path)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        std::fs::write(&dst, &bytes).with_context(|| format!("writing {}", dst.display()))?;
+        copy_vpk_entry(&vpks[*idx], path, tmp.path(), &format!("input {idx}"))?;
     }
 
     if let Some(metadata) = &options.metadata {
-        let info_path = tmp.path().join(ADDON_INFO_ENTRY);
-        std::fs::write(&info_path, addon_info_text(metadata))
-            .with_context(|| format!("writing {}", info_path.display()))?;
+        write_entry(
+            tmp.path(),
+            ADDON_INFO_ENTRY,
+            addon_info_text(metadata).as_bytes(),
+        )?;
     }
 
     // Caller-supplied opaque files (Grimoire serializes its own addoninfo.txt /
@@ -448,12 +441,7 @@ pub fn pack<O: AsRef<Path>>(files: &[(&str, &[u8])], output: O) -> Result<()> {
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
     for (entry, bytes) in files {
-        let dst = safe_join(tmp.path(), entry)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        std::fs::write(&dst, bytes).with_context(|| format!("writing {}", dst.display()))?;
+        write_entry(tmp.path(), entry, bytes)?;
     }
 
     let packed = valve_pak::from_directory(tmp.path()).context("packing VPK")?;
@@ -524,20 +512,12 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     let dropped: HashSet<String> = drop_entries.iter().map(|e| normalize_entry(e)).collect();
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
+    let source = input.display().to_string();
     for path in vpk
         .file_paths()
         .filter(|p| !dropped.contains(normalize_entry(p).as_str()))
     {
-        let mut vf = vpk
-            .get_file(path)
-            .with_context(|| format!("locating {path} in {}", input.display()))?;
-        let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
-        let dst = safe_join(tmp.path(), path)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        std::fs::write(&dst, &bytes).with_context(|| format!("writing {}", dst.display()))?;
+        copy_vpk_entry(&vpk, path, tmp.path(), &source)?;
     }
 
     // The typed addoninfo is optional: a caller that serializes its own
@@ -545,9 +525,11 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     // extra_files instead. Write the typed one first so an extra_files entry at
     // the same path still wins.
     if let Some(metadata) = metadata {
-        let info_path = tmp.path().join(ADDON_INFO_ENTRY);
-        std::fs::write(&info_path, addon_info_text(metadata))
-            .with_context(|| format!("writing {}", info_path.display()))?;
+        write_entry(
+            tmp.path(),
+            ADDON_INFO_ENTRY,
+            addon_info_text(metadata).as_bytes(),
+        )?;
     }
 
     write_extra_files(tmp.path(), extra_files)?;
@@ -733,11 +715,23 @@ fn matches_predicate(pred: &PathPredicate, path: &str) -> bool {
 /// Source 2 entries are always relative, forward-slash, and never contain `..`,
 /// so this rejects only tampered inputs.
 fn safe_join(base: &Path, entry: &str) -> Result<PathBuf> {
+    Ok(base.join(canonical_entry(entry)?))
+}
+
+/// Canonical comparison/write form of an untrusted VPK entry path: exactly the
+/// segments [`safe_join`] keeps (`/` and `\` both separate, empty and `"."`
+/// segments drop out), joined with `/`. Refuses absolute paths, parent-dir
+/// components, drive/volume prefixes, and effectively-empty paths, so a path
+/// that canonicalizes is also safe to write under a temp root. Two spellings
+/// of the same output location (`shared\file.txt`, `./shared/file.txt`)
+/// canonicalize identically; every comparison that must agree with where bytes
+/// actually land (drop matching, extra-file collision detection) goes through
+/// this one function so the axes cannot drift apart.
+fn canonical_entry(entry: &str) -> Result<String> {
     if entry.starts_with('/') || entry.starts_with('\\') {
         bail!("refusing absolute VPK entry path: {entry}");
     }
-    let mut out = base.to_path_buf();
-    let mut pushed = false;
+    let mut segments: Vec<&str> = Vec::new();
     // Split on both separators: a crafted entry can use either regardless of OS.
     for seg in entry.split(['/', '\\']) {
         match seg {
@@ -746,16 +740,35 @@ fn safe_join(base: &Path, entry: &str) -> Result<PathBuf> {
             _ if seg.contains(':') => {
                 bail!("refusing VPK entry with drive/volume component: {entry}")
             }
-            _ => {
-                out.push(seg);
-                pushed = true;
-            }
+            _ => segments.push(seg),
         }
     }
-    if !pushed {
+    if segments.is_empty() {
         bail!("refusing empty VPK entry path: {entry}");
     }
-    Ok(out)
+    Ok(segments.join("/"))
+}
+
+/// Write one entry's bytes under `root`: [`safe_join`] the path, create parent
+/// directories, write. The single writer every extract-to-tempdir pass in this
+/// crate goes through (`pack`, `merge`, `write_bucket`, [`embed_metadata`],
+/// `write_extra_files`), so path handling cannot diverge between them.
+fn write_entry(root: &Path, entry: &str, bytes: &[u8]) -> Result<()> {
+    let dst = safe_join(root, entry)?;
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    std::fs::write(&dst, bytes).with_context(|| format!("writing {}", dst.display()))
+}
+
+/// Copy one entry out of an opened VPK into `root` via [`write_entry`].
+/// `source` labels the VPK in error contexts (`"input 2"`, a file path).
+fn copy_vpk_entry(vpk: &valve_pak::VPK, path: &str, root: &Path, source: &str) -> Result<()> {
+    let mut vf = vpk
+        .get_file(path)
+        .with_context(|| format!("locating {path} in {source}"))?;
+    let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
+    write_entry(root, path, &bytes)
 }
 
 /// Write each `(entry_path, bytes)` extra file under `root`, creating parent
@@ -764,12 +777,7 @@ fn safe_join(base: &Path, entry: &str) -> Result<PathBuf> {
 /// file whose path collides with one already written overwrites it.
 fn write_extra_files(root: &Path, extra_files: &[(&str, &[u8])]) -> Result<()> {
     for &(entry, bytes) in extra_files {
-        let dst = safe_join(root, entry)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        std::fs::write(&dst, bytes).with_context(|| format!("writing {}", dst.display()))?;
+        write_entry(root, entry, bytes)?;
     }
     Ok(())
 }
@@ -777,16 +785,7 @@ fn write_extra_files(root: &Path, extra_files: &[(&str, &[u8])]) -> Result<()> {
 fn write_bucket(vpk: &valve_pak::VPK, entries: &[String], output_path: &Path) -> Result<()> {
     let tmp = tempfile::tempdir().context("creating temp directory")?;
     for path in entries {
-        let mut vf = vpk
-            .get_file(path)
-            .with_context(|| format!("locating {path} in input"))?;
-        let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
-        let dst = safe_join(tmp.path(), path)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        std::fs::write(&dst, &bytes).with_context(|| format!("writing {}", dst.display()))?;
+        copy_vpk_entry(vpk, path, tmp.path(), "input")?;
     }
     let packed = valve_pak::from_directory(tmp.path()).context("packing split VPK")?;
     packed

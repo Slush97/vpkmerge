@@ -2889,11 +2889,7 @@ fn run_model_recolor(e: &ModelRecolorArgs) -> Result<()> {
 fn read_extra_files(specs: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
     let mut out: Vec<(String, Vec<u8>)> = Vec::with_capacity(specs.len());
     for spec in specs {
-        let (entry, local) = spec.split_once('=').with_context(|| {
-            format!(
-                "--extra-file must be ENTRY=PATH (got {spec:?}); ENTRY is a VPK entry path, PATH a file on disk"
-            )
-        })?;
+        let (entry, local) = parse_name_eq(spec, "--extra-file")?;
         if entry.is_empty() || local.is_empty() {
             anyhow::bail!(
                 "--extra-file must be ENTRY=PATH with both sides non-empty (got {spec:?})"
@@ -4976,5 +4972,28 @@ fn log_routing(
 fn predicate_matches(pred: &PathPredicate, path: &str) -> bool {
     match pred {
         PathPredicate::AnyPrefix(prefixes) => prefixes.iter().any(|p| path.starts_with(p)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_extra_files_missing_equals_names_the_flag() {
+        let err = read_extra_files(&["no-equals-here".to_string()]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("--extra-file"),
+            "error should name the flag: {err:#}"
+        );
+    }
+
+    #[test]
+    fn read_extra_files_rejects_empty_entry_side() {
+        let err = read_extra_files(&["=some/path".to_string()]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("both sides non-empty"),
+            "error should explain the empty side: {err:#}"
+        );
     }
 }

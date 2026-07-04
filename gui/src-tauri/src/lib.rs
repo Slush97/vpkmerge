@@ -295,6 +295,7 @@ async fn merge_vpks(
         &vpkmerge_core::MergeOptions {
             collision_policy,
             overrides: overrides.unwrap_or_default(),
+            ..Default::default()
         },
     )
     .map(Into::into)
@@ -547,6 +548,7 @@ async fn build_trippy_addon(
             &vpkmerge_core::MergeOptions {
                 collision_policy: vpkmerge_core::CollisionPolicy::LastWins,
                 overrides: HashMap::new(),
+                ..Default::default()
             },
         )
         .map_err(|e| format!("{e:#}"))?;

@@ -162,6 +162,21 @@ pub struct MergeOptions {
     /// over `collision_policy`. An override pointing at an index that does
     /// not actually own the path causes `merge` to error.
     pub overrides: HashMap<String, usize>,
+    /// Optional addon identity to stamp as `addoninfo.txt` at the merged
+    /// output's root, in the same pass as the merge (no second pass over the
+    /// finished VPK needed). See [`embed_metadata`] for patching an
+    /// already-built VPK that did not get an identity stamped at merge time.
+    pub metadata: Option<AddonMetadata>,
+    /// Arbitrary extra files to embed at the merged output's root, each
+    /// `(entry_path, bytes)`. This keeps the engine a dumb byte-embedder: a
+    /// caller (e.g. Grimoire) serializes its own `addoninfo.txt` /
+    /// `grimoire_meta.json` and passes them here rather than the engine
+    /// understanding any schema. Entry paths may contain subdirectories;
+    /// parents are created (path traversal is refused by `safe_join`). Written
+    /// after the merged entries (and after [`metadata`]'s `addoninfo.txt`), so
+    /// an extra file whose path collides with an existing entry overwrites it,
+    /// the same overwrite rule as `addoninfo.txt`.
+    pub extra_files: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +186,72 @@ pub struct MergeReport {
     pub overridden_paths: usize,
     pub inputs: usize,
     pub output_path: PathBuf,
+}
+
+/// Identity metadata embedded into a VPK as a root-level `addoninfo.txt`, the
+/// classic Source engine "who made this and where did it come from"
+/// convention (a `"AddonInfo" { addonversion ... }` `KeyValues1` block),
+/// extended with a few `GameBanana` fields useful for tracing an orphaned VPK
+/// back to its listing. Stamp it during a merge via [`MergeOptions::metadata`],
+/// or patch it into an already-built VPK with [`embed_metadata`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AddonMetadata {
+    pub title: String,
+    pub author: String,
+    /// Defaults to "1.0" (the classic addoninfo.txt convention) if not given.
+    pub version: Option<String>,
+    pub description: Option<String>,
+    /// The numeric `GameBanana` submission id, kept as a string so callers do
+    /// not need to parse it.
+    pub gamebanana_id: Option<String>,
+    /// e.g. the `GameBanana` page URL the VPK was downloaded from.
+    pub source_url: Option<String>,
+    /// Caller-supplied build timestamp, e.g. an ISO 8601 string the
+    /// Electron/Node caller already has via `Date.toISOString()`. Not
+    /// generated on the Rust side.
+    pub build_date: Option<String>,
+}
+
+/// Entry path `addoninfo.txt` is written at, root level, alongside
+/// `materials/`, `models/`, etc., matching the classic convention so any
+/// generic VPK browser shows it immediately.
+const ADDON_INFO_ENTRY: &str = "addoninfo.txt";
+const DEFAULT_ADDON_VERSION: &str = "1.0";
+
+/// Serialize `metadata` into the classic `KeyValues1` `AddonInfo` block. The
+/// classic-spec fields (`addonversion`, `addontitle`, `addonauthor`,
+/// `addonDescription`) come first, followed by the `GameBanana`-tracing
+/// extensions (`gamebananaId`, `sourceUrl`, `buildDate`) as additional keys
+/// in the same block. Every value is quoted; embedded double quotes are
+/// escaped.
+fn addon_info_text(metadata: &AddonMetadata) -> String {
+    let version = metadata.version.as_deref().unwrap_or(DEFAULT_ADDON_VERSION);
+    let mut out = String::from("\"AddonInfo\"\n{\n");
+    write_kv_line(&mut out, "addonversion", version);
+    write_kv_line(&mut out, "addontitle", &metadata.title);
+    write_kv_line(&mut out, "addonauthor", &metadata.author);
+    if let Some(description) = &metadata.description {
+        write_kv_line(&mut out, "addonDescription", description);
+    }
+    if let Some(id) = &metadata.gamebanana_id {
+        write_kv_line(&mut out, "gamebananaId", id);
+    }
+    if let Some(url) = &metadata.source_url {
+        write_kv_line(&mut out, "sourceUrl", url);
+    }
+    if let Some(date) = &metadata.build_date {
+        write_kv_line(&mut out, "buildDate", date);
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn write_kv_line(out: &mut String, key: &str, value: &str) {
+    out.push_str("    ");
+    out.push_str(key);
+    out.push_str(" \"");
+    out.push_str(&value.replace('"', "\\\""));
+    out.push_str("\"\n");
 }
 
 /// One output bucket: where to write, and the rule that decides which paths
@@ -304,13 +385,42 @@ pub fn merge<P: AsRef<Path>, O: AsRef<Path>>(
         std::fs::write(&dst, &bytes).with_context(|| format!("writing {}", dst.display()))?;
     }
 
+    if let Some(metadata) = &options.metadata {
+        let info_path = tmp.path().join(ADDON_INFO_ENTRY);
+        std::fs::write(&info_path, addon_info_text(metadata))
+            .with_context(|| format!("writing {}", info_path.display()))?;
+    }
+
+    // Caller-supplied opaque files (Grimoire serializes its own addoninfo.txt /
+    // grimoire_meta.json and passes them here). Written last so an extra file
+    // overwrites a colliding merged entry, the same overwrite rule addoninfo.txt
+    // follows above.
+    let extra_refs: Vec<(&str, &[u8])> = options
+        .extra_files
+        .iter()
+        .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
+        .collect();
+    write_extra_files(tmp.path(), &extra_refs)?;
+
+    // Distinct output entries = merged winners, plus addoninfo.txt when a typed
+    // metadata block was stamped, plus every extra file. A set de-duplicates so
+    // an extra file (or addoninfo) overwriting a winner is not double-counted.
+    let mut entry_paths: HashSet<&str> = winners.keys().map(String::as_str).collect();
+    if options.metadata.is_some() {
+        entry_paths.insert(ADDON_INFO_ENTRY);
+    }
+    for (entry, _) in &options.extra_files {
+        entry_paths.insert(entry.as_str());
+    }
+    let total_entries = entry_paths.len();
+
     let merged = valve_pak::from_directory(tmp.path()).context("packing merged VPK")?;
     merged
         .save(&output)
         .with_context(|| format!("saving {}", output.display()))?;
 
     Ok(MergeReport {
-        total_entries: winners.len(),
+        total_entries,
         overridden_paths,
         inputs: ordered_inputs.len(),
         output_path: output,
@@ -351,6 +461,109 @@ pub fn pack<O: AsRef<Path>>(files: &[(&str, &[u8])], output: O) -> Result<()> {
         .save(output)
         .with_context(|| format!("saving {}", output.display()))?;
     Ok(())
+}
+
+/// Patch identity metadata into an already-built VPK that no longer has its
+/// original source assets around, the "found a mystery VPK with no context"
+/// case: re-tagging a download with no provenance, or retroactively stamping
+/// one of this project's own older releases. Opens `input`, re-extracts every
+/// entry into a tempdir (same shape as `merge`'s winner-extraction loop),
+/// writes `addoninfo.txt` at the tempdir root (overwriting one that already
+/// exists rather than erroring), writes each of `extra_files`, then repacks at
+/// `output`. Every original entry's content is preserved unchanged; only
+/// `addoninfo.txt` and the supplied extra files are added or replaced.
+///
+/// `extra_files` is a list of `(entry_path, bytes)` opaque files the caller
+/// wants embedded alongside the identity block (e.g. Grimoire's own
+/// `grimoire_meta.json`); the engine never interprets them. Entry paths may
+/// contain subdirectories and are written after `addoninfo.txt`, so an extra
+/// file whose path collides with an existing entry (or with `addoninfo.txt`)
+/// overwrites it. Pass `&[]` for the plain identity-only tag.
+///
+/// `drop_entries` names ORIGINAL input entries to omit from the extraction
+/// pass entirely (e.g. a legacy sidecar a new record supersedes). Dropping a
+/// path that is not present in `input` is a no-op, not an error. A dropped
+/// entry can still reappear in the output: `extra_files` is applied after the
+/// drop, so an `extra_files` entry at the SAME path as a dropped entry lands
+/// normally (the drop only ever removes the ORIGINAL bytes, never the extra
+/// one). Pass `&[]` to keep every original entry.
+///
+/// For a normal multi-input merge, prefer stamping the metadata directly via
+/// [`MergeOptions::metadata`] (and [`MergeOptions::extra_files`]) on [`merge`]
+/// so the addon never exists without its identity file in the first place.
+///
+/// `output` must not be the same path as `input` (same restriction as
+/// [`merge`]): write to a different path, then move it over the original if
+/// in-place replacement is what you want.
+///
+/// # Errors
+/// Propagates a failure to open `input`, read any of its entries, write an
+/// extra file, or write `output`.
+pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
+    input: P,
+    metadata: Option<&AddonMetadata>,
+    extra_files: &[(&str, &[u8])],
+    drop_entries: &[String],
+    output: O,
+) -> Result<()> {
+    let input = input.as_ref();
+    let output = output.as_ref();
+    reject_output_equals_input(&[input], output)?;
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating output directory {}", parent.display()))?;
+        }
+    }
+
+    let vpk = valve_pak::open(input).with_context(|| format!("opening {}", input.display()))?;
+    // valve_pak already normalizes entry paths to forward slashes on read (see
+    // its utils::normalize_path), matching the same axis write_extra_files'
+    // safe_join writes on, so a caller-supplied drop entry normalizes the same
+    // way before comparing (a caller may pass a backslash path verbatim).
+    let dropped: HashSet<String> = drop_entries.iter().map(|e| normalize_entry(e)).collect();
+
+    let tmp = tempfile::tempdir().context("creating temp directory")?;
+    for path in vpk.file_paths().filter(|p| !dropped.contains(normalize_entry(p).as_str())) {
+        let mut vf = vpk
+            .get_file(path)
+            .with_context(|| format!("locating {path} in {}", input.display()))?;
+        let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
+        let dst = safe_join(tmp.path(), path)?;
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        std::fs::write(&dst, &bytes).with_context(|| format!("writing {}", dst.display()))?;
+    }
+
+    // The typed addoninfo is optional: a caller that serializes its own
+    // addoninfo.txt (e.g. Grimoire) passes None here and brings the file in via
+    // extra_files instead. Write the typed one first so an extra_files entry at
+    // the same path still wins.
+    if let Some(metadata) = metadata {
+        let info_path = tmp.path().join(ADDON_INFO_ENTRY);
+        std::fs::write(&info_path, addon_info_text(metadata))
+            .with_context(|| format!("writing {}", info_path.display()))?;
+    }
+
+    write_extra_files(tmp.path(), extra_files)?;
+
+    let patched = valve_pak::from_directory(tmp.path()).context("packing patched VPK")?;
+    patched
+        .save(output)
+        .with_context(|| format!("saving {}", output.display()))?;
+    Ok(())
+}
+
+/// Normalize a VPK entry path for comparison: backslashes to forward slashes,
+/// the same axis `valve_pak` already normalizes real entry paths onto. Not
+/// case-folded: Source 2 entry paths are case-sensitive on Linux, and every
+/// existing comparison in this crate (the merge collision map, `safe_join`'s
+/// destination writes) is case-sensitive too, so `--drop-entry` matches on
+/// the same terms.
+fn normalize_entry(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 /// Read one entry's raw bytes out of a VPK.
@@ -540,6 +753,22 @@ fn safe_join(base: &Path, entry: &str) -> Result<PathBuf> {
         bail!("refusing empty VPK entry path: {entry}");
     }
     Ok(out)
+}
+
+/// Write each `(entry_path, bytes)` extra file under `root`, creating parent
+/// directories and refusing path traversal via [`safe_join`] (the same writer
+/// the merge/pack loops use). Call it after the primary entries so an extra
+/// file whose path collides with one already written overwrites it.
+fn write_extra_files(root: &Path, extra_files: &[(&str, &[u8])]) -> Result<()> {
+    for &(entry, bytes) in extra_files {
+        let dst = safe_join(root, entry)?;
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        std::fs::write(&dst, bytes).with_context(|| format!("writing {}", dst.display()))?;
+    }
+    Ok(())
 }
 
 fn write_bucket(vpk: &valve_pak::VPK, entries: &[String], output_path: &Path) -> Result<()> {
@@ -849,6 +1078,7 @@ mod tests {
         let opts = MergeOptions {
             collision_policy: CollisionPolicy::LastWins,
             overrides,
+            ..Default::default()
         };
         merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
         assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from a");
@@ -864,6 +1094,7 @@ mod tests {
         let opts = MergeOptions {
             collision_policy: CollisionPolicy::Error,
             overrides,
+            ..Default::default()
         };
         merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
         assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from a");
@@ -1259,6 +1490,351 @@ mod tests {
         p1.sort();
         p2.sort();
         assert_eq!(p1, p2);
+        Ok(())
+    }
+
+    #[test]
+    fn addon_info_text_escapes_quotes_and_defaults_version() {
+        let metadata = AddonMetadata {
+            title: "Cool \"Skin\"".to_string(),
+            author: "Author".to_string(),
+            ..Default::default()
+        };
+        let text = addon_info_text(&metadata);
+        assert!(text.starts_with("\"AddonInfo\"\n{\n"));
+        assert!(text.contains("addonversion \"1.0\""));
+        assert!(text.contains("addontitle \"Cool \\\"Skin\\\"\""));
+        assert!(text.contains("addonauthor \"Author\""));
+        // Optional fields left unset must not appear at all.
+        assert!(!text.contains("addonDescription"));
+        assert!(!text.contains("gamebananaId"));
+        assert!(!text.contains("sourceUrl"));
+        assert!(!text.contains("buildDate"));
+    }
+
+    #[test]
+    fn embed_metadata_round_trips_fields_and_preserves_entries() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("materials/foo.txt", b"foo-content"),
+                ("models/bar.txt", b"bar-content"),
+            ],
+        )?;
+        let output = tmp.path().join("tagged_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "Test Hero Skin".to_string(),
+            author: "PoC Author".to_string(),
+            version: None,
+            description: Some("A test addon".to_string()),
+            gamebanana_id: Some("123456".to_string()),
+            source_url: Some("https://gamebanana.com/mods/123456".to_string()),
+            build_date: Some("2026-06-30T12:00:00Z".to_string()),
+        };
+        embed_metadata(&input, Some(&metadata), &[], &[], &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "materials/foo.txt".to_string(),
+                "models/bar.txt".to_string(),
+            ]
+        );
+        // Every original entry's bytes survive untouched.
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        assert_eq!(read_entry(&output, "models/bar.txt")?, b"bar-content");
+
+        let text = String::from_utf8(read_entry(&output, "addoninfo.txt")?)?;
+        assert!(text.contains("addonversion \"1.0\""));
+        assert!(text.contains("addontitle \"Test Hero Skin\""));
+        assert!(text.contains("addonauthor \"PoC Author\""));
+        assert!(text.contains("addonDescription \"A test addon\""));
+        assert!(text.contains("gamebananaId \"123456\""));
+        assert!(text.contains("sourceUrl \"https://gamebanana.com/mods/123456\""));
+        assert!(text.contains("buildDate \"2026-06-30T12:00:00Z\""));
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_overwrites_existing_addoninfo() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("addoninfo.txt", b"stale info from a previous tagging"),
+                ("materials/foo.txt", b"foo-content"),
+            ],
+        )?;
+        let output = tmp.path().join("retagged_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "Retagged".to_string(),
+            author: "Someone Else".to_string(),
+            ..Default::default()
+        };
+        embed_metadata(&input, Some(&metadata), &[], &[], &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "materials/foo.txt".to_string()]
+        );
+        let text = String::from_utf8(read_entry(&output, "addoninfo.txt")?)?;
+        assert!(text.contains("addontitle \"Retagged\""));
+        assert!(!text.contains("stale info"));
+        Ok(())
+    }
+
+    #[test]
+    fn merge_with_metadata_includes_addoninfo_and_normal_entries() -> Result<()> {
+        let fx = two_inputs()?;
+        let opts = MergeOptions {
+            metadata: Some(AddonMetadata {
+                title: "Merged Pack".to_string(),
+                author: "Modder".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let report = merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
+        // 3 normal merged entries (only_a, only_b, shared) + addoninfo.txt.
+        assert_eq!(report.total_entries, 4);
+        assert_eq!(
+            entry_set(&fx.out)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "only_a/file.txt".to_string(),
+                "only_b/file.txt".to_string(),
+                "shared/file.txt".to_string(),
+            ]
+        );
+        assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from b");
+        let text = String::from_utf8(read_entry(&fx.out, "addoninfo.txt")?)?;
+        assert!(text.contains("addontitle \"Merged Pack\""));
+        assert!(text.contains("addonauthor \"Modder\""));
+        assert!(text.contains("addonversion \"1.0\""));
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_with_extra_files_includes_them_and_preserves_entries() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("materials/foo.txt", b"foo-content"),
+                ("models/bar.txt", b"bar-content"),
+            ],
+        )?;
+        let output = tmp.path().join("tagged_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "Tagged Merge".to_string(),
+            author: "Grimoire".to_string(),
+            ..Default::default()
+        };
+        // An opaque JSON blob at the root plus a file in a subdirectory (parents
+        // must be created), exactly the shape Grimoire embeds.
+        let meta_json: &[u8] = br#"{"format":"grimoire-embedded-merge","schemaVersion":1}"#;
+        let nested: &[u8] = b"\x00\x01\x02\x03";
+        let extra: [(&str, &[u8]); 2] = [
+            ("grimoire_meta.json", meta_json),
+            ("nested/dir/extra.bin", nested),
+        ];
+        embed_metadata(&input, Some(&metadata), &extra, &[], &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "grimoire_meta.json".to_string(),
+                "materials/foo.txt".to_string(),
+                "models/bar.txt".to_string(),
+                "nested/dir/extra.bin".to_string(),
+            ]
+        );
+        // Originals untouched.
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        assert_eq!(read_entry(&output, "models/bar.txt")?, b"bar-content");
+        // Every extra entry's bytes embedded verbatim.
+        assert_eq!(
+            read_entry(&output, "grimoire_meta.json")?.as_slice(),
+            meta_json
+        );
+        assert_eq!(
+            read_entry(&output, "nested/dir/extra.bin")?.as_slice(),
+            nested
+        );
+        // The typed addoninfo block is still stamped alongside the extras.
+        let text = String::from_utf8(read_entry(&output, "addoninfo.txt")?)?;
+        assert!(text.contains("addontitle \"Tagged Merge\""));
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_extra_file_overwrites_existing_entry() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("data/cfg.txt", b"original")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let replaced: &[u8] = b"replaced";
+        let extra: [(&str, &[u8]); 1] = [("data/cfg.txt", replaced)];
+        embed_metadata(&input, Some(&metadata), &extra, &[], &output)?;
+
+        // The extra file wins over the colliding original, no duplicate entry.
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "data/cfg.txt".to_string()]
+        );
+        assert_eq!(read_entry(&output, "data/cfg.txt")?.as_slice(), replaced);
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_drop_entries_removes_only_the_named_entry() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("grimoire_meta.json", b"legacy merge companion"),
+                ("materials/foo.txt", b"foo-content"),
+                ("models/bar.txt", b"bar-content"),
+            ],
+        )?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let drop = vec!["grimoire_meta.json".to_string()];
+        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+
+        // The dropped entry is gone; every other original entry survives
+        // byte-identical.
+        assert_eq!(
+            entry_set(&output)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "materials/foo.txt".to_string(),
+                "models/bar.txt".to_string(),
+            ]
+        );
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        assert_eq!(read_entry(&output, "models/bar.txt")?, b"bar-content");
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_drop_entries_nonexistent_is_a_no_op() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("materials/foo.txt", b"foo-content")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let drop = vec!["does/not/exist.txt".to_string()];
+        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "materials/foo.txt".to_string()]
+        );
+        assert_eq!(read_entry(&output, "materials/foo.txt")?, b"foo-content");
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_extra_file_at_dropped_path_still_lands() -> Result<()> {
+        // Dropping an entry removes the ORIGINAL bytes at that path; an
+        // extra_files entry at the SAME path is written afterward and must
+        // still land (extra wins, drop only applies to the original).
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("grimoire_meta.json", b"legacy merge companion")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let replacement: &[u8] = b"new modinfo payload";
+        let extra: [(&str, &[u8]); 1] = [("grimoire_meta.json", replacement)];
+        let drop = vec!["grimoire_meta.json".to_string()];
+        embed_metadata(&input, Some(&metadata), &extra, &drop, &output)?;
+
+        assert_eq!(
+            entry_set(&output)?,
+            vec!["addoninfo.txt".to_string(), "grimoire_meta.json".to_string()]
+        );
+        assert_eq!(
+            read_entry(&output, "grimoire_meta.json")?.as_slice(),
+            replacement
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_with_extra_files_includes_extras_and_merged_entries() -> Result<()> {
+        let fx = two_inputs()?;
+        let opts = MergeOptions {
+            extra_files: vec![
+                (
+                    "grimoire_meta.json".to_string(),
+                    br#"{"format":"grimoire-embedded-merge"}"#.to_vec(),
+                ),
+                (
+                    "addoninfo.txt".to_string(),
+                    b"\"AddonInfo\"\n{\n}\n".to_vec(),
+                ),
+            ],
+            ..Default::default()
+        };
+        let report = merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
+        // 3 merged entries (only_a, only_b, shared) + 2 extras.
+        assert_eq!(report.total_entries, 5);
+        assert_eq!(
+            entry_set(&fx.out)?,
+            vec![
+                "addoninfo.txt".to_string(),
+                "grimoire_meta.json".to_string(),
+                "only_a/file.txt".to_string(),
+                "only_b/file.txt".to_string(),
+                "shared/file.txt".to_string(),
+            ]
+        );
+        // Merged content is intact and the extras are embedded verbatim.
+        assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from b");
+        assert_eq!(
+            read_entry(&fx.out, "grimoire_meta.json")?.as_slice(),
+            br#"{"format":"grimoire-embedded-merge"}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_extra_file_overwrites_colliding_merged_entry() -> Result<()> {
+        // shared/file.txt is produced by the merge (LastWins -> "from b"); an
+        // extra file at the same path must win and must not inflate the count.
+        let fx = two_inputs()?;
+        let opts = MergeOptions {
+            extra_files: vec![("shared/file.txt".to_string(), b"from extra".to_vec())],
+            ..Default::default()
+        };
+        let report = merge(&[&fx.a, &fx.b], &fx.out, &opts)?;
+        assert_eq!(report.total_entries, 3);
+        assert_eq!(read_entry(&fx.out, "shared/file.txt")?, b"from extra");
         Ok(())
     }
 }

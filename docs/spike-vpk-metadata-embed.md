@@ -27,32 +27,50 @@ to its GameBanana listing specifically.
   optional). `build_date` is caller-supplied (e.g. an ISO 8601 string the
   Electron/Node side already has via `Date.toISOString()`); nothing on the
   Rust side generates a timestamp.
-- `embed_metadata(input, &metadata, output) -> Result<()>`: patches
-  `addoninfo.txt` into an **already-built** VPK with no access to the original
-  source assets. Opens `input`, re-extracts every entry into a tempdir (the
-  same shape as `merge`'s winner-extraction loop), writes `addoninfo.txt` at
-  the tempdir root (overwriting one that already exists rather than erroring),
-  then repacks at `output` via `valve_pak::from_directory` + `.save`. Every
-  original entry's bytes are preserved unchanged. `output` must differ from
-  `input` (same restriction `merge`/`split` already enforce, since the input
-  VPK's read handle is still open when the result gets written).
+- `embed_metadata(input, Option<&AddonMetadata>, extra_files, drop_entries,
+  output) -> Result<EmbedReport>`: patches identity into an **already-built**
+  VPK with no access to the original source assets. Opens `input`, re-extracts
+  every entry into a tempdir (skipping `drop_entries`, matched on the same
+  canonical path axis entries are written on, so `./x` and `x` are the same
+  entry), writes the typed `addoninfo.txt` when a metadata block is given
+  (overwriting one that already exists rather than erroring), writes each
+  `extra_files` `(entry_path, bytes)` pair opaquely (an extra at the same path
+  as the typed block wins), then repacks at `output` via
+  `valve_pak::from_directory` + `.save`. Every surviving original entry's
+  bytes are preserved unchanged. The returned `EmbedReport` states what
+  actually happened (entries actually dropped, drops that matched nothing,
+  originals replaced, final entry count from the packed output) rather than
+  echoing the request. `output` must differ from `input` (same restriction
+  `merge`/`split` already enforce, since the input VPK's read handle is still
+  open when the result gets written).
 - `MergeOptions::metadata: Option<AddonMetadata>`: lets a normal `merge()`
   call stamp the same `addoninfo.txt` directly into its tempdir before
   packing, so a merged addon never exists without its identity file in the
   first place (no second pass over the finished VPK needed).
+- `MergeOptions::extra_files: Vec<(String, Vec<u8>)>`: caller-owned opaque
+  files embedded during a merge. Extras behave as one final,
+  highest-priority synthetic input: they win collisions under the default
+  `LastWins`, count toward `MergeReport::overridden_paths` (and are listed in
+  `MergeReport::extra_replaced_paths`), and `CollisionPolicy::Error` refuses
+  a colliding extra like any other conflict.
 
 `vpkmerge-cli/src/main.rs`: a new `vpkmerge metadata` subcommand wraps
 `embed_metadata` for the standalone "tag an already-built VPK" path:
 
 ```
-vpkmerge metadata --vpk <INPUT.vpk> --title <T> --author <A> [--version <V>]
+vpkmerge metadata --vpk <INPUT.vpk> [--title <T> --author <A>] [--version <V>]
   [--description <D>] [--gamebanana-id <ID>] [--source-url <URL>]
-  [--build-date <DATE>] --output <OUTPUT.vpk>
+  [--build-date <DATE>] [--extra-file ENTRY=PATH]... [--drop-entry ENTRY]...
+  --output <OUTPUT.vpk>
 ```
 
-The `MergeOptions.metadata` path (stamping identity during a merge) is
-exposed in the core API but not yet wired to a bare-merge CLI flag; that is a
-stretch goal explicitly skipped in this PoC (see below).
+The typed block is optional as a whole (a caller bringing its own
+`addoninfo.txt` via `--extra-file` passes no typed fields), but whenever any
+typed field is given, `--title` and `--author` are required together, so a
+generated `addoninfo.txt` can never carry empty identity fields over existing
+provenance. The bare-merge mode gained the same repeatable `--extra-file`
+flag; identity flags for the bare merge (`--addon-title` etc.) remain a
+follow-up (see below).
 
 ## `addoninfo.txt` format
 

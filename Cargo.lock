@@ -4345,6 +4345,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "tempfile",
  "vpkmerge-core",
 ]
 

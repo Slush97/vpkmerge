@@ -12,7 +12,7 @@
 //! ```
 
 use anyhow::{bail, Context, Result};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub mod model;
@@ -497,11 +497,14 @@ pub fn pack<O: AsRef<Path>>(files: &[(&str, &[u8])], output: O) -> Result<()> {
 ///
 /// `drop_entries` names ORIGINAL input entries to omit from the extraction
 /// pass entirely (e.g. a legacy sidecar a new record supersedes). Dropping a
-/// path that is not present in `input` is a no-op, not an error. A dropped
-/// entry can still reappear in the output: `extra_files` is applied after the
-/// drop, so an `extra_files` entry at the SAME path as a dropped entry lands
-/// normally (the drop only ever removes the ORIGINAL bytes, never the extra
-/// one). Pass `&[]` to keep every original entry.
+/// path that is not present in `input` is a no-op, not an error (it is
+/// reported in [`EmbedReport::unmatched_drops`]). Drop paths are matched on
+/// the same canonical axis entries are written on, so `./x`, `x`, and `.\x`
+/// all name the same entry. A dropped entry can still reappear in the output:
+/// `extra_files` is applied after the drop, so an `extra_files` entry at the
+/// SAME path as a dropped entry lands normally (the drop only ever removes
+/// the ORIGINAL bytes, never the extra one). Pass `&[]` to keep every
+/// original entry.
 ///
 /// For a normal multi-input merge, prefer stamping the metadata directly via
 /// [`MergeOptions::metadata`] (and [`MergeOptions::extra_files`]) on [`merge`]
@@ -513,14 +516,16 @@ pub fn pack<O: AsRef<Path>>(files: &[(&str, &[u8])], output: O) -> Result<()> {
 ///
 /// # Errors
 /// Propagates a failure to open `input`, read any of its entries, write an
-/// extra file, or write `output`.
+/// extra file, or write `output`. A `drop_entries` or `extra_files` path that
+/// cannot canonicalize (absolute, parent-dir, drive prefix, empty) errors up
+/// front instead of silently never matching.
 pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     input: P,
     metadata: Option<&AddonMetadata>,
     extra_files: &[(&str, &[u8])],
     drop_entries: &[String],
     output: O,
-) -> Result<()> {
+) -> Result<EmbedReport> {
     let input = input.as_ref();
     let output = output.as_ref();
     reject_output_equals_input(&[input], output)?;
@@ -532,25 +537,44 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
     }
 
     let vpk = valve_pak::open(input).with_context(|| format!("opening {}", input.display()))?;
-    // valve_pak already normalizes entry paths to forward slashes on read (see
-    // its utils::normalize_path), matching the same axis write_extra_files'
-    // safe_join writes on, so a caller-supplied drop entry normalizes the same
-    // way before comparing (a caller may pass a backslash path verbatim).
-    let dropped: HashSet<String> = drop_entries.iter().map(|e| normalize_entry(e)).collect();
+    // Drop matching happens on canonical_entry's axis, the same normalization
+    // safe_join applies before writing bytes, so any spelling of an original
+    // entry (`./x`, backslashes, doubled slashes) matches the entry it names.
+    let mut drop_set: HashSet<String> = HashSet::new();
+    for entry in drop_entries {
+        drop_set.insert(canonical_entry(entry)?);
+    }
 
     let tmp = tempfile::tempdir().context("creating temp directory")?;
     let source = input.display().to_string();
-    for path in vpk
-        .file_paths()
-        .filter(|p| !dropped.contains(normalize_entry(p).as_str()))
-    {
+    let mut dropped_paths: Vec<String> = Vec::new();
+    let mut surviving: HashSet<String> = HashSet::new();
+    for path in vpk.file_paths() {
+        let canonical = canonical_entry(path)?;
+        if drop_set.contains(&canonical) {
+            dropped_paths.push(canonical);
+            continue;
+        }
         copy_vpk_entry(&vpk, path, tmp.path(), &source)?;
+        surviving.insert(canonical);
     }
+    dropped_paths.sort();
+    let unmatched_drops: Vec<String> = {
+        let actually_dropped: HashSet<&str> = dropped_paths.iter().map(String::as_str).collect();
+        let mut unmatched: Vec<String> = drop_set
+            .iter()
+            .filter(|d| !actually_dropped.contains(d.as_str()))
+            .cloned()
+            .collect();
+        unmatched.sort();
+        unmatched
+    };
 
     // The typed addoninfo is optional: a caller that serializes its own
     // addoninfo.txt (e.g. Grimoire) passes None here and brings the file in via
     // extra_files instead. Write the typed one first so an extra_files entry at
     // the same path still wins.
+    let wrote_addon_info = metadata.is_some();
     if let Some(metadata) = metadata {
         write_entry(
             tmp.path(),
@@ -559,23 +583,63 @@ pub fn embed_metadata<P: AsRef<Path>, O: AsRef<Path>>(
         )?;
     }
 
-    write_extra_files(tmp.path(), extra_files)?;
+    // Canonicalize + dedupe extras; the last spelling of one canonical path
+    // wins, matching write order.
+    let mut extras: BTreeMap<String, &[u8]> = BTreeMap::new();
+    for &(entry, bytes) in extra_files {
+        extras.insert(canonical_entry(entry)?, bytes);
+    }
+    for (entry, bytes) in &extras {
+        write_entry(tmp.path(), entry, bytes)?;
+    }
+
+    let mut replaced: BTreeSet<String> = BTreeSet::new();
+    if wrote_addon_info && surviving.contains(ADDON_INFO_ENTRY) {
+        replaced.insert(ADDON_INFO_ENTRY.to_string());
+    }
+    for path in extras.keys() {
+        if surviving.contains(path) {
+            replaced.insert(path.clone());
+        }
+    }
 
     let patched = valve_pak::from_directory(tmp.path()).context("packing patched VPK")?;
     patched
         .save(output)
         .with_context(|| format!("saving {}", output.display()))?;
-    Ok(())
+
+    Ok(EmbedReport {
+        total_entries: patched.file_count(),
+        wrote_addon_info,
+        embedded_paths: extras.keys().cloned().collect(),
+        dropped_paths,
+        unmatched_drops,
+        replaced_paths: replaced.into_iter().collect(),
+        output_path: output.to_path_buf(),
+    })
 }
 
-/// Normalize a VPK entry path for comparison: backslashes to forward slashes,
-/// the same axis `valve_pak` already normalizes real entry paths onto. Not
-/// case-folded: Source 2 entry paths are case-sensitive on Linux, and every
-/// existing comparison in this crate (the merge collision map, `safe_join`'s
-/// destination writes) is case-sensitive too, so `--drop-entry` matches on
-/// the same terms.
-fn normalize_entry(path: &str) -> String {
-    path.replace('\\', "/")
+/// What [`embed_metadata`] actually did, reported from the written output
+/// rather than echoing the request: a requested drop that matched nothing
+/// lands in `unmatched_drops`, never `dropped_paths`. All paths are canonical
+/// (backslashes and `.` segments collapsed, the axis entries are written on).
+#[derive(Debug, Clone)]
+pub struct EmbedReport {
+    /// Final entry count, counted from the packed output VPK.
+    pub total_entries: usize,
+    /// A typed [`AddonMetadata`] block was rendered into `addoninfo.txt`.
+    pub wrote_addon_info: bool,
+    /// Extra-file entry paths written (deduped, sorted).
+    pub embedded_paths: Vec<String>,
+    /// Original entries actually removed by `drop_entries` (sorted).
+    pub dropped_paths: Vec<String>,
+    /// Requested drops that matched no original entry (sorted).
+    pub unmatched_drops: Vec<String>,
+    /// Paths where `addoninfo.txt` or an extra file replaced a surviving
+    /// original entry. A dropped-then-re-added path counts as dropped plus
+    /// embedded, not replaced.
+    pub replaced_paths: Vec<String>,
+    pub output_path: PathBuf,
 }
 
 /// Read one entry's raw bytes out of a VPK.
@@ -778,8 +842,8 @@ fn canonical_entry(entry: &str) -> Result<String> {
 
 /// Write one entry's bytes under `root`: [`safe_join`] the path, create parent
 /// directories, write. The single writer every extract-to-tempdir pass in this
-/// crate goes through (`pack`, `merge`, `write_bucket`, [`embed_metadata`],
-/// `write_extra_files`), so path handling cannot diverge between them.
+/// crate goes through (`pack`, `merge`, `write_bucket`, [`embed_metadata`]),
+/// so path handling cannot diverge between them.
 fn write_entry(root: &Path, entry: &str, bytes: &[u8]) -> Result<()> {
     let dst = safe_join(root, entry)?;
     if let Some(parent) = dst.parent() {
@@ -796,17 +860,6 @@ fn copy_vpk_entry(vpk: &valve_pak::VPK, path: &str, root: &Path, source: &str) -
         .with_context(|| format!("locating {path} in {source}"))?;
     let bytes = vf.read_all().with_context(|| format!("reading {path}"))?;
     write_entry(root, path, &bytes)
-}
-
-/// Write each `(entry_path, bytes)` extra file under `root`, creating parent
-/// directories and refusing path traversal via [`safe_join`] (the same writer
-/// the merge/pack loops use). Call it after the primary entries so an extra
-/// file whose path collides with one already written overwrites it.
-fn write_extra_files(root: &Path, extra_files: &[(&str, &[u8])]) -> Result<()> {
-    for &(entry, bytes) in extra_files {
-        write_entry(root, entry, bytes)?;
-    }
-    Ok(())
 }
 
 fn write_bucket(vpk: &valve_pak::VPK, entries: &[String], output_path: &Path) -> Result<()> {
@@ -1745,7 +1798,10 @@ mod tests {
             ..Default::default()
         };
         let drop = vec!["grimoire_meta.json".to_string()];
-        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+        let report = embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+        assert_eq!(report.dropped_paths, vec!["grimoire_meta.json".to_string()]);
+        assert!(report.unmatched_drops.is_empty());
+        assert_eq!(report.total_entries, 3);
 
         // The dropped entry is gone; every other original entry survives
         // byte-identical.
@@ -1774,7 +1830,14 @@ mod tests {
             ..Default::default()
         };
         let drop = vec!["does/not/exist.txt".to_string()];
-        embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+        let report = embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
+        // The report says what actually happened: nothing was dropped, the
+        // request is surfaced as unmatched.
+        assert!(report.dropped_paths.is_empty());
+        assert_eq!(
+            report.unmatched_drops,
+            vec!["does/not/exist.txt".to_string()]
+        );
 
         assert_eq!(
             entry_set(&output)?,
@@ -1801,7 +1864,14 @@ mod tests {
         let replacement: &[u8] = b"new modinfo payload";
         let extra: [(&str, &[u8]); 1] = [("grimoire_meta.json", replacement)];
         let drop = vec!["grimoire_meta.json".to_string()];
-        embed_metadata(&input, Some(&metadata), &extra, &drop, &output)?;
+        let report = embed_metadata(&input, Some(&metadata), &extra, &drop, &output)?;
+        // Dropped-then-re-added classifies as dropped + embedded, not replaced.
+        assert_eq!(report.dropped_paths, vec!["grimoire_meta.json".to_string()]);
+        assert_eq!(
+            report.embedded_paths,
+            vec!["grimoire_meta.json".to_string()]
+        );
+        assert!(report.replaced_paths.is_empty());
 
         assert_eq!(
             entry_set(&output)?,
@@ -1954,6 +2024,74 @@ mod tests {
         assert_eq!(report.overridden_paths, 0);
         assert!(report.extra_replaced_paths.is_empty());
         assert!(entry_set(&out)?.contains(&"root.txt".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn embed_metadata_drop_entry_dot_prefixed_spelling_matches() -> Result<()> {
+        // The exact review reproduction: --drop-entry ./grimoire_meta.json
+        // must remove grimoire_meta.json, because "./x" and "x" are the same
+        // output location on the axis entries are written on.
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(
+            &input,
+            &[
+                ("grimoire_meta.json", b"legacy merge companion"),
+                ("materials/foo.txt", b"foo-content"),
+            ],
+        )?;
+        let output = tmp.path().join("out_dir.vpk");
+        let drop = vec!["./grimoire_meta.json".to_string()];
+        let report = embed_metadata(&input, None, &[], &drop, &output)?;
+
+        assert_eq!(entry_set(&output)?, vec!["materials/foo.txt".to_string()]);
+        assert_eq!(report.dropped_paths, vec!["grimoire_meta.json".to_string()]);
+        assert!(report.unmatched_drops.is_empty());
+        assert_eq!(report.total_entries, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn embed_report_counts_and_classifies() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("data/cfg.txt", b"original")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let metadata = AddonMetadata {
+            title: "T".to_string(),
+            author: "A".to_string(),
+            ..Default::default()
+        };
+        let replaced: &[u8] = b"replaced";
+        let extra: [(&str, &[u8]); 1] = [("data/cfg.txt", replaced)];
+        let report = embed_metadata(&input, Some(&metadata), &extra, &[], &output)?;
+
+        assert_eq!(report.total_entries, 2);
+        assert!(report.wrote_addon_info);
+        assert_eq!(report.embedded_paths, vec!["data/cfg.txt".to_string()]);
+        assert_eq!(report.replaced_paths, vec!["data/cfg.txt".to_string()]);
+        assert!(report.dropped_paths.is_empty());
+        assert!(report.unmatched_drops.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn embed_report_total_entries_matches_packed_output_with_backslash_extra() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("in_dir.vpk");
+        make_vpk(&input, &[("shared/file.txt", b"original")])?;
+        let output = tmp.path().join("out_dir.vpk");
+        let replaced: &[u8] = b"replaced";
+        let extra: [(&str, &[u8]); 1] = [("shared\\file.txt", replaced)];
+        let report = embed_metadata(&input, None, &extra, &[], &output)?;
+
+        // One entry on disk, one entry reported: the backslash spelling is
+        // the same output location, not a phantom second entry.
+        assert_eq!(report.total_entries, 1);
+        assert_eq!(report.embedded_paths, vec!["shared/file.txt".to_string()]);
+        assert_eq!(report.replaced_paths, vec!["shared/file.txt".to_string()]);
+        assert_eq!(read_entry(&output, "shared/file.txt")?.as_slice(), replaced);
         Ok(())
     }
 

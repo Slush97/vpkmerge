@@ -6,10 +6,10 @@ use vpkmerge_core::{
     export_hero_model, export_model, extract_portraits, hero_model_entry, import_clone,
     import_soul_container_clone, inspect_models, live_hero_entries, live_hero_materials, merge,
     model_draw_call_targets, model_uv_segments, model_vertex_targets, split, urn_target,
-    AddonMetadata, AnimOptions, CollisionPolicy, GeometryEdit, MergeOptions, ModelPartSelector,
-    NormalSynthesis, OverlapPolicy, PanoramaBuildOptions, PanoramaDumpOptions, PathPredicate,
-    PortraitInfo, PoseSelection, SegmentBy, SoulGlow, SoulImportCloneOptions, SoulOrient,
-    SoundEvents, SplitOptions, SplitOutput,
+    AddonMetadata, AnimOptions, CollisionPolicy, EmbedReport, GeometryEdit, MergeOptions,
+    ModelPartSelector, NormalSynthesis, OverlapPolicy, PanoramaBuildOptions, PanoramaDumpOptions,
+    PathPredicate, PortraitInfo, PoseSelection, SegmentBy, SoulGlow, SoulImportCloneOptions,
+    SoulOrient, SoundEvents, SplitOptions, SplitOutput,
 };
 
 #[derive(Parser)]
@@ -2916,18 +2916,68 @@ fn report_extra_files(entries: &[String]) {
     }
 }
 
-/// Print a one-line confirmation of the `--drop-entry` entries requested, if
-/// any. Requesting a drop is a no-op when the entry was never present, so
-/// this reports the request, not a verified removal.
-fn report_dropped_entries(entries: &[String]) {
-    if !entries.is_empty() {
-        println!(
-            "  dropped {} entr{}: {}",
-            entries.len(),
-            if entries.len() == 1 { "y" } else { "ies" },
-            entries.join(", ")
+/// Render the `metadata` subcommand's outcome from the [`EmbedReport`], so
+/// every line states what actually happened to the output VPK rather than
+/// echoing the request: drops that matched nothing are surfaced separately,
+/// and "originals preserved" is only claimed when no original entry was
+/// dropped or replaced.
+fn metadata_summary(report: &EmbedReport, metadata: Option<&AddonMetadata>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "wrote {}: {} entries",
+        report.output_path.display(),
+        report.total_entries
+    );
+    if let Some(m) = metadata {
+        let _ = writeln!(
+            out,
+            "  addoninfo.txt embedded (title {:?}, author {:?})",
+            m.title, m.author
         );
     }
+    if !report.embedded_paths.is_empty() {
+        let n = report.embedded_paths.len();
+        let _ = writeln!(
+            out,
+            "  embedded {} extra file{}: {}",
+            n,
+            if n == 1 { "" } else { "s" },
+            report.embedded_paths.join(", ")
+        );
+    }
+    if !report.replaced_paths.is_empty() {
+        let n = report.replaced_paths.len();
+        let _ = writeln!(
+            out,
+            "  replaced {} original entr{}: {}",
+            n,
+            if n == 1 { "y" } else { "ies" },
+            report.replaced_paths.join(", ")
+        );
+    }
+    if !report.dropped_paths.is_empty() {
+        let n = report.dropped_paths.len();
+        let _ = writeln!(
+            out,
+            "  dropped {} entr{}: {}",
+            n,
+            if n == 1 { "y" } else { "ies" },
+            report.dropped_paths.join(", ")
+        );
+    }
+    if !report.unmatched_drops.is_empty() {
+        let _ = writeln!(
+            out,
+            "  (drop matched nothing: {})",
+            report.unmatched_drops.join(", ")
+        );
+    }
+    if report.dropped_paths.is_empty() && report.replaced_paths.is_empty() {
+        let _ = writeln!(out, "  originals preserved");
+    }
+    out
 }
 
 fn run_merge(cli: Cli) -> Result<()> {
@@ -3449,7 +3499,7 @@ fn run_metadata(args: &MetadataCmd) -> Result<()> {
         .iter()
         .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
         .collect();
-    embed_metadata(
+    let report = embed_metadata(
         &args.vpk,
         metadata.as_ref(),
         &extra_refs,
@@ -3463,22 +3513,7 @@ fn run_metadata(args: &MetadataCmd) -> Result<()> {
             args.output.display()
         )
     })?;
-    match &metadata {
-        Some(m) => println!(
-            "wrote {}: addoninfo.txt embedded (title {:?}, author {:?})",
-            args.output.display(),
-            m.title,
-            m.author,
-        ),
-        None => println!(
-            "wrote {}: {} extra file(s) embedded, originals preserved",
-            args.output.display(),
-            extra_files.len(),
-        ),
-    }
-    let extra_entries: Vec<String> = extra_files.iter().map(|(entry, _)| entry.clone()).collect();
-    report_extra_files(&extra_entries);
-    report_dropped_entries(&args.drop_entry);
+    print!("{}", metadata_summary(&report, metadata.as_ref()));
     Ok(())
 }
 
@@ -5003,6 +5038,64 @@ mod tests {
         assert!(
             format!("{err:#}").contains("both sides non-empty"),
             "error should explain the empty side: {err:#}"
+        );
+    }
+
+    fn empty_report() -> EmbedReport {
+        EmbedReport {
+            total_entries: 0,
+            wrote_addon_info: false,
+            embedded_paths: vec![],
+            dropped_paths: vec![],
+            unmatched_drops: vec![],
+            replaced_paths: vec![],
+            output_path: PathBuf::from("out_dir.vpk"),
+        }
+    }
+
+    #[test]
+    fn metadata_summary_extras_only_mentions_files_once() {
+        let report = EmbedReport {
+            total_entries: 4,
+            embedded_paths: vec!["x.json".to_string()],
+            ..empty_report()
+        };
+        let summary = metadata_summary(&report, None);
+        assert_eq!(
+            summary.matches("x.json").count(),
+            1,
+            "embedded file must be reported exactly once: {summary}"
+        );
+        assert!(summary.contains("originals preserved"), "got: {summary}");
+    }
+
+    #[test]
+    fn metadata_summary_drop_only_run_does_not_claim_originals_preserved() {
+        let report = EmbedReport {
+            total_entries: 3,
+            dropped_paths: vec!["grimoire_meta.json".to_string()],
+            ..empty_report()
+        };
+        let summary = metadata_summary(&report, None);
+        assert!(
+            summary.contains("dropped 1 entry: grimoire_meta.json"),
+            "got: {summary}"
+        );
+        assert!(!summary.contains("originals preserved"), "got: {summary}");
+    }
+
+    #[test]
+    fn metadata_summary_reports_actual_not_requested_drops() {
+        let report = EmbedReport {
+            total_entries: 3,
+            unmatched_drops: vec!["gone.json".to_string()],
+            ..empty_report()
+        };
+        let summary = metadata_summary(&report, None);
+        assert!(!summary.contains("dropped"), "got: {summary}");
+        assert!(
+            summary.contains("(drop matched nothing: gone.json)"),
+            "got: {summary}"
         );
     }
 }

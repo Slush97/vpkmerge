@@ -277,6 +277,41 @@ pub(crate) fn apply_ycocg(image: &mut Image) {
     }
 }
 
+/// Forward scaled-YCoCg transform: the inverse of [`apply_ycocg`], applied in
+/// place to an RGBA8 image so its bytes can be DXT5-encoded and stored in a
+/// texture that declares the `YCoCg Conversion` special-dependency. WITHOUT this
+/// step, replacing a `YCoCg` texture (icon/item-art replace, or a recolor re-encode)
+/// stores plain RGB under a `YCoCg` flag, so the engine's inverse transform garbles
+/// the colors. This is the fix for that icon-replace bug.
+///
+/// We pack with per-block scale = 1 (stored blue = 0, since the decoder reads
+/// `scale = (B>>3)+1`). Scale 1 makes this a near-exact integer inverse of the
+/// decode: solving `R = Y+co-cg`, `G = Y+cg`, `B = Y-co-cg` for `(Y, co, cg)`
+/// gives `Y = (R+2G+B)/4`, `co = (R-B)/2`, `cg = (2G-R-B)/4`, which round-trips
+/// back to the original RGB within ~2 LSB of integer rounding, far below DXT5
+/// quantization. The trade-off vs. an optimal per-4x4-block scale is only chroma
+/// precision (we don't amplify Co/Cg into the full 0..255 range), never
+/// correctness. A per-block-scale quality pass can come later. No-op for
+/// non-RGBA8 data. Store order matches the decode: Co->R, Cg->G, scale->B, Y->A.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn encode_ycocg(image: &mut Image) {
+    let ImageData::Rgba8(px) = &mut image.data else {
+        return;
+    };
+    for p in px.chunks_exact_mut(4) {
+        let r = i32::from(p[0]);
+        let g = i32::from(p[1]);
+        let b = i32::from(p[2]);
+        let y = (r + 2 * g + b + 2) / 4; // luma, round to nearest
+        let co = (r - b) / 2; // chroma orange (trunc toward zero, <=1 LSB)
+        let cg = (2 * g - r - b + 2) / 4; // chroma green, round to nearest
+        p[0] = (co + 128).clamp(0, 255) as u8; // Co    -> DXT5 color R
+        p[1] = (cg + 128).clamp(0, 255) as u8; // Cg    -> DXT5 color G
+        p[2] = 0; // scale byte 0 => decoder scale = 1
+        p[3] = y.clamp(0, 255) as u8; // Y     -> DXT5 alpha
+    }
+}
+
 /// Scan the VTEX extra-data table for a `FILL_TO_POWER_OF_TWO` block and return
 /// its `(width, height)`. Returns `None` when absent (the common, pow2 case) or
 /// when the table runs past the DATA block (treated as not present rather than an
@@ -498,5 +533,69 @@ fn uncompressed_bytes_per_pixel(fmt: TextureFormat) -> Option<usize> {
         TextureFormat::Rgba8888 | TextureFormat::Bgra8888 => Some(4),
         TextureFormat::Rgba16161616F => Some(8),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ycocg_tests {
+    use super::{apply_ycocg, encode_ycocg, Image, ImageData};
+
+    /// `encode_ycocg` then `apply_ycocg` must return the original RGB within a few
+    /// LSB (integer rounding only; no DXT5 here). This is the correctness gate
+    /// for the icon/recolor `YCoCg` fix: a `YCoCg`-flagged texture stores these
+    /// packed bytes and the engine runs `apply_ycocg` on load.
+    #[test]
+    #[allow(clippy::cast_possible_truncation)] // tiny fixed test image; len fits u32
+    fn ycocg_forward_inverse_roundtrips() {
+        // A spread of colors: primaries, greys, saturated, dark, light.
+        let mut px: Vec<u8> = Vec::new();
+        for &(r, g, b) in &[
+            (0u8, 0u8, 0u8),
+            (255, 255, 255),
+            (128, 128, 128),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (200, 50, 100),
+            (17, 240, 33),
+            (90, 90, 200),
+            (240, 200, 10),
+        ] {
+            px.extend_from_slice(&[r, g, b, 255]);
+        }
+        let original = px.clone();
+
+        let mut img = Image {
+            width: (px.len() / 4) as u32,
+            height: 1,
+            data: ImageData::Rgba8(px),
+        };
+        encode_ycocg(&mut img); // RGB -> packed YCoCg (scale=1, blue=0)
+                                // Scale byte must be 0 so the decoder recovers scale = (0>>3)+1 = 1.
+        if let ImageData::Rgba8(packed) = &img.data {
+            for p in packed.chunks_exact(4) {
+                assert_eq!(p[2], 0, "scale byte must be 0 for scale=1 packing");
+            }
+        }
+        apply_ycocg(&mut img); // packed YCoCg -> RGB (what the engine does)
+
+        let ImageData::Rgba8(result) = &img.data else {
+            panic!("expected rgba8");
+        };
+        for (i, (o, r)) in original
+            .chunks_exact(4)
+            .zip(result.chunks_exact(4))
+            .enumerate()
+        {
+            for c in 0..3 {
+                let diff = i32::from(o[c]) - i32::from(r[c]);
+                assert!(
+                    diff.abs() <= 3,
+                    "channel {c} of pixel {i}: got {} want {} (diff {diff})",
+                    r[c],
+                    o[c],
+                );
+            }
+        }
     }
 }

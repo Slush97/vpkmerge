@@ -124,10 +124,23 @@ pub fn replace_face_mip_chain(
         ranges.push(r);
     }
 
+    // YCoCg templates (the `YCoCg Conversion` special-dependency in RED2) store
+    // van Waveren scaled-YCoCg pixels, not plain RGB. If we splice plain RGB the
+    // engine's inverse transform garbles the colors, so forward-transform each
+    // level's bytes before encoding. Downsampling stays in RGB (`current`); only
+    // the copy handed to the encoder is YCoCg-packed.
+    let ycocg = crate::texture::detect_ycocg(&resource);
+
     let mut out = resource_bytes.to_vec();
     let mut current = new_mip0.clone();
     for mip in 0..info.mip_count {
-        let encoded = encode_image(&current, info.format)?;
+        let encoded = if ycocg {
+            let mut packed = current.clone();
+            crate::texture::encode_ycocg(&mut packed);
+            encode_image(&packed, info.format)?
+        } else {
+            encode_image(&current, info.format)?
+        };
         let range = ranges[usize::from(mip)].clone();
         let expected = range.end - range.start;
         if encoded.len() != expected {

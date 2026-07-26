@@ -1,7 +1,5 @@
 ![VPKMERGE banner](marketing/github-banners/vpkmerge-industrial-github-1280x640.png)
 
-# vpkmerge
-
 [![CI](https://github.com/Slush97/vpkmerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Slush97/vpkmerge/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/Slush97/vpkmerge?logo=github&color=blue)](https://github.com/Slush97/vpkmerge/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Slush97/vpkmerge/total?logo=github)](https://github.com/Slush97/vpkmerge/releases)

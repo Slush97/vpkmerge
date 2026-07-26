@@ -1,3 +1,5 @@
+![VPKMERGE banner](marketing/github-banners/vpkmerge-industrial-github-1280x640.png)
+
 # vpkmerge
 
 [![CI](https://github.com/Slush97/vpkmerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Slush97/vpkmerge/actions/workflows/ci.yml)

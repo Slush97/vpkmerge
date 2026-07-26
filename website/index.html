@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="VPKMERGE is a pure-Rust workshop for merging, splitting, inspecting, and transforming Source 2 archives."
+    />
+    <meta name="theme-color" content="#0b1820" />
+    <meta property="og:title" content="VPKMERGE — Source 2 Asset Works" />
+    <meta
+      property="og:description"
+      content="Merge, split, inspect, and rebuild Source 2 assets in one dependable workshop."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/vpkmerge-social-preview.png" />
+    <title>VPKMERGE — Source 2 Asset Works</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,600;1,600&family=DM+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <div class="site-shell" id="top">
+      <header class="site-header" data-header>
+        <a class="brand" href="#top" aria-label="VPKMERGE home">
+          <span class="brand-seal" aria-hidden="true">V</span>
+          <span class="brand-word">VPKMERGE</span>
+        </a>
+
+        <button
+          class="menu-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="primary-navigation"
+          data-menu-toggle
+        >
+          <span class="sr-only">Toggle navigation</span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+
+        <nav class="primary-nav" id="primary-navigation" aria-label="Primary" data-navigation>
+          <a href="#capabilities">Capabilities</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#workbench">Workbench</a>
+          <a class="nav-cta" href="https://github.com/Slush97/vpkmerge/releases/latest">
+            Download
+            <span aria-hidden="true">↗</span>
+          </a>
+        </nav>
+      </header>
+
+      <main id="main-content">
+        <section class="hero section-frame" aria-labelledby="hero-title">
+          <div class="hero-copy reveal">
+            <p class="eyebrow"><span></span> Pure-Rust Source 2 workshop <span></span></p>
+            <h1 id="hero-title">VPKMERGE</h1>
+            <p class="hero-lede">
+              Bring every archive to one bench. Merge mods, resolve collisions, inspect assets,
+              and rebuild the pieces—without a game SDK or a heavyweight runtime.
+            </p>
+
+            <div class="hero-actions">
+              <a class="button button-primary" href="https://github.com/Slush97/vpkmerge/releases/latest">
+                <span>Get the desktop app</span>
+                <span class="button-mark" aria-hidden="true">↓</span>
+              </a>
+              <a class="button button-secondary" href="https://github.com/Slush97/vpkmerge">
+                <span>View the source</span>
+                <span aria-hidden="true">↗</span>
+              </a>
+            </div>
+
+            <dl class="hero-ledger" aria-label="Project highlights">
+              <div>
+                <dt>Engine</dt>
+                <dd>Pure Rust</dd>
+              </div>
+              <div>
+                <dt>Platforms</dt>
+                <dd>Win · macOS · Linux</dd>
+              </div>
+              <div>
+                <dt>Workflow</dt>
+                <dd>GUI + CLI</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="hero-art reveal" data-delay="1">
+            <div class="poster-wrap">
+              <div class="poster-rivet poster-rivet-one" aria-hidden="true"></div>
+              <div class="poster-rivet poster-rivet-two" aria-hidden="true"></div>
+              <picture>
+                <source srcset="assets/vpkmerge-workshop-poster.webp" type="image/webp" />
+                <img
+                  src="assets/vpkmerge-workshop-poster.png"
+                  alt="Vintage VPKMERGE advertisement showing an archive-combining machine"
+                  width="1024"
+                  height="1536"
+                  fetchpriority="high"
+                />
+              </picture>
+              <div class="poster-caption" aria-hidden="true">
+                <span>Plate No. 01</span>
+                <span>Archive Consolidating Works</span>
+              </div>
+            </div>
+            <div class="orbit orbit-one" aria-hidden="true"></div>
+            <div class="orbit orbit-two" aria-hidden="true"></div>
+          </div>
+        </section>
+
+        <div class="ticker" aria-label="VPKMERGE capabilities">
+          <div class="ticker-track">
+            <span>Merge</span><i></i><span>Split</span><i></i><span>Inspect</span><i></i>
+            <span>Recolor</span><i></i><span>Rebuild</span><i></i><span>Pack</span><i></i>
+            <span aria-hidden="true">Merge</span><i aria-hidden="true"></i>
+            <span aria-hidden="true">Split</span><i aria-hidden="true"></i>
+            <span aria-hidden="true">Inspect</span><i aria-hidden="true"></i>
+            <span aria-hidden="true">Recolor</span><i aria-hidden="true"></i>
+            <span aria-hidden="true">Rebuild</span><i aria-hidden="true"></i>
+            <span aria-hidden="true">Pack</span><i aria-hidden="true"></i>
+          </div>
+        </div>
+
+        <section class="capabilities section-frame" id="capabilities" aria-labelledby="capabilities-title">
+          <div class="section-heading reveal">
+            <p class="section-number">Catalogue 01</p>
+            <div>
+              <p class="kicker">One dependable workshop</p>
+              <h2 id="capabilities-title">Built for the whole archive.</h2>
+            </div>
+            <p class="section-intro">
+              VPKMERGE handles the practical work around Source 2 assets, from load-order
+              consolidation to finished, drop-in addon packages.
+            </p>
+          </div>
+
+          <div class="capability-grid">
+            <article class="capability-card reveal">
+              <div class="card-topline">
+                <span>01</span>
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                  <path d="M8 14h18v15H8zM8 35h18v15H8zM38 24h18v16H38z" />
+                  <path d="M26 21h6v11m0 0h6M26 43h6V32" />
+                </svg>
+              </div>
+              <h3>Merge &amp; split</h3>
+              <p>
+                Consolidate many mods into one VPK, preview collisions, and route one archive
+                back into precise feature-level packages.
+              </p>
+              <ul>
+                <li>Deterministic load order</li>
+                <li>Strict collision policies</li>
+                <li>Path-based split plans</li>
+              </ul>
+            </article>
+
+            <article class="capability-card reveal" data-delay="1">
+              <div class="card-topline">
+                <span>02</span>
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                  <path d="M12 10h40v44H12z" />
+                  <circle cx="32" cy="29" r="10" />
+                  <path d="m22 48 7-7 5 5 5-5 7 7" />
+                </svg>
+              </div>
+              <h3>Inspect &amp; decode</h3>
+              <p>
+                Walk the file tree and turn compiled Source 2 resources into formats you can
+                actually examine, compare, and use.
+              </p>
+              <ul>
+                <li>Texture previews</li>
+                <li>Model export to glTF</li>
+                <li>Readable soundevents</li>
+              </ul>
+            </article>
+
+            <article class="capability-card reveal" data-delay="2">
+              <div class="card-topline">
+                <span>03</span>
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                  <path d="m32 7 7 16 17 9-17 9-7 16-7-16-17-9 17-9z" />
+                  <circle cx="32" cy="32" r="7" />
+                </svg>
+              </div>
+              <h3>Transform &amp; rebuild</h3>
+              <p>
+                Recolor VFX, replace artwork and audio, edit materials, and pack the results at
+                the exact paths the game expects.
+              </p>
+              <ul>
+                <li>Texture and VFX recolor</li>
+                <li>Custom icons and audio</li>
+                <li>Standalone addon output</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="workflow section-frame" id="workflow" aria-labelledby="workflow-title">
+          <div class="workflow-copy reveal">
+            <p class="section-number section-number-light">Procedure 02</p>
+            <p class="kicker kicker-light">From loose collection to clean loadout</p>
+            <h2 id="workflow-title">Order from archive chaos.</h2>
+            <p>
+              The desktop app makes the workflow visual. The CLI makes it repeatable. Both use
+              the same engine, so a careful manual merge and an automated build produce the same
+              dependable result.
+            </p>
+            <a class="text-link" href="https://github.com/Slush97/vpkmerge#download">
+              Choose your instrument <span aria-hidden="true">→</span>
+            </a>
+          </div>
+
+          <ol class="workflow-steps">
+            <li class="reveal">
+              <span class="step-number"><span>I</span></span>
+              <div>
+                <p class="step-label">Gather</p>
+                <h3>Bring in every VPK.</h3>
+                <p>Drop files into the app or define them in a repeatable command.</p>
+              </div>
+            </li>
+            <li class="reveal" data-delay="1">
+              <span class="step-number"><span>II</span></span>
+              <div>
+                <p class="step-label">Resolve</p>
+                <h3>See every collision.</h3>
+                <p>Choose the winning asset deliberately, or enforce a strict no-overlap build.</p>
+              </div>
+            </li>
+            <li class="reveal" data-delay="2">
+              <span class="step-number"><span>III</span></span>
+              <div>
+                <p class="step-label">Forge</p>
+                <h3>Ship one clean addon.</h3>
+                <p>Write a game-ready archive with predictable paths and embedded identity.</p>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <section class="workbench section-frame" id="workbench" aria-labelledby="workbench-title">
+          <div class="workbench-heading reveal">
+            <p class="section-number">Workbench 03</p>
+            <p class="kicker">For terminals and toolchains</p>
+            <h2 id="workbench-title">A serious engine beneath the brass.</h2>
+            <p>
+              The GUI is the welcoming front desk. The command line is the machine room—quiet,
+              scriptable, and designed for mod managers and repeatable builds.
+            </p>
+          </div>
+
+          <div class="terminal reveal" data-delay="1">
+            <div class="terminal-bar">
+              <div class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+              <span>MERGE ORDER · 001</span>
+              <button class="copy-button" type="button" data-copy-command>
+                <span data-copy-label>Copy</span>
+              </button>
+            </div>
+            <pre><code><span class="prompt">$</span> vpkmerge combined_dir.vpk \
+    pak04_dir.vpk \
+    pak05_dir.vpk \
+    --verbose
+
+<span class="muted">Inspecting 2 archives…</span>
+<span class="success">✓ 12,481 entries written</span>
+<span class="success">✓ 37 overrides resolved</span></code></pre>
+          </div>
+
+          <div class="technical-ledger reveal">
+            <div><span>No SDK</span><strong>Pure decoding</strong></div>
+            <div><span>No .NET</span><strong>One Rust engine</strong></div>
+            <div><span>Open source</span><strong>MIT licensed</strong></div>
+            <div><span>Portable</span><strong>Desktop + CLI</strong></div>
+          </div>
+        </section>
+
+        <section class="finale section-frame" aria-labelledby="finale-title">
+          <div class="finale-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
+          <p class="kicker">The archive works are open</p>
+          <h2 id="finale-title">Make the loadout yours.</h2>
+          <p>
+            Download the desktop workshop, keep the CLI close, and turn a shelf full of mods
+            into one archive you can trust.
+          </p>
+          <div class="hero-actions finale-actions">
+            <a class="button button-primary" href="https://github.com/Slush97/vpkmerge/releases/latest">
+              <span>Download latest release</span><span class="button-mark" aria-hidden="true">↓</span>
+            </a>
+            <a class="button button-secondary button-secondary-light" href="https://github.com/Slush97/vpkmerge">
+              <span>Explore on GitHub</span><span aria-hidden="true">↗</span>
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <a class="brand footer-brand" href="#top" aria-label="Back to top">
+          <span class="brand-seal" aria-hidden="true">V</span>
+          <span class="brand-word">VPKMERGE</span>
+        </a>
+        <p>Independent open-source tooling for Source 2 modding.</p>
+        <div class="footer-links">
+          <a href="https://github.com/Slush97/vpkmerge">GitHub</a>
+          <a href="https://github.com/Slush97/vpkmerge/releases/latest">Releases</a>
+          <a href="https://github.com/Slush97/vpkmerge/blob/main/LICENSE">License</a>
+        </div>
+        <p class="copyright">© <span data-year></span> VPKMERGE</p>
+      </footer>
+    </div>
+  </body>
+</html>

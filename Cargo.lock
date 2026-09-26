@@ -4315,8 +4315,6 @@ dependencies = [
 [[package]]
 name = "valve_pak"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d53bbddf8d7d66916e639da59fd58ec7e8cd1608a12e11c1b68a797707ca43"
 dependencies = [
  "anyhow",
  "clap",

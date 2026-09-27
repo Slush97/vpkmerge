@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.19.1
+
+Fix: VPKs that leave out the optional v2 MD5 checksum section now open. Some GameBanana mods ship valid v2 VPKs whose header declares a 0-byte checksum section, and every command that read them failed with "failed to fill whole buffer" (seen as merges in Grimoire failing on specific mods). The VPK reader (`valve_pak` 0.1.0) is now vendored with one change: it reads the checksum section only when the header says it is there (#45). Output for every other VPK is byte-identical to v0.19.0.
+
 ## v0.19.0
 
 Caller-owned sidecar entries: embed and retire arbitrary files (identity records, manager metadata) in a VPK without the tool understanding them. Built to back Grimoire's self-identifying VPK imprinting. Contributed by @oldreceipt (#40), with a post-merge hardening pass (#41).

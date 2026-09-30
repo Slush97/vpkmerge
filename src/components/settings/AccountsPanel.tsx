@@ -122,7 +122,7 @@ function AgentGroup({ agent: a, onRefresh }: { agent: AgentStatus; onRefresh: ()
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-[14px] leading-snug text-text">{a.description}</p>
-            <p className="mt-0.5 truncate font-mono text-[12.5px] text-faint" title={a.command}>
+            <p className="mt-0.5 truncate font-mono text-[13px] text-faint" title={a.command}>
               {a.command}
             </p>
           </div>
@@ -153,7 +153,7 @@ function AgentGroup({ agent: a, onRefresh }: { agent: AgentStatus; onRefresh: ()
         )}
         {a.error && (
           <Row>
-            <p className="selectable min-w-0 break-words font-mono text-[12.5px] leading-relaxed text-danger">{a.error}</p>
+            <p className="selectable min-w-0 break-words font-mono text-[13px] leading-relaxed text-danger">{a.error}</p>
           </Row>
         )}
       </Group>

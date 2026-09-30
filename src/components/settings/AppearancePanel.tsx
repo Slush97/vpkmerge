@@ -76,7 +76,7 @@ export function AppearancePanel({ settings, onSettingsChange }: Props) {
                   >
                     {on && <Icon name="check" size={15} strokeWidth={3} className="text-white" />}
                   </span>
-                  <span className={`text-[12.5px] ${on ? "font-medium text-text" : "text-muted"}`}>{a.name}</span>
+                  <span className={`text-[13px] ${on ? "font-medium text-text" : "text-muted"}`}>{a.name}</span>
                 </button>
               );
             })}

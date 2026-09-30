@@ -153,7 +153,7 @@ function ServerRow({ server: s, onReconnect }: { server: McpServerStatus; onReco
       <div className="flex min-h-12 items-center gap-3 px-4 py-2.5">
         <Dot color={stateColor[s.state]} />
         <span className="font-mono text-[14px] font-medium text-text">{s.name}</span>
-        <span className="rounded-md bg-fill px-1.5 py-0.5 text-[12px] font-medium text-muted">{s.transport}</span>
+        <span className="rounded-md bg-fill px-1.5 py-0.5 text-[13px] font-medium text-muted">{s.transport}</span>
         <span className="text-[13px] text-muted">{stateLabel[s.state]}</span>
         <span className="flex-1" />
         {s.state === "connected" && (
@@ -180,7 +180,7 @@ function ServerRow({ server: s, onReconnect }: { server: McpServerStatus; onReco
         )}
       </div>
       {(s.error || error) && (
-        <p className="selectable break-words px-4 pb-3 font-mono text-[12.5px] leading-relaxed text-danger">
+        <p className="selectable break-words px-4 pb-3 font-mono text-[13px] leading-relaxed text-danger">
           {error ?? s.error}
         </p>
       )}

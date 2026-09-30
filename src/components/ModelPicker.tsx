@@ -201,7 +201,7 @@ export function ModelPicker({ settings, providers, agents, onChange, onOpenSetti
                     );
                   })}
                   {models.length > shown.length && (
-                    <p className="px-3 py-1.5 text-[12.5px] text-faint">
+                    <p className="px-3 py-1.5 text-[13px] text-faint">
                       Showing {shown.length} of {models.length}. Search to narrow.
                     </p>
                   )}
@@ -218,7 +218,7 @@ export function ModelPicker({ settings, providers, agents, onChange, onOpenSetti
                 choose({ kind: "model", provider: manualProvider, model: manualId.trim() });
             }}
           >
-            <span className="text-[12.5px] font-semibold text-muted">Use a model ID directly</span>
+            <span className="text-[13px] font-semibold text-muted">Use a model ID directly</span>
             <div className="grid grid-cols-[128px_minmax(0,1fr)_auto] gap-2">
               <div className="relative">
                 <select
@@ -268,7 +268,7 @@ export function ModelPicker({ settings, providers, agents, onChange, onOpenSetti
 function Section({ title, busy, children }: { title: string; busy?: boolean; children: ReactNode }) {
   return (
     <section className="pt-2">
-      <div className="flex items-center gap-2 px-3 pb-1 text-[12px] font-semibold text-muted">
+      <div className="flex items-center gap-2 px-3 pb-1 text-[13px] font-semibold text-muted">
         <span>{title}</span>
         {busy && <Icon name="loader" size={12} className="spin text-running" />}
       </div>
@@ -312,7 +312,7 @@ function Option({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[14px] font-medium text-text">{title}</span>
         {subtitle && (
-          <span className={`block truncate text-[12.5px] text-faint ${mono ? "font-mono" : ""}`}>{subtitle}</span>
+          <span className={`block truncate text-[13px] text-faint ${mono ? "font-mono" : ""}`}>{subtitle}</span>
         )}
       </span>
       {selected && <Icon name="check" size={16} strokeWidth={2.5} className="text-accent-ink" />}

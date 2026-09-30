@@ -31,7 +31,7 @@ export const monoGroupInputClass = `${groupInputClass} font-mono text-[13px]`;
 export function Kbd({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <kbd
-      className={`whitespace-nowrap rounded-md bg-fill px-1.5 py-[3px] font-sans text-[12px] font-medium leading-none text-faint ${className}`}
+      className={`whitespace-nowrap rounded-md bg-fill px-1.5 py-[3px] font-sans text-[13px] font-medium leading-none text-faint ${className}`}
     >
       {children}
     </kbd>
@@ -51,7 +51,7 @@ export function Dot({ color, className = "" }: { color: string; className?: stri
 export function Pill({ color, children }: { color: string; children: ReactNode }) {
   return (
     <span
-      className="inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[12.5px] font-medium"
+      className="inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[13px] font-medium"
       style={{ background: `color-mix(in srgb, ${color} 13%, transparent)`, color }}
     >
       <span aria-hidden="true" className="size-1.5 rounded-full" style={{ background: color }} />

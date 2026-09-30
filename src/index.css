@@ -27,11 +27,11 @@
 
   --text: #1d1d1f;
   --text-2: #3a3a3d;
-  --muted: #6e6e73;
-  --faint: #7d7d82;
+  --muted: #58585d;
+  --faint: #6c6c72;
 
   --running: #0a6fd6;
-  --success: #1f8a3b;
+  --success: #177a33;
   --warning: #a15c00;
   --danger: #d1242f;
   --interrupted: #8a3ffc;
@@ -57,8 +57,8 @@
 
   --text: #f5f5f7;
   --text-2: #dcdce1;
-  --muted: #a4a4aa;
-  --faint: #8e8e94;
+  --muted: #b3b3ba;
+  --faint: #9d9da4;
 
   --running: #64a8ff;
   --success: #3ccf6a;
@@ -125,7 +125,6 @@ body {
   font-feature-settings: "cv05", "cv11", "ss03";
   font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
 }
@@ -205,7 +204,7 @@ code {
 
 /* Rendered markdown in assistant messages. */
 .prose-chat {
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.6;
   color: var(--text);
 }

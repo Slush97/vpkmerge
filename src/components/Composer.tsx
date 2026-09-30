@@ -74,7 +74,7 @@ export function Composer({
         }}
         placeholder={hasModel ? "Message Workbench" : "Choose a model below to start"}
         aria-label="Message"
-        className="block min-h-6 w-full resize-none bg-transparent px-0.5 text-[15px] leading-[1.55] text-text outline-none placeholder:text-faint focus-visible:outline-none"
+        className="block min-h-6 w-full resize-none bg-transparent px-0.5 text-[16px] leading-[1.55] text-text outline-none placeholder:text-faint focus-visible:outline-none"
       />
       <div className="mt-3 flex items-center gap-2">
         <ModelPicker
@@ -86,7 +86,7 @@ export function Composer({
         />
         <span className="flex-1" />
         {!busy && hasModel && text.trim() && (
-          <span className="hidden whitespace-nowrap text-[12.5px] text-faint sm:inline">Enter to send</span>
+          <span className="hidden whitespace-nowrap text-[13px] text-faint sm:inline">Enter to send</span>
         )}
         {busy ? (
           <button

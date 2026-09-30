@@ -5752,6 +5752,7 @@ name = "workbench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "gtk",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

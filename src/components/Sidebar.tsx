@@ -140,7 +140,7 @@ function Expanded({
         ) : (
           groups.map((g) => (
             <div key={g.label} className="flex flex-col gap-px pt-4">
-              <span className="px-3 pb-1.5 text-[12px] font-semibold text-muted">{g.label}</span>
+              <span className="px-3 pb-1.5 text-[13px] font-semibold text-muted">{g.label}</span>
               {g.items.map((s) => (
                 <SessionRow
                   key={s.id}
@@ -168,7 +168,7 @@ function Expanded({
             {choice.problem ?? choice.label}
           </span>
           {choice.ready && choice.detail && (
-            <span className="shrink-0 truncate text-[12.5px] text-faint">{choice.detail}</span>
+            <span className="shrink-0 truncate text-[13px] text-faint">{choice.detail}</span>
           )}
         </button>
         <button

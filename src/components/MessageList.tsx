@@ -79,7 +79,7 @@ function UserMessage({ message }: { message: StoredMessage }) {
     .join("\n\n");
   return (
     <div className="flex justify-end">
-      <div className="selectable max-w-[560px] whitespace-pre-wrap break-words rounded-[20px] bg-fill px-4 py-2.5 text-[15px] leading-[1.55] text-text">
+      <div className="selectable max-w-[560px] whitespace-pre-wrap break-words rounded-[20px] bg-fill px-4 py-2.5 text-[16px] leading-[1.55] text-text">
         {text}
       </div>
     </div>

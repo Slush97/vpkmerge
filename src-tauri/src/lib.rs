@@ -202,6 +202,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // With slight hinting WebKitGTK places glyphs on fractional pixels, which
+            // smears Inter's thin stems across two pixels on 1x displays.
+            #[cfg(target_os = "linux")]
+            if let Some(settings) = gtk::Settings::default() {
+                use gtk::prelude::GtkSettingsExt;
+                settings.set_gtk_xft_hinting(1);
+                settings.set_gtk_xft_hintstyle(Some("hintfull"));
+            }
             let core = App::open(&app.path().app_data_dir()?)?;
             let background = Arc::clone(&core);
             tauri::async_runtime::spawn(async move {

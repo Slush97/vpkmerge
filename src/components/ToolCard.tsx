@@ -30,7 +30,7 @@ export function ToolCard({ call, result, pending }: { call: ToolCall; result: To
         <Icon name={m.icon} size={16} className={`${m.color} ${state === "running" ? "spin" : ""}`} />
         <span className="shrink-0 font-mono text-[13px] font-medium text-text">{prettyToolName(call.name)}</span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-faint">{argsSummary(call.arguments)}</span>
-        <span className={`shrink-0 text-[12.5px] font-medium ${m.color}`}>{m.label}</span>
+        <span className={`shrink-0 text-[13px] font-medium ${m.color}`}>{m.label}</span>
         <Icon name={open ? "chevUp" : "chevDown"} size={15} className="text-faint" />
       </button>
       {open && (
@@ -46,8 +46,8 @@ export function ToolCard({ call, result, pending }: { call: ToolCall; result: To
 function Block({ label, text }: { label: string; text: string }) {
   return (
     <div>
-      <div className="mb-1.5 text-[12.5px] font-semibold text-muted">{label}</div>
-      <pre className="selectable max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-code px-3.5 py-2.5 font-mono text-[12.5px] leading-relaxed text-text-2">
+      <div className="mb-1.5 text-[13px] font-semibold text-muted">{label}</div>
+      <pre className="selectable max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-code px-3.5 py-2.5 font-mono text-[13px] leading-relaxed text-text-2">
         {text}
       </pre>
     </div>

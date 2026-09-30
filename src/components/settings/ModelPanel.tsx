@@ -125,7 +125,7 @@ export function ModelPanel({ settings, providers, agents, onSettingsChange }: Pr
               max={200}
               value={rounds}
               onChange={(e) => setRounds(e.target.value)}
-              className={`${groupInputClass} w-[96px] text-right`}
+              className={`${groupInputClass} max-w-[96px] text-right`}
             />
             <button type="submit" className={btn.secondary}>
               Save

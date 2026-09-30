@@ -54,7 +54,7 @@ export function SkillsPanel() {
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[14px] font-medium text-text">{s.name}</div>
                 {s.description && <p className="mt-0.5 text-[13.5px] leading-snug text-muted">{s.description}</p>}
-                <div className="mt-1 truncate font-mono text-[12px] text-faint" title={s.dir}>
+                <div className="mt-1 truncate font-mono text-[13px] text-faint" title={s.dir}>
                   {s.dir}
                 </div>
               </div>

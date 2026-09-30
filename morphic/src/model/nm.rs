@@ -614,8 +614,9 @@ pub fn reencode_nm_clip(original: &[u8], clip: &NmClip) -> Result<Vec<u8>, Decod
 }
 
 /// Re-encodes an edited NM clip by **rebuilding the whole `DATA` block** from its
-/// KV3 value tree (uncompressed v4 via [`crate::encode_kv3_resource`]), rather than
-/// patching the v5 container in place like [`reencode_nm_clip`]. This is the
+/// KV3 value tree (KV3 v5 via [`crate::encode_kv3_resource_like`], keeping the
+/// original's typed-array framing and flags), rather than patching the v5
+/// container in place like [`reencode_nm_clip`]. This is the
 /// general path the Blender importer needs: it handles **arbitrary** edits that the
 /// in-place patcher cannot, because each becomes a plain value-tree edit:
 /// - a **frame-count change** (the `m_compressedPoseOffsets` array is rebuilt and
@@ -628,8 +629,10 @@ pub fn reencode_nm_clip(original: &[u8], clip: &NmClip) -> Result<Vec<u8>, Decod
 /// Per-channel quantization ranges are derived from each animated channel's min/max
 /// over the clip's frames; static channels keep their constant. Every per-channel
 /// vector must have `clip.frame_count` entries (the caller resamples to the target
-/// frame count). The output is uncompressed v4 (larger than the original LZ4) but
-/// engine-loadable (verified against VRF/Source2Viewer). Prefer [`reencode_nm_clip`]
+/// frame count). An earlier version emitted uncompressed v4 with plain arrays; the
+/// engine loaded that but never animated it, so the output is now v5 shaped like
+/// Valve's (in-game confirmed for rotation edits, a frame-count change, and added
+/// translation channels). Prefer [`reencode_nm_clip`]
 /// for in-place rotation edits at a fixed frame count (byte-faithful, smaller, and
 /// already in-game confirmed); use this when the channel set or frame count changes.
 pub fn reencode_nm_clip_full(original: &[u8], clip: &NmClip) -> Result<Vec<u8>, DecodeError> {
@@ -652,6 +655,10 @@ pub fn reencode_nm_clip_full(original: &[u8], clip: &NmClip) -> Result<Vec<u8>, 
 
     // 3. Mutate the decoded DATA tree, then re-encode it whole.
     let mut tree = crate::decode_kv3_resource(original)?;
+    let old_frames = tree.get("m_nNumFrames").and_then(Value::as_uint);
+    if old_frames != Some(u64::from(work.frame_count)) {
+        retime_root_motion(&mut tree, old_frames, work.frame_count)?;
+    }
     set_value(
         &mut tree,
         "m_nNumFrames",
@@ -675,7 +682,30 @@ pub fn reencode_nm_clip_full(original: &[u8], clip: &NmClip) -> Result<Vec<u8>, 
             }
         }
     }
-    crate::encode_kv3_resource(original, &tree)
+    crate::encode_kv3_resource_like(original, &tree)
+}
+
+/// Keep `m_rootMotion` in step with a frame-count change: its own frame count
+/// follows the clip's. A clip with per-frame root-motion transforms is refused
+/// (their layout is not modelled, so they cannot be resampled safely); the
+/// usual single identity transform needs no change.
+fn retime_root_motion(tree: &mut Value, old: Option<u64>, frames: u32) -> Result<(), DecodeError> {
+    let Some(rm) = tree.get_mut("m_rootMotion") else {
+        return Ok(());
+    };
+    let per_frame = rm
+        .get("m_transforms")
+        .and_then(Value::as_array)
+        .is_some_and(|t| t.len() > 1);
+    if per_frame {
+        return Err(DecodeError::Kv3(
+            "frame-count change on a clip with per-frame root motion is not supported",
+        ));
+    }
+    if rm.get("m_nNumFrames").and_then(Value::as_uint) == old {
+        set_value(rm, "m_nNumFrames", Value::Int(i64::from(frames)));
+    }
+    Ok(())
 }
 
 /// `[min, max-min]` over an iterator of channel samples; a constant channel yields

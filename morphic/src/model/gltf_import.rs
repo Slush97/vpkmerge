@@ -15,12 +15,17 @@
 //! writer names each joint node after its bone), exactly like the export side maps
 //! NM track `i` to `skel.bone_names[i]`.
 //!
-//! Scope (matches what the engine accepts via [`super::reencode_nm_clip`]): the
-//! target frame count is fixed to the slot's clip, the source animation is
-//! time-stretched onto it, and a bone's translation/scale are **edited only where
-//! the slot already animates them** (adding a translation/scale channel needs the
-//! full v4 re-encode, which is engine-inert). Rotations may be edited or **added**
-//! (a static bone becomes animated). Imported scale is uniform (glTF's `x`).
+//! Two import paths. [`import_glb_onto_nm_clip`] is the in-game-confirmed v5
+//! in-place splice ([`super::reencode_nm_clip`]): the frame count stays the
+//! slot's, and translation/scale are **edited only where the slot already
+//! animates them**; rotations may be edited or **added** (a static bone becomes
+//! animated). [`import_glb_onto_nm_clip_full`] rebuilds the clip through
+//! [`super::reencode_nm_clip_full`] (KV3 v5 with Valve's typed framing), so it
+//! can also **add** translation/scale channels and resample to a new frame count;
+//! the rebuild, frame-count changes and added translation channels are all in-game
+//! confirmed. Either way the source animation
+//! is time-stretched onto the target frame grid. Imported scale is uniform
+//! (glTF's `x`).
 
 // glTF stores everything as f32; the resampler rounds source-clock times onto the
 // target frame grid. These narrowings are exact for real clips.
@@ -31,7 +36,7 @@ use std::collections::HashMap;
 use crate::error::DecodeError;
 
 use super::math::{Quat, Vec3};
-use super::nm::{decode_nm_clip, reencode_nm_clip, NmClip, NmSkeleton};
+use super::nm::{decode_nm_clip, reencode_nm_clip, reencode_nm_clip_full, NmClip, NmSkeleton};
 
 /// One bone's imported keyframes, in raw Source local space. Each present channel
 /// is a list of `(time_seconds, value)` samples in ascending time order.
@@ -174,11 +179,85 @@ pub fn import_glb_onto_nm_clip(
     reencode_nm_clip(original, &edited)
 }
 
+/// Imports a `.glb` animation through the **full** re-encoder
+/// ([`reencode_nm_clip_full`], KV3 v5 keeping Valve's typed framing). Unlike
+/// [`import_glb_onto_nm_clip`], translation/scale channels the glb animates are
+/// **added** even where the slot keeps them static, and `frame_count` (when set)
+/// first resamples the slot to that many frames over the same duration (more
+/// frames play smoother, not longer). Rotations behave as in the in-place path.
+pub fn import_glb_onto_nm_clip_full(
+    original: &[u8],
+    skel: &NmSkeleton,
+    glb: &[u8],
+    name: Option<&str>,
+    frame_count: Option<u32>,
+) -> Result<Vec<u8>, DecodeError> {
+    let mut clip = decode_nm_clip(original)?;
+    if let Some(n) = frame_count {
+        clip = resample_clip(&clip, n);
+    }
+    let anim = read_glb_animation(glb, name)?;
+    let edited = map_animation(&clip, skel, &anim, true);
+    reencode_nm_clip_full(original, &edited)
+}
+
+/// `clip` resampled to `frames` frames over the same duration: every animated
+/// channel is re-sampled on the new grid (lerp for translation/scale, nlerp for
+/// rotation); static channels are untouched. The quantized stream is left stale
+/// for the full re-encoder to rebuild.
+#[must_use]
+pub fn resample_clip(clip: &NmClip, frames: u32) -> NmClip {
+    let old = clip.frame_count as usize;
+    let n = frames.max(1) as usize;
+    let times: Vec<f32> = (0..n)
+        .map(|f| {
+            if n > 1 && old > 1 {
+                f as f32 * (old - 1) as f32 / (n - 1) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let mut out = clip.clone();
+    out.frame_count = frames.max(1);
+    for t in &mut out.tracks {
+        if let Some(r) = &t.rotations {
+            let k = keyed(r);
+            t.rotations = Some(times.iter().map(|&x| sample_quat(&k, x)).collect());
+        }
+        if let Some(p) = &t.translations {
+            let k = keyed(p);
+            t.translations = Some(times.iter().map(|&x| sample_vec3(&k, x)).collect());
+        }
+        if let Some(s) = &t.scales {
+            let k = keyed(s);
+            t.scales = Some(times.iter().map(|&x| sample_scalar(&k, x)).collect());
+        }
+    }
+    out
+}
+
+/// Per-frame samples as `(frame index, value)` keys for the `sample_*` helpers.
+fn keyed<T: Copy>(v: &[T]) -> Vec<(f32, T)> {
+    v.iter().enumerate().map(|(i, x)| (i as f32, *x)).collect()
+}
+
 /// Produces an edited [`NmClip`] by sampling `anim` onto `clip`'s frame grid and
 /// mapping bones by name through `skel`. Split out from [`import_glb_onto_nm_clip`]
 /// so the resample/map logic is unit-testable without a compiled resource.
 #[must_use]
 pub fn apply_animation(clip: &NmClip, skel: &NmSkeleton, anim: &GltfAnimation) -> NmClip {
+    map_animation(clip, skel, anim, false)
+}
+
+/// [`apply_animation`], optionally adding translation/scale channels the slot
+/// keeps static (`add_channels`, for the full re-encoder).
+fn map_animation(
+    clip: &NmClip,
+    skel: &NmSkeleton,
+    anim: &GltfAnimation,
+    add_channels: bool,
+) -> NmClip {
     let frames = clip.frame_count as usize;
     // Sample times on the source clock, time-stretched to cover the target frames.
     let sample_times: Vec<f32> = match anim.time_range() {
@@ -204,8 +283,9 @@ pub fn apply_animation(clip: &NmClip, skel: &NmSkeleton, anim: &GltfAnimation) -
                     Some(sample_times.iter().map(|&t| sample_quat(keys, t)).collect());
             }
         }
-        // Translation/scale: edit only where the slot already animates them.
-        if track.translations.is_some() {
+        // Translation/scale: edit where the slot already animates them, or add
+        // them when the full re-encoder will rebuild the channel set.
+        if add_channels || track.translations.is_some() {
             if let Some(keys) = &src.translations {
                 if !keys.is_empty() {
                     track.translations =
@@ -213,7 +293,7 @@ pub fn apply_animation(clip: &NmClip, skel: &NmSkeleton, anim: &GltfAnimation) -
                 }
             }
         }
-        if track.scales.is_some() {
+        if add_channels || track.scales.is_some() {
             if let Some(keys) = &src.scales {
                 if !keys.is_empty() {
                     track.scales = Some(

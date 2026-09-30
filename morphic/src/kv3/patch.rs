@@ -29,6 +29,9 @@ const B1: usize = 0;
 const B2: usize = 1;
 const B4: usize = 2;
 const B8: usize = 3;
+/// Sentinel lane index for a count that lives in the v5 object-lengths lane
+/// (object member counts), used by [`insert_object_member_adding`].
+const OBJ_LANE: usize = 4;
 
 /// Zeroes the `m_nIndexCount` of each `(scene_object, draw_call)` in `targets`,
 /// so those draw calls render nothing, returning the edited (uncompressed) block.
@@ -519,6 +522,82 @@ pub fn insert_array_element_adding(
     }
 }
 
+/// Appends the member `key = value` to the object at `object_path`, adding any
+/// keys/string values not already interned in the KV3 string table. Strings at
+/// the `flags` subtree paths (relative to `value`) are written with the given
+/// KV3 value flag (`1` = `Resource`), which is how resource-handle fields
+/// (e.g. a model's `m_animGraph2Refs[].m_hGraph`) are stored.
+///
+/// Structural sibling of [`insert_array_element_adding`]: the existing typed
+/// lanes are carried byte-for-byte; only the target object's member count, the
+/// header counts/sizes, the string table, and the appended member bytes change.
+/// Blob-bearing blocks are refused (no use case yet: model DATA blocks carry
+/// no binary blobs).
+pub fn insert_object_member_adding(
+    block: &[u8],
+    object_path: &[Seg],
+    key: &str,
+    value: &Value,
+    flags: &[(Vec<Seg>, u8)],
+) -> Result<Vec<u8>, DecodeError> {
+    if block.len() >= 60 && i32_at(block, 56)? != 0 {
+        return Err(DecodeError::Kv3(
+            "object member insert does not support blob-bearing blocks",
+        ));
+    }
+    if value_contains_blob(value) {
+        return Err(DecodeError::Kv3(
+            "object member insert does not support binary-blob values",
+        ));
+    }
+
+    let out = rewrap_uncompressed(block)?;
+    let version = u32_at(&out, 0)? & 0xFF;
+    if version != 4 && version != 5 {
+        return Err(DecodeError::Kv3(
+            "object member insert requires KV3 v4 or v5",
+        ));
+    }
+
+    let mut wanted = Vec::new();
+    push_unique_string(&mut wanted, key);
+    collect_value_strings(value, &mut wanted);
+    let with_strings = match version {
+        5 => append_strings_v5(&out, &wanted)?,
+        4 => append_strings_v4(&out, &wanted)?,
+        _ => unreachable!(),
+    };
+
+    let site = {
+        let mut w = InsertWalk::new(&with_strings, object_path, 0)?;
+        w.object_member = true;
+        let root = w.read_type()?;
+        w.value(root)?;
+        w.finish()?
+    };
+
+    let strings = lanes(&with_strings, version)?.strings;
+    let key_id = strings
+        .iter()
+        .position(|known| known == key)
+        .ok_or(DecodeError::Kv3("member key was not interned"))?;
+    let key_id =
+        u32::try_from(key_id).map_err(|_| DecodeError::Kv3("string table id does not fit u32"))?;
+
+    // A member is: value type byte(s) in the types lane, the member name id in
+    // b4 (read before the value's own b4 data), then the value's lane bytes.
+    let mut encoded = encode_insert_value_flagged(value, version, &strings, true, flags)?;
+    let mut b4 = key_id.to_le_bytes().to_vec();
+    b4.extend_from_slice(&encoded.b4);
+    encoded.b4 = b4;
+
+    match version {
+        5 => rebuild_v5_with_insert(&with_strings, &site, &encoded),
+        4 => rebuild_v4_with_insert(&with_strings, &site, &encoded),
+        _ => unreachable!(),
+    }
+}
+
 fn value_contains_blob(value: &Value) -> bool {
     match value {
         Value::Binary(_) => true,
@@ -881,9 +960,26 @@ fn encode_insert_value(
     strings: &[String],
     include_root_type: bool,
 ) -> Result<EncodedInsert, DecodeError> {
+    encode_insert_value_flagged(value, version, strings, include_root_type, &[])
+}
+
+/// Like [`encode_insert_value`], but strings at the listed subtree paths
+/// (relative to `value`'s root) are written with the given KV3 value flag
+/// (`0x80`-marked type byte + flag byte, e.g. `1` = `Resource`). This is how
+/// resource-handle strings (`CStrongHandle` fields like a model's
+/// `m_animGraph2Refs[].m_hGraph`) are stored in shipped assets.
+fn encode_insert_value_flagged(
+    value: &Value,
+    version: u32,
+    strings: &[String],
+    include_root_type: bool,
+    flags: &[(Vec<Seg>, u8)],
+) -> Result<EncodedInsert, DecodeError> {
     let mut enc = InsertEncoder {
         version,
         strings,
+        flags,
+        path: Vec::new(),
         out: EncodedInsert {
             b1: Vec::new(),
             b2: Vec::new(),
@@ -901,6 +997,8 @@ fn encode_insert_value(
 struct InsertEncoder<'a> {
     version: u32,
     strings: &'a [String],
+    flags: &'a [(Vec<Seg>, u8)],
+    path: Vec<Seg>,
     out: EncodedInsert,
 }
 
@@ -921,8 +1019,18 @@ impl InsertEncoder<'_> {
     fn value(&mut self, value: &Value, include_type: bool) -> Result<(), DecodeError> {
         use node::*;
         let t = value_wire_type(value);
+        let flag = self
+            .flags
+            .iter()
+            .find(|(p, _)| p.as_slice() == self.path.as_slice())
+            .map(|&(_, f)| f);
         if include_type {
-            self.out.types.push(t);
+            if let Some(f) = flag {
+                self.out.types.push(t | 0x80);
+                self.out.types.push(f);
+            } else {
+                self.out.types.push(t);
+            }
         }
         match (t, value) {
             (
@@ -951,12 +1059,40 @@ impl InsertEncoder<'_> {
             (DOUBLE, Value::Double(d)) => {
                 self.out.b8.extend_from_slice(&d.to_bits().to_le_bytes());
             }
+            (ARRAY_TYPE_BYTE_LENGTH, Value::Array(items)) => {
+                // Valve stores homogeneous CUtlVector fields as typed arrays:
+                // a u8 count on the 1-byte lane, then ONE subtype (+flag) for
+                // every element. The engine's schema binder rejects the untyped
+                // ARRAY form for these fields (error model in game).
+                self.out.b1.push(items.len() as u8);
+                let sub = value_wire_type(&items[0]);
+                self.path.push(Seg::Index(0));
+                let sub_flag = self
+                    .flags
+                    .iter()
+                    .find(|(p, _)| p.as_slice() == self.path.as_slice())
+                    .map(|&(_, f)| f);
+                self.path.pop();
+                if let Some(f) = sub_flag {
+                    self.out.types.push(sub | 0x80);
+                    self.out.types.push(f);
+                } else {
+                    self.out.types.push(sub);
+                }
+                for (i, item) in items.iter().enumerate() {
+                    self.path.push(Seg::Index(i));
+                    self.value(item, false)?;
+                    self.path.pop();
+                }
+            }
             (ARRAY, Value::Array(items)) => {
                 let n = u32::try_from(items.len())
                     .map_err(|_| DecodeError::Kv3("inserted array too large"))?;
                 self.out.b4.extend_from_slice(&n.to_le_bytes());
-                for item in items {
+                for (i, item) in items.iter().enumerate() {
+                    self.path.push(Seg::Index(i));
                     self.value(item, true)?;
+                    self.path.pop();
                 }
             }
             (OBJECT, Value::Object(pairs)) => {
@@ -971,7 +1107,9 @@ impl InsertEncoder<'_> {
                     self.out
                         .b4
                         .extend_from_slice(&self.string_id(key)?.to_le_bytes());
+                    self.path.push(Seg::Key(key.clone()));
                     self.value(child, true)?;
+                    self.path.pop();
                 }
             }
             (BINARY_BLOB, Value::Binary(bytes)) => {
@@ -1027,7 +1165,18 @@ fn value_wire_type(value: &Value) -> u8 {
         }
         Value::String(_) => STRING,
         Value::Binary(_) => BINARY_BLOB,
-        Value::Array(_) => ARRAY,
+        Value::Array(items) => {
+            let homogeneous = items.first().is_some_and(|f| {
+                items
+                    .iter()
+                    .all(|i| value_wire_type(i) == value_wire_type(f))
+            });
+            if homogeneous && items.len() <= 255 {
+                ARRAY_TYPE_BYTE_LENGTH
+            } else {
+                ARRAY
+            }
+        }
         Value::Object(_) => OBJECT,
     }
 }
@@ -1059,6 +1208,10 @@ struct InsertWalk<'a> {
     strings: Vec<String>,
     target: &'a [Seg],
     insert_index: usize,
+    /// When set, the target path must land on an OBJECT and the site is
+    /// recorded at the end of its members (an object-member append), instead
+    /// of at `insert_index` within an array.
+    object_member: bool,
     path: Vec<Seg>,
     site: Option<InsertSite>,
 }
@@ -1078,6 +1231,7 @@ impl<'a> InsertWalk<'a> {
             strings: l.strings,
             target,
             insert_index,
+            object_member: false,
             path: Vec::new(),
             site: None,
         })
@@ -1188,7 +1342,7 @@ impl<'a> InsertWalk<'a> {
             ARRAY => {
                 let count_offset = self.main[B4].at();
                 let n = self.lane_u32(B4)? as usize;
-                let target = self.at_target();
+                let target = !self.object_member && self.at_target();
                 if target && self.insert_index > n {
                     return Err(DecodeError::Kv3("array insert index out of range"));
                 }
@@ -1209,7 +1363,7 @@ impl<'a> InsertWalk<'a> {
                 let count_offset = self.main[B4].at();
                 let n = self.lane_u32(B4)? as usize;
                 let sub = self.read_type()?;
-                let target = self.at_target();
+                let target = !self.object_member && self.at_target();
                 if target && self.insert_index > n {
                     return Err(DecodeError::Kv3("array insert index out of range"));
                 }
@@ -1229,7 +1383,7 @@ impl<'a> InsertWalk<'a> {
                 let count_offset = self.main[B1].at();
                 let n = usize::from(self.lane_u8(B1)?);
                 let sub = self.read_type()?;
-                let target = self.at_target();
+                let target = !self.object_member && self.at_target();
                 if target && self.insert_index > n {
                     return Err(DecodeError::Kv3("array insert index out of range"));
                 }
@@ -1264,17 +1418,27 @@ impl<'a> InsertWalk<'a> {
                 std::mem::swap(&mut self.main, &mut self.aux);
             }
             OBJECT => {
+                let count_offset = if self.version >= 5 {
+                    self.obj_lengths.at()
+                } else {
+                    self.main[B4].at()
+                };
                 let n = if self.version >= 5 {
                     self.obj_len()?
                 } else {
                     self.lane_u32(B4)?
                 };
+                let target = self.object_member && self.at_target();
                 for _ in 0..n {
                     let vt = self.read_type()?;
                     let id = self.lane_u32(B4)?;
                     self.path.push(Seg::Key(self.key(id).to_string()));
                     self.value(vt)?;
                     self.path.pop();
+                }
+                if target {
+                    let count_lane = if self.version >= 5 { OBJ_LANE } else { B4 };
+                    self.record_site(count_lane, count_offset, 4, n as usize, None)?;
                 }
             }
             other => return Err(DecodeError::Kv3NodeType(other)),
@@ -1343,6 +1507,7 @@ fn rebuild_v5_with_insert(
         B2 => bump_array_count(&mut b2, site, bases)?,
         B4 => bump_array_count(&mut b4, site, bases)?,
         B8 => bump_array_count(&mut b8, site, bases)?,
+        OBJ_LANE => bump_object_count(&mut obj, site, buf2 + obj_start)?,
         _ => return Err(DecodeError::Kv3("unsupported array count lane")),
     }
     let obj_insert = rel(site.cursors.obj_lengths, buf2 + obj_start, obj.len())?;
@@ -1531,6 +1696,27 @@ fn splice_at(dst: &mut Vec<u8>, at: usize, bytes: &[u8]) -> Result<(), DecodeErr
         return Err(DecodeError::Kv3("insert splice offset out of range"));
     }
     dst.splice(at..at, bytes.iter().copied());
+    Ok(())
+}
+
+/// Bumps an object's member count in the v5 object-lengths lane. The count
+/// offset always precedes the member-insert cursor, so bumping before the
+/// splice is safe.
+fn bump_object_count(
+    obj: &mut [u8],
+    site: &InsertSite,
+    obj_base: usize,
+) -> Result<(), DecodeError> {
+    let at = rel(site.count_offset, obj_base, obj.len())?;
+    let count = u32::try_from(
+        site.old_count
+            .checked_add(1)
+            .ok_or(DecodeError::Kv3("object member count overflow"))?,
+    )
+    .map_err(|_| DecodeError::Kv3("object member count overflow"))?;
+    obj.get_mut(at..at + 4)
+        .ok_or(DecodeError::Kv3("object count offset out of range"))?
+        .copy_from_slice(&count.to_le_bytes());
     Ok(())
 }
 
@@ -3312,5 +3498,76 @@ mod tests {
             new_tree, expect,
             "v4 array insert should add exactly one element and preserve the rest"
         );
+    }
+
+    /// The shape the hero-model animgraph injection appends: an array of
+    /// objects whose `m_hGraph` strings carry the `Resource` value flag.
+    fn animgraph_refs_value() -> (Value, Vec<(Vec<Seg>, u8)>) {
+        let value = Value::Array(vec![Value::Object(vec![
+            ("m_sIdentifier".to_string(), Value::String("ui".to_string())),
+            (
+                "m_hGraph".to_string(),
+                Value::String("animgraphs/animgraph2/hero/hero.vnmgraph+test.vnmgraph".to_string()),
+            ),
+        ])]);
+        let flags = vec![(vec![Seg::Index(0), Seg::Key("m_hGraph".to_string())], 1u8)];
+        (value, flags)
+    }
+
+    #[test]
+    fn insert_object_member_on_v5_gigawatt_preserves_everything_else() {
+        let data = gigawatt_data();
+        let tree = crate::kv3::decode(&data).expect("decode");
+        let Value::Object(before) = &tree else {
+            panic!("gigawatt root is an object");
+        };
+
+        let (value, flags) = animgraph_refs_value();
+        let patched = insert_object_member_adding(&data, &[], "m_morphicTestRefs", &value, &flags)
+            .expect("v5 object member insert");
+        let new_tree = crate::kv3::decode(&patched).expect("decode patched");
+        let Value::Object(after) = &new_tree else {
+            panic!("patched root is an object");
+        };
+
+        assert_eq!(after.len(), before.len() + 1, "exactly one member added");
+        assert_eq!(
+            &after[..before.len()],
+            &before[..],
+            "existing members untouched"
+        );
+        let (key, appended) = after.last().expect("appended member");
+        assert_eq!(key, "m_morphicTestRefs");
+        assert_eq!(appended, &value, "appended member round-trips");
+    }
+
+    #[test]
+    fn insert_object_member_on_v4_encoded_block_preserves_everything_else() {
+        let format = crate::kv3::Format(*b"0123456789abcdef");
+        let tree = Value::Object(vec![
+            ("head".to_string(), Value::String("unchanged".to_string())),
+            (
+                "nested".to_string(),
+                Value::Object(vec![("n".to_string(), Value::Int(3))]),
+            ),
+        ]);
+        let v4 = crate::kv3::encode(&tree, &format);
+        assert_eq!(u32_at(&v4, 0).unwrap() & 0xFF, 4, "encoder emits v4");
+
+        let (value, flags) = animgraph_refs_value();
+        let patched = insert_object_member_adding(&v4, &[], "m_morphicTestRefs", &value, &flags)
+            .expect("v4 object member insert");
+        let new_tree = crate::kv3::decode(&patched).expect("decode patched");
+
+        let Value::Object(pairs) = &new_tree else {
+            panic!("patched root is an object");
+        };
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(
+            pairs[0],
+            ("head".to_string(), Value::String("unchanged".to_string()))
+        );
+        assert_eq!(pairs[2].0, "m_morphicTestRefs");
+        assert_eq!(pairs[2].1, value);
     }
 }

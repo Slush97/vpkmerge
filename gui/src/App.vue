@@ -8,6 +8,7 @@ import { useLogs } from './composables/useLogs.js';
 import BrowseTab from './components/BrowseTab.vue';
 import LockerTab from './components/LockerTab.vue';
 import PrismTab from './components/PrismTab.vue';
+import HarnessTab from './components/HarnessTab.vue';
 
 const { settings, setTheme, setDoodleTheme, setCandleEnabled, THEMES, DOODLE_THEMES } = useSettings();
 const { log: logInfo, warn: logWarn, error: logError, formatExport: formatLogsExport } = useLogs();
@@ -48,6 +49,7 @@ const TABS = [
   { key: 'prism', label: 'Prism' },
   { key: 'locker', label: 'Locker' },
   { key: 'browse', label: 'Browse' },
+  { key: 'workshop', label: 'Workshop' },
 ];
 
 // Texture preview cache. Keyed by `${vpkPath}::${entry}`. Values are one of:
@@ -744,6 +746,7 @@ onBeforeUnmount(() => {
       <BrowseTab v-else-if="activeTab === 'browse'" class="flex-1 min-h-0" />
       <PrismTab v-else-if="activeTab === 'prism'" class="flex-1 min-h-0" />
       <LockerTab v-else-if="activeTab === 'locker'" class="flex-1 min-h-0" />
+      <HarnessTab v-else-if="activeTab === 'workshop'" class="flex-1 min-h-0" />
       </div>
 
       <!-- Warm vignette: a soft candle-light glow. Toggled by html[data-candle="on"]. -->

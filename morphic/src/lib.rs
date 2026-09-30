@@ -130,6 +130,25 @@ pub fn encode_kv3_resource(original: &[u8], value: &kv3::Value) -> Result<Vec<u8
     resource.rebuild_with_data(&new_data)
 }
 
+/// Re-encode `value` into the `DATA` block of `original` as **KV3 v5**, taking
+/// every node's wire shape (typed-array framing, numeric widths, value flags,
+/// string-table order) from the original `DATA` wherever the paths line up
+/// (see [`kv3::encode_v5_like`]). Every non-DATA block is kept byte-for-byte.
+///
+/// Unlike [`encode_kv3_resource`] (uncompressed v4, typed framing and flags
+/// dropped), this keeps what the engine binds natively, so it is the full
+/// re-encode for model and animation data. Blob-bearing blocks stay LZ4 with
+/// Valve's per-blob framing.
+pub fn encode_kv3_resource_like(
+    original: &[u8],
+    value: &kv3::Value,
+) -> Result<Vec<u8>, DecodeError> {
+    let resource = resource::Resource::parse(original)?;
+    let template = kv3::decode_lossless(resource.data_block()?)?;
+    let new_data = kv3::encode_v5_like(value, &template)?;
+    resource.rebuild_with_data(&new_data)
+}
+
 /// Patch integer scalar fields of a resource's KV3 `DATA` block in place by
 /// path, preserving every other byte: value flags, auxiliary-buffer typed-array
 /// tags, and the v5 framing the engine's particle/model loaders require.
@@ -274,5 +293,24 @@ pub fn patch_kv3_resource_array_insert(
     let resource = resource::Resource::parse(original)?;
     let data = resource.data_block()?;
     let new_data = kv3::insert_array_element_adding(data, array_path, index, value)?;
+    resource.rebuild_with_data(&new_data)
+}
+
+/// Append the member `key = value` to a KV3 object inside a resource's `DATA`
+/// block, byte-faithfully preserving the existing typed lanes (see
+/// [`kv3::insert_object_member_adding`]). Strings at the `flags` subtree paths
+/// (relative to `value`) are written with the given KV3 value flag (`1` =
+/// `Resource`), which is how resource-handle fields (e.g. a model's
+/// `m_animGraph2Refs[].m_hGraph`) are stored in shipped assets.
+pub fn patch_kv3_resource_object_insert(
+    original: &[u8],
+    object_path: &[kv3::Seg],
+    key: &str,
+    value: &kv3::Value,
+    flags: &[(Vec<kv3::Seg>, u8)],
+) -> Result<Vec<u8>, DecodeError> {
+    let resource = resource::Resource::parse(original)?;
+    let data = resource.data_block()?;
+    let new_data = kv3::insert_object_member_adding(data, object_path, key, value, flags)?;
     resource.rebuild_with_data(&new_data)
 }

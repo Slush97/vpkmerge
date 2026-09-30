@@ -896,6 +896,49 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
     result.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Run blocking harness work off the async runtime.
+async fn run_blocking<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Read-only: load a harness project manifest and report its capabilities.
+#[tauri::command]
+async fn harness_open_project(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let project = vpkmerge_harness::Project::load(std::path::Path::new(&path))?;
+        let capabilities =
+            vpkmerge_harness::execute(&project, vpkmerge_harness::ToolCall::GetCapabilities {})?;
+        Ok(serde_json::json!({ "project": project, "capabilities": capabilities }))
+    })
+    .await
+}
+
+/// Query the Blender addon's loopback socket for `get_scene_info`.
+#[tauri::command]
+async fn harness_blender_scene(port: u16) -> Result<serde_json::Value, String> {
+    run_blocking(move || vpkmerge_harness::blender::scene_info(port)).await
+}
+
+/// Capture one viewport PNG through the Blender addon's loopback socket.
+#[tauri::command]
+async fn harness_blender_snapshot(port: u16) -> Result<serde_json::Value, String> {
+    let snap = run_blocking(move || vpkmerge_harness::blender::viewport_snapshot(port)).await?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&snap.png);
+    Ok(serde_json::json!({
+        "data_url": format!("data:image/png;base64,{b64}"),
+        "captured_at_ms": snap.captured_at_ms,
+        "width": snap.width,
+        "height": snap.height,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -918,7 +961,10 @@ pub fn run() {
             trippy_animation_options,
             trippy_preview,
             build_hero_prism_vpk,
-            build_trippy_addon
+            build_trippy_addon,
+            harness_open_project,
+            harness_blender_scene,
+            harness_blender_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

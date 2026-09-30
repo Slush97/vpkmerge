@@ -4368,6 +4368,7 @@ dependencies = [
 name = "vpkmerge-gui"
 version = "0.17.1"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "half",
  "image",
@@ -4379,6 +4380,20 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "valve_pak",
+ "vpkmerge-core",
+ "vpkmerge-harness",
+]
+
+[[package]]
+name = "vpkmerge-harness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+ "serde",
+ "serde_json",
+ "tempfile",
  "vpkmerge-core",
 ]
 

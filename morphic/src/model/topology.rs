@@ -224,6 +224,34 @@ pub fn remove_draw_calls_by_material(
     Ok((bytes, removed))
 }
 
+/// Like [`remove_draw_calls_by_material`], but targets draw calls by part name and
+/// primitive ordinal (as listed by [`draw_call_targets`]) instead of by material,
+/// for when a material is shared between a part to drop and a part to keep.
+pub fn remove_part_draw_calls(
+    vmdl_bytes: &[u8],
+    mesh_name: &str,
+    primitive_indices: &[usize],
+) -> Result<Vec<u8>, DecodeError> {
+    let targets = draw_call_targets(vmdl_bytes)?;
+    let hits: Vec<&DrawCallInfo> = targets
+        .iter()
+        .filter(|t| t.mesh_name == mesh_name && primitive_indices.contains(&t.primitive_index))
+        .collect();
+    if hits.len() != primitive_indices.len() {
+        return Err(DecodeError::Model(
+            "part/primitive selection matched no draw call",
+        ));
+    }
+    let data_block = hits[0].data_block;
+    let resource = Resource::parse(vmdl_bytes)?;
+    let mdat = resource
+        .get_block_by_index(data_block)
+        .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+    let sel: Vec<(usize, usize)> = hits.iter().map(|t| (t.scene_object, t.draw_call)).collect();
+    let patched = kv3::neutralize_draw_calls(mdat, &sel)?;
+    resource.rebuild_with_block(data_block, &patched)
+}
+
 /// Diagnostic: re-emits every distinct `MDAT` block **uncompressed but otherwise
 /// byte-faithful** (via [`kv3::rewrap_uncompressed`], preserving value flags and
 /// typed-array tags), then splices them all back. The decoded tree is identical to
@@ -454,7 +482,7 @@ fn replace_mesh_part_impl(
     let ctrl_bytes = resource
         .find_block(*b"CTRL")
         .ok_or(DecodeError::Model("model has no CTRL block"))?;
-    let ctrl_edits = ctrl_edits_for(mesh_pos, vb_desc, ib_desc, &enc)?;
+    let ctrl_edits = ctrl_edits_for(mesh_pos, (0, vb_desc), (0, ib_desc), &enc)?;
     let mdat_edits = mdat_edits_for(so_idx, dc_idx, draw_call, new_vertex_count, new_index_count)?;
 
     // Splice the changed blocks. Block order/count is preserved, so block indices
@@ -519,6 +547,162 @@ fn replace_mesh_part_impl(
             new_index_count,
             stride,
             index_size,
+        },
+    ))
+}
+
+/// Replaces the geometry of ONE draw call inside a multi-buffer mesh part, when
+/// that draw call owns its vertex and index buffer exclusively (no other draw
+/// call in the part references either). The part's other buffers and draw calls
+/// are untouched. Same engine-loadable wedge as [`replace_mesh_part_uncompressed`]
+/// (raw buffers, `m_bMeshoptCompressed` flipped off on the two touched buffers,
+/// scalar-only `CTRL`/`MDAT` edits), extended past its one-buffer-per-part
+/// contract. `primitive_index` is the draw call's ordinal within the part, as
+/// listed by [`draw_call_targets`]. `new_mesh` joints are model skeleton bones.
+#[allow(clippy::too_many_lines)]
+pub fn replace_draw_call_uncompressed(
+    vmdl_bytes: &[u8],
+    mesh_name: &str,
+    primitive_index: usize,
+    new_mesh: &VertexBuffer,
+    indices: &[u32],
+) -> Result<(Vec<u8>, ReplacedMeshPart), DecodeError> {
+    let targets = draw_call_targets(vmdl_bytes)?;
+    let part_calls: Vec<&DrawCallInfo> = targets
+        .iter()
+        .filter(|t| t.mesh_name == mesh_name)
+        .collect();
+    let dc = part_calls
+        .iter()
+        .find(|t| t.primitive_index == primitive_index)
+        .ok_or(DecodeError::Model("no draw call with that part/primitive"))?;
+    if dc.vertex_buffers.len() != 1 {
+        return Err(DecodeError::Model(
+            "draw call reads more than one vertex stream",
+        ));
+    }
+    if part_calls.iter().any(|t| {
+        t.primitive_index != primitive_index
+            && (t.vertex_buffers.contains(&dc.vertex_buffer) || t.index_buffer == dc.index_buffer)
+    }) {
+        return Err(DecodeError::Model(
+            "draw call shares its vertex or index buffer with another draw call",
+        ));
+    }
+
+    let (resource, embedded) = parse_embedded(vmdl_bytes)?;
+    let mesh_pos = embedded
+        .iter()
+        .position(|em| em.name == mesh_name)
+        .ok_or(DecodeError::Model("no embedded mesh with that name"))?;
+    let em = &embedded[mesh_pos];
+    let vb_desc = em
+        .vertex_buffers
+        .get(dc.vertex_buffer)
+        .ok_or(DecodeError::Model("vertex buffer handle out of range"))?;
+    let ib_desc = em
+        .index_buffers
+        .get(dc.index_buffer)
+        .ok_or(DecodeError::Model("index buffer handle out of range"))?;
+
+    let data = kv3::decode(resource.data_block()?)?;
+    let mut local = new_mesh.clone();
+    if !new_mesh.joints.is_empty() {
+        let table = skeleton::remap_table(&data, em.mesh_index).ok_or(DecodeError::Model(
+            "new mesh is skinned but the target mesh has no bone remap table",
+        ))?;
+        let weights = (new_mesh.weights.len() == new_mesh.element_count)
+            .then_some(new_mesh.weights.as_slice());
+        local.joints = skeleton::localize_joints(&new_mesh.joints, weights, &table)?;
+    }
+    let enc = build_mesh_buffers_to_layout(&local, indices, &vb_desc.fields)?;
+
+    let mdat_bytes = resource
+        .get_block_by_index(em.data_block)
+        .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+    let mdat = kv3::decode(mdat_bytes)?;
+    let draw_call = mdat
+        .get("m_sceneObjects")
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(dc.scene_object))
+        .and_then(|so| so.get("m_drawCalls"))
+        .and_then(Value::as_array)
+        .and_then(|a| a.get(dc.draw_call))
+        .ok_or(DecodeError::Model("draw call vanished after locate"))?;
+    let mdat_edits = mdat_edits_for(
+        dc.scene_object,
+        dc.draw_call,
+        draw_call,
+        enc.vertex_count,
+        enc.index_count,
+    )?;
+
+    let ctrl_idx = resource
+        .blocks()
+        .iter()
+        .position(|b| &b.kind == b"CTRL")
+        .ok_or(DecodeError::Model("model has no CTRL block"))?;
+    let ctrl_bytes = resource
+        .find_block(*b"CTRL")
+        .ok_or(DecodeError::Model("model has no CTRL block"))?;
+    let ctrl_edits = ctrl_edits_for(
+        mesh_pos,
+        (dc.vertex_buffer, vb_desc),
+        (dc.index_buffer, ib_desc),
+        &enc,
+    )?;
+    let ctrl_scaled = if ctrl_edits.is_empty() {
+        ctrl_bytes.to_vec()
+    } else {
+        kv3::set_scalars(ctrl_bytes, &ctrl_edits)?
+    };
+    let flag = |kind: &str, i: usize| {
+        vec![
+            seg("embedded_meshes"),
+            Seg::Index(mesh_pos),
+            seg(kind),
+            Seg::Index(i),
+            seg("m_bMeshoptCompressed"),
+        ]
+    };
+    let mut flips = Vec::new();
+    if vb_desc.meshopt {
+        flips.push((flag("m_vertexBuffers", dc.vertex_buffer), false));
+    }
+    if ib_desc.meshopt {
+        flips.push((flag("m_indexBuffers", dc.index_buffer), false));
+    }
+    let ctrl = if flips.is_empty() {
+        ctrl_scaled
+    } else {
+        kv3::set_bools(&ctrl_scaled, &flips)?
+    };
+
+    let mut swaps = vec![
+        (ctrl_idx, ctrl),
+        (vb_desc.block_index, enc.mvtx_raw),
+        (ib_desc.block_index, enc.midx_raw),
+    ];
+    if !mdat_edits.is_empty() {
+        swaps.push((em.data_block, kv3::set_scalars(mdat_bytes, &mdat_edits)?));
+    }
+    let mut bytes = vmdl_bytes.to_vec();
+    for (idx, payload) in swaps {
+        let res = Resource::parse(&bytes)?;
+        bytes = res.rebuild_with_block(idx, &payload)?;
+    }
+
+    Ok((
+        bytes,
+        ReplacedMeshPart {
+            mesh_name: mesh_name.to_string(),
+            material: dc.material.clone(),
+            old_vertex_count: vb_desc.element_count,
+            new_vertex_count: enc.vertex_count,
+            old_index_count: ib_desc.element_count,
+            new_index_count: enc.index_count,
+            stride: enc.stride,
+            index_size: enc.index_size,
         },
     ))
 }
@@ -930,7 +1114,7 @@ fn replace_mesh_group_part(
     let ctrl_bytes = resource
         .find_block(*b"CTRL")
         .ok_or(DecodeError::Model("model has no CTRL block"))?;
-    let ctrl_edits = ctrl_edits_for(mesh_pos, vb_desc, ib_desc, &enc)?;
+    let ctrl_edits = ctrl_edits_for(mesh_pos, (0, vb_desc), (0, ib_desc), &enc)?;
 
     let mut mdat_edits = Vec::new();
     for (i, (so_idx, dc_idx, draw_call)) in draw_calls.iter().enumerate() {
@@ -1107,7 +1291,7 @@ pub fn append_skinned_draw_call(
     let ctrl_bytes = resource
         .find_block(*b"CTRL")
         .ok_or(DecodeError::Model("model has no CTRL block"))?;
-    let ctrl_edits = ctrl_edits_for(mesh_pos, vb_desc, ib_desc, &enc)?;
+    let ctrl_edits = ctrl_edits_for(mesh_pos, (0, vb_desc), (0, ib_desc), &enc)?;
     let ctrl_after_scalars = if ctrl_edits.is_empty() {
         ctrl_bytes.to_vec()
     } else {
@@ -1455,21 +1639,21 @@ fn material_key(path: &str) -> String {
 /// is always 0, and the gun's formats are already uncompressed float).
 fn ctrl_edits_for(
     mesh_pos: usize,
-    vb_desc: &BufferDesc,
-    ib_desc: &BufferDesc,
+    (vb_i, vb_desc): (usize, &BufferDesc),
+    (ib_i, ib_desc): (usize, &BufferDesc),
     enc: &EncodedMesh,
 ) -> Result<Vec<(Vec<Seg>, i64)>, DecodeError> {
     let vb_path = vec![
         seg("embedded_meshes"),
         Seg::Index(mesh_pos),
         seg("m_vertexBuffers"),
-        Seg::Index(0),
+        Seg::Index(vb_i),
     ];
     let ib_path = vec![
         seg("embedded_meshes"),
         Seg::Index(mesh_pos),
         seg("m_indexBuffers"),
-        Seg::Index(0),
+        Seg::Index(ib_i),
     ];
     let mut edits: Vec<(Vec<Seg>, i64)> = Vec::new();
     push_if_changed(

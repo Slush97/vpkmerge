@@ -16,14 +16,17 @@ mod patch;
 mod reader;
 mod rewrap;
 mod types;
+mod wire;
 mod writer;
 
 pub use patch::{
-    insert_array_element_adding, neutralize_draw_calls, set_blob, set_bools, set_doubles,
-    set_floats, set_scalars, set_sole_blob, set_strings, set_strings_adding, Seg,
+    insert_array_element_adding, insert_object_member_adding, neutralize_draw_calls, set_blob,
+    set_bools, set_doubles, set_floats, set_scalars, set_sole_blob, set_strings,
+    set_strings_adding, Seg,
 };
 pub use rewrap::rewrap_uncompressed;
 pub use types::Value;
+pub use wire::{encode_v5, encode_v5_like, Document, Node, Val};
 
 use crate::error::DecodeError;
 
@@ -82,6 +85,13 @@ impl Format {
 /// Decode a binary KV3 DATA payload into a [`Value`] tree.
 pub fn decode(data: &[u8]) -> Result<Value, DecodeError> {
     reader::decode(data)
+}
+
+/// Decode a binary KV3 DATA payload into a lossless [`Document`] (exact wire
+/// tags, value flags, typed-array framing, string-table order), the input to
+/// [`encode_v5`].
+pub fn decode_lossless(data: &[u8]) -> Result<Document, DecodeError> {
+    reader::decode_wire(data)
 }
 
 /// Encode a [`Value`] tree into an uncompressed binary KV3 v4 DATA payload,

@@ -119,6 +119,40 @@ impl<'a> Resource<'a> {
 
         Ok(out)
     }
+
+    /// Rebuild the resource container with one extra block appended after the
+    /// existing block table (every existing block copied byte-for-byte, in
+    /// order). Built for splicing a donor block into a compiled model that
+    /// lacks it, e.g. a `PHYS` cloth/ragdoll block into a mesh-only hero
+    /// compile. Appending (rather than inserting mid-table) keeps every
+    /// existing block's declaration index valid, so `CTRL` buffer-registry
+    /// references (`m_nBlockIndex`) are unaffected; the engine locates blocks
+    /// by FOURCC, not table position. Any bytes after the last block payload
+    /// (the VTEX-style tail) are preserved after the new layout.
+    pub fn rebuild_with_appended_block(
+        &self,
+        kind: [u8; 4],
+        payload: &[u8],
+    ) -> Result<Vec<u8>, DecodeError> {
+        let raw = self.raw();
+        let resource_version = u16::from_le_bytes([raw[6], raw[7]]);
+        let mut blocks: Vec<([u8; 4], &[u8])> = Vec::with_capacity(self.blocks().len() + 1);
+        let mut payload_end = 0usize;
+        for b in self.blocks() {
+            let start = b.offset as usize;
+            let end = start
+                .checked_add(b.size as usize)
+                .ok_or(DecodeError::BadResource("block extent overflow"))?;
+            let bytes = raw
+                .get(start..end)
+                .ok_or(DecodeError::BadResource("block out of range"))?;
+            blocks.push((b.kind, bytes));
+            payload_end = payload_end.max(end);
+        }
+        blocks.push((kind, payload));
+        let tail = raw.get(payload_end..).unwrap_or(&[]);
+        build_resource_with_tail(&blocks, tail, resource_version)
+    }
 }
 
 /// Build a new Source 2 resource container from block payloads, optionally
@@ -262,5 +296,25 @@ mod tests {
         let bytes = build_resource(&[(*b"DATA", &[0u8; 4])]);
         let res = Resource::parse(&bytes).expect("parse");
         assert!(res.rebuild_with_block(5, &[0u8; 4]).is_err());
+    }
+
+    #[test]
+    fn rebuild_with_appended_block_adds_last_and_preserves_others() {
+        let bytes = build_resource(&[(*b"DATA", &[1u8, 2, 3, 4]), (*b"CTRL", &[9u8; 8])]);
+        let res = Resource::parse(&bytes).expect("parse synthetic");
+
+        let phys = vec![0xCDu8; 21];
+        let rebuilt = res
+            .rebuild_with_appended_block(*b"PHYS", &phys)
+            .expect("append");
+
+        let res2 = Resource::parse(&rebuilt).expect("reparse rebuilt");
+        assert_eq!(res2.blocks().len(), 3, "one block added");
+        assert_eq!(&res2.blocks()[0].kind, b"DATA");
+        assert_eq!(&res2.blocks()[1].kind, b"CTRL");
+        assert_eq!(&res2.blocks()[2].kind, b"PHYS");
+        assert_eq!(res2.get_block_by_index(0).unwrap(), &[1u8, 2, 3, 4]);
+        assert_eq!(res2.get_block_by_index(1).unwrap(), &[9u8; 8]);
+        assert_eq!(res2.get_block_by_index(2).unwrap(), phys.as_slice());
     }
 }

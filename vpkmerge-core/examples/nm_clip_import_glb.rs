@@ -6,18 +6,21 @@
 //!
 //! The animation maps onto the clip's bones **by node name** (do not rename or
 //! reorder bones in Blender) and is time-stretched onto the slot's frame count.
-//! It uses the engine-confirmed **v5 in-place** path (`import_glb_onto_nm_clip` ->
-//! `reencode_nm_clip`): rotation tracks may be edited or added (a static bone
-//! becomes animated), while translation/scale are edited only where the slot
-//! already animates them (adding those needs a v5 KV3 writer morphic does not yet
-//! have; see the design doc). Pick a slot whose bone mask un-masks the bones you
-//! animated (a full-body idle for whole-body motion, an upper-body slot for
-//! arm/torso work).
+//! By default it uses the engine-confirmed **v5 in-place** path
+//! (`import_glb_onto_nm_clip` -> `reencode_nm_clip`): rotation tracks may be edited
+//! or added (a static bone becomes animated), while translation/scale are edited
+//! only where the slot already animates them. `--full` rebuilds the clip instead
+//! (`import_glb_onto_nm_clip_full` -> `reencode_nm_clip_full`, KV3 v5 with Valve's
+//! typed framing): it also **adds** translation/scale channels, and `--frames N`
+//! resamples the slot to N frames over the same duration (`--full` is in-game
+//! confirmed for rotation edits, added translation channels, and `--frames`). Pick a slot whose bone mask un-masks the bones you animated
+//! (a full-body idle for whole-body motion, an upper-body slot for arm/torso work).
 //!
 //! Usage:
 //!   cargo run --release -p vpkmerge-core --example nm_clip_import_glb -- \
 //!       <pak01_dir.vpk> <clip_entry.vnmclip_c> <anim.glb> <out_dir.vpk> \
-//!       [extra_slot_entry.vnmclip_c ...] [--mesh <mesh_entry.vmdl_c> --preview <out.glb>]
+//!       [extra_slot_entry.vnmclip_c ...] [--mesh <mesh_entry.vmdl_c> --preview <out.glb>] \
+//!       [--full [--frames N]]
 //!
 //! Example (author Yamato's reload slot, also write a preview GLB):
 //!   ... pak01_dir.vpk \
@@ -31,19 +34,26 @@
 
 use anyhow::{Context, Result};
 use morphic::model::{
-    decode, decode_nm_clip, decode_nm_skeleton, import_glb_onto_nm_clip, nm_clip_to_clip, to_glb,
+    decode, decode_nm_clip, decode_nm_skeleton, import_glb_onto_nm_clip,
+    import_glb_onto_nm_clip_full, nm_clip_to_clip, to_glb,
 };
 
 fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     let mut mesh_entry: Option<String> = None;
     let mut preview_out: Option<String> = None;
+    let mut full = false;
+    let mut frames: Option<u32> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mesh" => mesh_entry = Some(args.next().context("--mesh needs a value")?),
             "--preview" => preview_out = Some(args.next().context("--preview needs a value")?),
+            "--full" => full = true,
+            "--frames" => {
+                frames = Some(args.next().context("--frames needs a value")?.parse()?);
+            }
             _ => positional.push(arg),
         }
     }
@@ -73,8 +83,13 @@ fn main() -> Result<()> {
     );
 
     // Import the authored animation onto the slot (first/only glTF animation).
-    let patched = import_glb_onto_nm_clip(&clip_bytes, &skel, &glb, None)
-        .context("importing glb animation onto the clip")?;
+    anyhow::ensure!(full || frames.is_none(), "--frames needs --full");
+    let patched = if full {
+        import_glb_onto_nm_clip_full(&clip_bytes, &skel, &glb, None, frames)
+    } else {
+        import_glb_onto_nm_clip(&clip_bytes, &skel, &glb, None)
+    }
+    .context("importing glb animation onto the clip")?;
 
     // Report what landed: how many bone tracks now carry an animated rotation
     // versus the original, so a caller can see the authored motion took effect.
@@ -86,6 +101,19 @@ fn main() -> Result<()> {
         .filter(|t| t.rotations.is_some())
         .count();
     println!("  animated-rotation tracks: {before} -> {after}");
+    let moving = |c: &morphic::model::NmClip| {
+        c.tracks
+            .iter()
+            .filter(|t| t.translations.is_some() || t.scales.is_some())
+            .count()
+    };
+    println!(
+        "  animated translation/scale tracks: {} -> {} | frames {} -> {}",
+        moving(&clip),
+        moving(&redec),
+        clip.frame_count,
+        redec.frame_count
+    );
 
     // Optional preview GLB so the authored motion can be eyeballed before install.
     if let (Some(mesh_entry), Some(preview_out)) = (&mesh_entry, &preview_out) {

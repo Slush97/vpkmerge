@@ -19,6 +19,8 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 vpkmerge-core = { path = "../../vpkmerge-core" }
+vpkmerge-harness = { path = "../../vpkmerge-harness" }
+anyhow = "1"
 # Texture preview path: extract entry from VPK, decode via morphic, encode PNG,
 # return as base64 data URL for the webview.
 morphic = { path = "../../morphic" }

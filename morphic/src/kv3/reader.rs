@@ -20,6 +20,8 @@
 
 use super::node;
 use super::types::Value;
+use super::wire::{Document, Node, Val};
+use super::Format;
 use crate::error::DecodeError;
 
 /// Legacy pre-versioned VKV3 magic (0x03 'V' 'K' 'V'). Unsupported.
@@ -31,8 +33,36 @@ const TRAILER: u32 = 0xFFEE_DD00;
 const LZ4_FRAME_SIZE: u16 = 16384;
 
 /// Decode a binary KV3 DATA payload into a [`Value`] tree.
-#[allow(clippy::too_many_lines)]
 pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
+    with_root(data, |ctx| {
+        let (root_type, _flag) = read_type(ctx)?;
+        read_value(ctx, root_type)
+    })
+}
+
+/// Decode a binary KV3 DATA payload into a lossless [`Document`]: every node
+/// keeps its exact wire type, value flag, and typed-array framing, and the
+/// string table keeps its original order.
+pub(super) fn decode_wire(data: &[u8]) -> Result<Document, DecodeError> {
+    let format = Format::from_payload(data)?;
+    with_root(data, |ctx| {
+        let strings = ctx.strings.clone();
+        let root = read_node(ctx)?;
+        Ok(Document {
+            format,
+            strings,
+            root,
+        })
+    })
+}
+
+/// Parse the header, decompress the buffers, carve the typed lanes, then hand
+/// `read` the context positioned at the root type byte.
+#[allow(clippy::too_many_lines)]
+fn with_root<T>(
+    data: &[u8],
+    read: impl FnOnce(&mut Ctx) -> Result<T, DecodeError>,
+) -> Result<T, DecodeError> {
     let mut h = Cursor::new(data);
     let magic = h.u32()?;
     if magic == MAGIC_LEGACY {
@@ -211,8 +241,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
         ctx
     };
 
-    let (root_type, _flag) = read_type(&mut ctx)?;
-    read_value(&mut ctx, root_type)
+    read(&mut ctx)
 }
 
 #[derive(Default, Clone, Copy)]
@@ -658,6 +687,126 @@ fn read_value(ctx: &mut Ctx, datatype: u8) -> Result<Value, DecodeError> {
         }
         other => Err(DecodeError::Kv3NodeType(other)),
     }
+}
+
+/// Lossless sibling of [`read_type`]: keeps whether a flag byte was present.
+fn read_type_exact(ctx: &mut Ctx) -> Result<(u8, Option<u8>), DecodeError> {
+    let raw = ctx.types.u8()?;
+    if raw & 0x80 == 0 {
+        return Ok((raw, None));
+    }
+    let mask = if ctx.version >= 3 { 0x3F } else { 0x7F };
+    if raw & 0x7F & !mask != 0 {
+        return Err(DecodeError::Kv3("type byte carries unmodelled bits"));
+    }
+    Ok((raw & mask, Some(ctx.types.u8()?)))
+}
+
+fn read_node(ctx: &mut Ctx) -> Result<Node, DecodeError> {
+    let (tag, flag) = read_type_exact(ctx)?;
+    let val = read_val(ctx, tag)?;
+    Ok(Node { tag, flag, val })
+}
+
+/// Lossless sibling of [`read_value`]: every read here has a mirrored write in
+/// `wire::Enc::write_val`, lane for lane.
+#[allow(clippy::wildcard_imports)]
+fn read_val(ctx: &mut Ctx, tag: u8) -> Result<Val, DecodeError> {
+    use node::*;
+    Ok(match tag {
+        NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO | DOUBLE_ONE => {
+            Val::Implied
+        }
+        BOOLEAN => Val::Bool(ctx.main.b1.u8()?),
+        INT32_AS_BYTE => Val::Int(i64::from(ctx.main.b1.u8()?)),
+        INT16 => Val::Int(i64::from(ctx.main.b2.u16()? as i16)),
+        UINT16 => Val::UInt(u64::from(ctx.main.b2.u16()?)),
+        INT32 => Val::Int(i64::from(ctx.main.b4.u32()? as i32)),
+        UINT32 => Val::UInt(u64::from(ctx.main.b4.u32()?)),
+        FLOAT => Val::F32(f32::from_bits(ctx.main.b4.u32()?)),
+        INT64 => Val::Int(ctx.main.b8.u64()? as i64),
+        UINT64 => Val::UInt(ctx.main.b8.u64()?),
+        DOUBLE => Val::F64(f64::from_bits(ctx.main.b8.u64()?)),
+        STRING => {
+            let id = ctx.main.b4.u32()? as i32;
+            Val::String(lookup_string(ctx, id)?)
+        }
+        ARRAY => {
+            let n = ctx.main.b4.u32()?;
+            let mut items = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                items.push(read_node(ctx)?);
+            }
+            Val::Array(items)
+        }
+        ARRAY_TYPED | ARRAY_TYPE_BYTE_LENGTH | ARRAY_TYPE_AUXILIARY_BUFFER => {
+            let n = if tag == ARRAY_TYPED {
+                ctx.main.b4.u32()?
+            } else {
+                u32::from(ctx.main.b1.u8()?)
+            };
+            let (sub, sub_flag) = read_type_exact(ctx)?;
+            let aux = tag == ARRAY_TYPE_AUXILIARY_BUFFER;
+            if aux {
+                std::mem::swap(&mut ctx.main, &mut ctx.aux);
+            }
+            let mut items = Vec::with_capacity(n as usize);
+            let mut err = None;
+            for _ in 0..n {
+                match read_val(ctx, sub) {
+                    Ok(v) => items.push(v),
+                    Err(e) => {
+                        err = Some(e);
+                        break;
+                    }
+                }
+            }
+            if aux {
+                std::mem::swap(&mut ctx.main, &mut ctx.aux);
+            }
+            if let Some(e) = err {
+                return Err(e);
+            }
+            Val::Typed {
+                sub,
+                sub_flag,
+                items,
+            }
+        }
+        OBJECT => {
+            let n = if ctx.version >= 5 {
+                ctx.object_lengths.u32()?
+            } else {
+                ctx.main.b4.u32()?
+            };
+            let mut members = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let (t, f) = read_type_exact(ctx)?;
+                let id = ctx.main.b4.u32()? as i32;
+                let key = lookup_string(ctx, id)?;
+                let val = read_val(ctx, t)?;
+                members.push((
+                    key,
+                    Node {
+                        tag: t,
+                        flag: f,
+                        val,
+                    },
+                ));
+            }
+            Val::Object(members)
+        }
+        BINARY_BLOB => {
+            let blob = ctx
+                .blobs
+                .get_mut(ctx.next_blob)
+                .map(std::mem::take)
+                .ok_or(DecodeError::Kv3("blob index out of range"))?;
+            ctx.next_blob += 1;
+            Val::Blob(blob)
+        }
+        other => return Err(DecodeError::Kv3NodeType(other)),
+    })
 }
 
 fn lookup_string(ctx: &Ctx, id: i32) -> Result<String, DecodeError> {

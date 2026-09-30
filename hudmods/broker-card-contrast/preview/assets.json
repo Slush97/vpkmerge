@@ -1,0 +1,206 @@
+{
+ "panorama/images/hud/brawl/icon_brawl": {
+  "url": "img/hud__brawl__icon_brawl.svg",
+  "w": 18.0,
+  "h": 19.0,
+  "lin": "img/lin/hud__brawl__icon_brawl.svg"
+ },
+ "panorama/images/hud/core/icon_courage": {
+  "url": "img/hud__core__icon_courage.svg",
+  "w": 34.0,
+  "h": 34.0,
+  "lin": "img/lin/hud__core__icon_courage.svg"
+ },
+ "panorama/images/hud/core/icon_spirit": {
+  "url": "img/hud__core__icon_spirit.svg",
+  "w": 36.0,
+  "h": 34.0,
+  "lin": "img/lin/hud__core__icon_spirit.svg"
+ },
+ "panorama/images/hud/icons/icon_soul": {
+  "url": "img/hud__icons__icon_soul.svg",
+  "w": 35.0,
+  "h": 67.0,
+  "lin": "img/lin/hud__icons__icon_soul.svg"
+ },
+ "panorama/images/icons/icon_checkmark": {
+  "url": "img/icons__icon_checkmark.svg",
+  "w": 21.0,
+  "h": 15.0,
+  "lin": "img/lin/icons__icon_checkmark.svg"
+ },
+ "panorama/images/icons/properties/condition_silence": {
+  "url": "img/icons__properties__condition_silence.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__condition_silence.svg"
+ },
+ "panorama/images/icons/properties/damage_magic_color": {
+  "url": "img/icons__properties__damage_magic_color.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__damage_magic_color.svg"
+ },
+ "panorama/images/icons/properties/debuff_remove": {
+  "url": "img/icons__properties__debuff_remove.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__debuff_remove.svg"
+ },
+ "panorama/images/icons/properties/fire_rate": {
+  "url": "img/icons__properties__fire_rate.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__fire_rate.svg"
+ },
+ "panorama/images/icons/properties/move_speed": {
+  "url": "img/icons__properties__move_speed.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__move_speed.svg"
+ },
+ "panorama/images/items/spirit/spirit_sap_psd": {
+  "url": "img/items__spirit__spirit_sap_psd.png",
+  "w": 200,
+  "h": 200,
+  "lin": "img/lin/items__spirit__spirit_sap_psd.png"
+ },
+ "panorama/images/shop/catalog/catalog_tooltip_header_spirit_psd": {
+  "url": "img/shop__catalog__catalog_tooltip_header_spirit_psd.webp",
+  "w": 781,
+  "h": 200,
+  "lin": "img/lin/shop__catalog__catalog_tooltip_header_spirit_psd.webp"
+ },
+ "panorama/images/shop/catalog/catalog_tooltip_header_vitality_psd": {
+  "url": "img/shop__catalog__catalog_tooltip_header_vitality_psd.webp",
+  "w": 781,
+  "h": 200,
+  "lin": "img/lin/shop__catalog__catalog_tooltip_header_vitality_psd.webp"
+ },
+ "panorama/images/shop/catalog/catalog_tooltip_header_weapon_corrupted_psd": {
+  "url": "img/shop__catalog__catalog_tooltip_header_weapon_corrupted_psd.webp",
+  "w": 781,
+  "h": 200,
+  "lin": "img/lin/shop__catalog__catalog_tooltip_header_weapon_corrupted_psd.webp"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_negative_arrow1_png": {
+  "url": "img/shop__corrupted_items__corrupted_negative_arrow1_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_negative_arrow1_png.png"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_negative_arrow2_png": {
+  "url": "img/shop__corrupted_items__corrupted_negative_arrow2_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_negative_arrow2_png.png"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_negative_arrow3_png": {
+  "url": "img/shop__corrupted_items__corrupted_negative_arrow3_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_negative_arrow3_png.png"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_positive_arrow1_png": {
+  "url": "img/shop__corrupted_items__corrupted_positive_arrow1_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_positive_arrow1_png.png"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_positive_arrow2_png": {
+  "url": "img/shop__corrupted_items__corrupted_positive_arrow2_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_positive_arrow2_png.png"
+ },
+ "panorama/images/shop/corrupted_items/corrupted_positive_arrow3_png": {
+  "url": "img/shop__corrupted_items__corrupted_positive_arrow3_png.png",
+  "w": 35,
+  "h": 32,
+  "lin": "img/lin/shop__corrupted_items__corrupted_positive_arrow3_png.png"
+ },
+ "panorama/images/shop/enhanced_arrow_png": {
+  "url": "img/shop__enhanced_arrow_png.png",
+  "w": 55,
+  "h": 72,
+  "lin": "img/lin/shop__enhanced_arrow_png.png"
+ },
+ "panorama/images/shop/purchased_check_png": {
+  "url": "img/shop__purchased_check_png.png",
+  "w": 50,
+  "h": 49,
+  "lin": "img/lin/shop__purchased_check_png.png"
+ },
+ "panorama/images/shop/tier_corner_cap": {
+  "url": "img/shop__tier_corner_cap.svg",
+  "w": 137.0,
+  "h": 137.0,
+  "lin": "img/lin/shop__tier_corner_cap.svg"
+ },
+ "panorama/images/shop/tooltip_modified_arrow_1": {
+  "url": "img/shop__tooltip_modified_arrow_1.svg",
+  "w": 8.0,
+  "h": 14.0,
+  "lin": "img/lin/shop__tooltip_modified_arrow_1.svg"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_spirit_corrupted_psd": {
+  "url": "img/tooltips__items__tooltip_backer_spirit_corrupted_psd.webp",
+  "w": 2012,
+  "h": 1725,
+  "lin": "img/lin/tooltips__items__tooltip_backer_spirit_corrupted_psd.webp"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_spirit_mask_psd": {
+  "url": "img/tooltips__items__tooltip_backer_spirit_mask_psd.webp",
+  "w": 2012,
+  "h": 1725,
+  "lin": "img/tooltips__items__tooltip_backer_spirit_mask_psd.webp"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_vitality_corrupted_psd": {
+  "url": "img/tooltips__items__tooltip_backer_vitality_corrupted_psd.webp",
+  "w": 2012,
+  "h": 1732,
+  "lin": "img/lin/tooltips__items__tooltip_backer_vitality_corrupted_psd.webp"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_vitality_mask_psd": {
+  "url": "img/tooltips__items__tooltip_backer_vitality_mask_psd.webp",
+  "w": 2012,
+  "h": 1725,
+  "lin": "img/tooltips__items__tooltip_backer_vitality_mask_psd.webp"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_weapon_corrupted_psd": {
+  "url": "img/tooltips__items__tooltip_backer_weapon_corrupted_psd.webp",
+  "w": 2012,
+  "h": 1725,
+  "lin": "img/lin/tooltips__items__tooltip_backer_weapon_corrupted_psd.webp"
+ },
+ "panorama/images/tooltips/items/tooltip_backer_weapon_mask_psd": {
+  "url": "img/tooltips__items__tooltip_backer_weapon_mask_psd.webp",
+  "w": 2012,
+  "h": 1725,
+  "lin": "img/tooltips__items__tooltip_backer_weapon_mask_psd.webp"
+ },
+ "panorama/images/upgrades/arrow_delta_psd": {
+  "url": "img/upgrades__arrow_delta_psd.png",
+  "w": 32,
+  "h": 32,
+  "lin": "img/lin/upgrades__arrow_delta_psd.png"
+ },
+ "panorama/images/upgrades/property_chargeup_large_psd": {
+  "url": "img/upgrades__property_chargeup_large_psd.png",
+  "w": 64,
+  "h": 64,
+  "lin": "img/lin/upgrades__property_chargeup_large_psd.png"
+ },
+ "panorama/images/upgrades/property_cooldown_large_psd": {
+  "url": "img/upgrades__property_cooldown_large_psd.png",
+  "w": 64,
+  "h": 64,
+  "lin": "img/lin/upgrades__property_cooldown_large_psd.png"
+ },
+ "panorama/images/icons/properties/duration": {
+  "url": "img/icons__properties__duration.svg",
+  "w": 128.0,
+  "h": 128.0,
+  "lin": "img/lin/icons__properties__duration.svg"
+ }
+}

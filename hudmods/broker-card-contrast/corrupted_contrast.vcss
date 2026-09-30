@@ -1,0 +1,18 @@
+CitadelTooltipModDetails.IsCorrupted.WeaponMod .AttributesContainer{background-color: #1C0C06A6;}
+CitadelTooltipModDetails.IsCorrupted.ArmorMod .AttributesContainer{background-color: #0A1610A6;}
+CitadelTooltipModDetails.IsCorrupted.TechMod .AttributesContainer{background-color: #110E22A6;}
+CitadelTooltipModDetails.IsCorrupted .ModInfoLabel .diminish{color: #CFCBC0;}
+CitadelTooltipModDetails.IsCorrupted #StatsAppliedContainer #AdditionalText{opacity: 0.85;}
+CitadelTooltipModDetails.IsCorrupted #StatsAppliedContainer .Elevated #AdditionalText{opacity: 1;}
+CitadelTooltipModDetails.IsCorrupted .PrefixValue,CitadelTooltipModDetails.IsCorrupted .PostfixValue{color: #FFFFFFCC;}
+CitadelTooltipModDetails.IsCorrupted .isNegative .PostfixValue{color: #FF8888;}
+CitadelTooltipModDetails.IsCorrupted .corrupted_rng{color: #FF9A9A;font-size: 12px;}
+CitadelTooltipModDetails.IsCorrupted .componentsSection .componentsLabel{color: #FFFFFFC0;}
+CitadelTooltipModDetails.IsCorrupted .componentMod .componentModName{color: #FFEFD7;}
+CitadelTooltipModDetails.IsCorrupted.WeaponMod #CorruptedIndicator{background-color: #1C0C06A6;}
+CitadelTooltipModDetails.IsCorrupted.ArmorMod #CorruptedIndicator{background-color: #0A1610A6;}
+CitadelTooltipModDetails.IsCorrupted.TechMod #CorruptedIndicator{background-color: #110E22A6;}
+CitadelTooltipModDetails.IsCorrupted CitadelModifiedAttributeLabel.Corrupted{background-color: #141414B3;}
+CitadelTooltipModDetails.IsCorrupted .ImportantStatBox.Corrupted,CitadelTooltipModDetails.IsCorrupted .StatusEffectBox.Corrupted,CitadelTooltipModDetails.IsCorrupted #TierBonusContainer.Corrupted{background-color: #141414B3;}
+CitadelTooltipModDetails.IsCorrupted CitadelModifiedAttributeLabel.Corrupted.isNegative{background-color: gradient( linear, 0% 0%, 100% 0%, from( #2A080DE6 ), to( #2A080D99 ) );}
+CitadelTooltipModDetails.IsCorrupted .Corrupted.isNegative #ModifiedLabel{color: #FFD6D6;}

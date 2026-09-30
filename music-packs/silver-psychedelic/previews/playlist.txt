@@ -1,0 +1,9 @@
+gun_western.wav
+gun_ricochet.wav
+gun_fuzz.wav
+gun_surf.wav
+cast_sting.wav
+demo_western_normal.wav
+demo_western_slamfire.wav
+demo_fuzz_normal.wav
+demo_fuzz_slamfire.wav

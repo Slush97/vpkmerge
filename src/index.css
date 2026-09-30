@@ -1,0 +1,322 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens live on :root[data-theme]. The accent and its derived fill and
+ * ink colors are set at runtime by lib/theme.ts from the user's settings.
+ */
+:root {
+  --accent: #0a84ff;
+  --accent-fill: #0974e0;
+  --on-accent: #ffffff;
+  --accent-ink: #0a6fd6;
+}
+
+:root,
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --sidebar: #f5f5f7;
+  --surface: #ffffff;
+  --fill: #f2f2f4;
+  --group: #f5f5f7;
+  --elevated: #ffffff;
+  --hover: rgb(0 0 0 / 0.045);
+  --active: rgb(0 0 0 / 0.075);
+  --line: rgb(0 0 0 / 0.085);
+  --line-strong: rgb(0 0 0 / 0.16);
+  --code: #f5f5f7;
+
+  --text: #1d1d1f;
+  --text-2: #3a3a3d;
+  --muted: #6e6e73;
+  --faint: #7d7d82;
+
+  --running: #0a6fd6;
+  --success: #1f8a3b;
+  --warning: #a15c00;
+  --danger: #d1242f;
+  --interrupted: #8a3ffc;
+
+  --body-weight: 430;
+  --pop-shadow: 0 12px 36px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 0 0 1px rgb(0 0 0 / 0.07);
+  --scrim: rgb(0 0 0 / 0.28);
+}
+
+:root[data-theme="dark"] {
+  --bg: #19191b;
+  --sidebar: #202023;
+  --surface: #232326;
+  --fill: #2b2b2f;
+  --group: #2c2c30;
+  --elevated: #262629;
+  --hover: rgb(255 255 255 / 0.055);
+  --active: rgb(255 255 255 / 0.09);
+  --line: rgb(255 255 255 / 0.08);
+  --line-strong: rgb(255 255 255 / 0.15);
+  --code: #141416;
+
+  --text: #f5f5f7;
+  --text-2: #dcdce1;
+  --muted: #a4a4aa;
+  --faint: #8e8e94;
+
+  --running: #64a8ff;
+  --success: #3ccf6a;
+  --warning: #f5c542;
+  --danger: #ff6b66;
+  --interrupted: #c49bff;
+
+  --body-weight: 450;
+  --pop-shadow: 0 16px 48px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --card-shadow: 0 0 0 1px rgb(255 255 255 / 0.07);
+  --scrim: rgb(0 0 0 / 0.5);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  --color-bg: var(--bg);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-fill: var(--fill);
+  --color-group: var(--group);
+  --color-elevated: var(--elevated);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-code: var(--code);
+
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+
+  --color-accent: var(--accent);
+  --color-accent-fill: var(--accent-fill);
+  --color-on-accent: var(--on-accent);
+  --color-accent-ink: var(--accent-ink);
+
+  --color-running: var(--running);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-interrupted: var(--interrupted);
+
+  --shadow-pop: var(--pop-shadow);
+  --shadow-card: var(--card-shadow);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: var(--body-weight);
+  line-height: 1.45;
+  font-feature-settings: "cv05", "cv11", "ss03";
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Conversation text and inputs stay selectable. */
+.selectable,
+textarea,
+input,
+pre,
+code {
+  user-select: text;
+}
+
+/* In the base layer so Tailwind utilities like outline-none can override. */
+@layer base {
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+    outline-offset: 2px;
+  }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pop-in {
+  animation: pop-in 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fade-in 160ms ease-out;
+}
+
+/* Rendered markdown in assistant messages. */
+.prose-chat {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > :last-child {
+  margin-bottom: 0;
+}
+.prose-chat p,
+.prose-chat ul,
+.prose-chat ol,
+.prose-chat pre,
+.prose-chat table,
+.prose-chat blockquote {
+  margin: 0 0 0.8em;
+}
+.prose-chat ul,
+.prose-chat ol {
+  padding-left: 1.35em;
+}
+.prose-chat ul {
+  list-style: disc;
+}
+.prose-chat ol {
+  list-style: decimal;
+}
+.prose-chat li + li {
+  margin-top: 0.25em;
+}
+.prose-chat li::marker {
+  color: var(--faint);
+}
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3 {
+  margin: 1.2em 0 0.5em;
+  font-weight: 620;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.prose-chat h1 {
+  font-size: 1.35em;
+}
+.prose-chat h2 {
+  font-size: 1.18em;
+}
+.prose-chat h3 {
+  font-size: 1.03em;
+}
+.prose-chat strong {
+  font-weight: 620;
+}
+.prose-chat a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent-ink) 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.prose-chat a:hover {
+  text-decoration-color: currentColor;
+}
+.prose-chat code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.38em;
+  border-radius: 6px;
+  background: var(--fill);
+}
+.prose-chat pre {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--code);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow-x: auto;
+}
+.prose-chat pre code {
+  padding: 0;
+  background: none;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prose-chat blockquote {
+  padding-left: 14px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+.prose-chat table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.prose-chat th,
+.prose-chat td {
+  padding: 7px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.prose-chat tr:last-child td {
+  border-bottom: 0;
+}
+.prose-chat th {
+  background: var(--fill);
+  font-weight: 600;
+}
+.prose-chat hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.2em 0;
+}

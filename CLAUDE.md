@@ -17,7 +17,7 @@ gui/
   src-tauri/          Tauri v2 desktop app wrapping the same engine
 morphic/              pure-Rust Source 2 decoder: .vtex_c + KV3 + .vmdl_c->.glb (lib, v0.2.0)
   src/                resource / kv3 / texture / model modules
-  src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed)
+  src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed, lossless v5 writer)
   fixtures/           committed canonical corpus (.vtex_c + .png + .meta.json; kv3/ holds .vsndevts_c)
   tests/golden.rs     diffs morphic's decode against oracle PNGs
   tests/kv3.rs        decode + uncompressed-v4 round-trip against gigawatt.vsndevts_c
@@ -139,6 +139,20 @@ just fixture materials/foo.vtex_c bc7   # add one fixture from local Deadlock
 reads v1..=5 (incl. v5 two-buffer/LZ4), writes **v4 uncompressed** (no LZ4 *encoder*
 needed; the engine reads either). `morphic::{decode_kv3_resource, encode_kv3_resource}`
 wrap the resource envelope, preserving the format GUID and `RED2` on re-encode.
+
+The v4 path goes through the folded `Value` tree, which drops typed-array framing,
+narrow numeric tags and value flags (fine for soundevents, fatal for models: untyped
+arrays load as an error model). `kv3::decode_lossless` -> `kv3::Document` keeps all of
+it, and `kv3::encode_v5` writes it back as LZ4 **v5** (`src/kv3/wire.rs`).
+`kv3::encode_v5_like(value, template)` / `morphic::encode_kv3_resource_like` encode an
+edited `Value` borrowing each node's wire shape from the original by path, so
+`Value`-based editors keep Valve's framing. Gate: `examples/kv3_v5_roundtrip.rs` over
+all of pak01 (285K KV3 blocks, 252K v5): decompressed buffers and every
+compressor-independent header field byte-identical to Valve's. The four v5 header
+fields VRF leaves unnamed are fitted: @104 = typed nodes, @46 = arrays (u16
+saturated), @112/@116 = main-buffer arrays / their slots (an empty array takes one
+slot; an auxiliary-buffer array counts only at >= 32 elements). `examples/kv3_arrays.rs`
+prints any entry's array framing.
 
 `vpkmerge-core::soundevents::SoundEvents` is the soundevents-aware layer (load from
 file/VPK, JSON projection, `swap_vsnd`, `set_event_field`, re-encode). Exposed as
@@ -343,6 +357,36 @@ hardcoded 14-hero map in `examples/ult_sound_map.rs`. **Ability / item display n
 are the remaining piece: the strings are in the same localization tree but join to
 their icons only through a fuzzy filename / vdata-node mapping (a later pass); the
 catalog's filename-derived `label` already reads fine for those.
+
+## Face video (flipbook screen material)
+
+`tools/make-face-video.sh <video> <mod_dir.vpk> <out_dir.vpk> [fps=24] [grid=32]
+[maps=shop]` puts an arbitrary video onto a flipbook-screen material (the RUINER
+Billy mechanism: an NxN frame atlas played back by a dynamic expression stepping
+`g_vAlbedoTexcoordOffset1`, mesh UVs parked in the first cell). ffmpeg extracts
+frames, `vpkmerge-core/examples/face_video.rs` tiles them into the donor sheet
+(RGB only; donor alpha kept; unused cells blacked), re-encodes the mip chain in
+the sheet's own format, retimes the expression to the real frame count/fps
+(local-free form, compiled by `morphic::vfx_expr`), rebuilds the mod's nested
+`maps/ui/*` VPKs so shop/postgame scenes match (`maps` = `shop`/`all`/`none`),
+and packs one addon VPK that installs at higher priority than the base mod.
+Frame budget is `grid^2` (32 -> 1024 frames = 42.7 s at 24 fps; fewer, larger
+cells via smaller grids). Defaults target RUINER Billy's entries; `--sheet-entry`
+/ `--vmat-entry` retarget any mod with the same contract. Verified offline
+(VRF strict load + expression decompile + true-color frame dump); in-game
+verification pending.
+
+`--whole-material` is the stock-hero mode (no parked screen UVs needed): it
+additionally sets `g_vAlbedoTexcoordScale1 = 1/grid` so the hero's normal UV
+layout compresses into one cell per frame, i.e. each cell is a full albedo
+variant and the whole skin plays the flipbook. Only clean when the material's
+UVs stay inside [0,1]: check with `examples/uv_range.rs` (prints per-material
+UV bounds + a FLIPBOOK-CLEAN verdict). The sheet keeps the donor albedo's size
+(`replace_mip_chain` is dimension-locked), so a 4096 skin gives 8x8 = 64 frames
+at 512px. Whole-material mode writes opaque alpha (the donor's albedo-alpha
+mask layout is spatially wrong once cells are frames). First target: Paradox
+(`chrono_v2` measured flipbook-clean; content generators
+`tools/gen-time-vortex.py`, `tools/gen-matrix-rain.py`).
 
 ## Texture recolor (`.vtex_c`)
 
@@ -652,10 +696,16 @@ null round-trip measured 0.51 deg mean rotation diff). Helper examples:
 `gen_obvious_anim_glb.rs` (synthesize an exaggerated `.glb` with no Blender) and
 `anim_glb_diff.rs` (the null-round-trip per-bone angle diff tool).
 
-**End-state design** for hand-authoring animations in Blender (export rig to glTF,
-key it, import + pack) and what's still missing (a v5 clip *encoder* that writes an
-arbitrary-length pose blob in-engine, so translation/scale adds + frame-count
-changes become engine-viable, vs. today's equal-length in-place patch):
+**Full re-encode (v5; in-game confirmed 2026-09-29: rotation rebuild, frame-count change, added translation channels):** `reencode_nm_clip_full` now rebuilds the
+clip through `encode_kv3_resource_like` (v5 with Valve's typed framing) instead of the
+v4 writer whose output the engine loaded but never animated. On top of it,
+`import_glb_onto_nm_clip_full` (+ `resample_clip`) adds translation/scale channels the
+slot keeps static and resamples to a new frame count (same duration);
+`nm_clip_import_glb --full [--frames N]` drives it, and `gen_obvious_anim_glb --bob
+BONE:UNITS` synthesizes a translation test. A frame-count change on a clip with
+per-frame root motion is refused. Test addons: `exports/anim-v5-tests/`
+(a = full rotation-only, b = 21 -> 42 frames, c2 = neck/clavicle translation added, d =
+control on an existing channel; Yamato reload slots). End-state design:
 [docs/anim-authoring-pipeline.md](docs/anim-authoring-pipeline.md).
 
 ## Related

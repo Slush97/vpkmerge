@@ -117,6 +117,8 @@ export function McpPanel() {
           Same shape other MCP hosts use. Each server takes <code className="font-mono">command</code> and{" "}
           <code className="font-mono">args</code> (stdio) or <code className="font-mono">url</code> and{" "}
           <code className="font-mono">headers</code> (HTTP), plus optional <code className="font-mono">env</code> and{" "}
+          <code className="font-mono">disabled</code>. Built-in servers are not listed here. To change one, add an
+          entry with its name and only <code className="font-mono">env</code> or{" "}
           <code className="font-mono">disabled</code>.
         </p>
         <div className="flex items-center gap-3 pt-1">
@@ -154,6 +156,9 @@ function ServerRow({ server: s, onReconnect }: { server: McpServerStatus; onReco
         <Dot color={stateColor[s.state]} />
         <span className="font-mono text-[14px] font-medium text-text">{s.name}</span>
         <span className="rounded-md bg-fill px-1.5 py-0.5 text-[13px] font-medium text-muted">{s.transport}</span>
+        {s.builtin && (
+          <span className="rounded-md bg-fill px-1.5 py-0.5 text-[13px] font-medium text-muted">built in</span>
+        )}
         <span className="text-[13px] text-muted">{stateLabel[s.state]}</span>
         <span className="flex-1" />
         {s.state === "connected" && (

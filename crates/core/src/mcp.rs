@@ -33,6 +33,9 @@ pub struct ServerConfig {
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
+    /// Ships with the app instead of coming from `mcp.json`.
+    #[serde(skip)]
+    pub builtin: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -42,10 +45,32 @@ pub struct ConfigFile {
     pub mcp_servers: BTreeMap<String, ServerConfig>,
 }
 
+impl ConfigFile {
+    /// The app's built-in servers (`self`) with the user's `mcp.json` on top. A
+    /// user entry that names a built-in without a `command` or `url` of its own
+    /// adjusts it (extra `env`, `disabled`); any other entry stands on its own.
+    #[must_use]
+    pub fn with_user(mut self, user: ConfigFile) -> ConfigFile {
+        for (name, entry) in user.mcp_servers {
+            match self.mcp_servers.get_mut(&name) {
+                Some(builtin) if entry.command.is_none() && entry.url.is_none() => {
+                    builtin.env.extend(entry.env);
+                    builtin.disabled = entry.disabled;
+                }
+                _ => {
+                    self.mcp_servers.insert(name, entry);
+                }
+            }
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
     pub name: String,
+    pub builtin: bool,
     pub transport: &'static str,
     pub state: &'static str,
     pub error: Option<String>,
@@ -171,6 +196,7 @@ impl McpManager {
                 };
                 ServerStatus {
                     name: name.clone(),
+                    builtin: slot.config.builtin,
                     transport: if slot.config.url.is_some() { "http" } else { "stdio" },
                     state,
                     error,
@@ -303,4 +329,59 @@ fn qualified(server: &str, tool: &str) -> String {
     let mut name = format!("{TOOL_PREFIX}{}__{}", clean(server), clean(tool));
     name.truncate(64);
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn builtin() -> ConfigFile {
+        ConfigFile {
+            mcp_servers: BTreeMap::from([(
+                "vpkmerge".to_owned(),
+                ServerConfig {
+                    command: Some("/app/vpkmerge-mcp".to_owned()),
+                    builtin: true,
+                    ..ServerConfig::default()
+                },
+            )]),
+        }
+    }
+
+    fn user(json: &str) -> ConfigFile {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn builtin_servers_stay_alongside_the_users() {
+        let merged = builtin().with_user(user(r#"{"mcpServers": {"blender": {"command": "uvx"}}}"#));
+        assert_eq!(merged.mcp_servers.len(), 2);
+        assert!(merged.mcp_servers["vpkmerge"].builtin);
+        assert!(!merged.mcp_servers["blender"].builtin);
+    }
+
+    #[test]
+    fn a_bare_entry_adjusts_the_builtin() {
+        let merged = builtin().with_user(user(
+            r#"{"mcpServers": {"vpkmerge": {"env": {"DEADLOCK_GAME_DIR": "/games/Deadlock"}, "disabled": true}}}"#,
+        ));
+        let server = &merged.mcp_servers["vpkmerge"];
+        assert_eq!(server.command.as_deref(), Some("/app/vpkmerge-mcp"));
+        assert_eq!(server.env["DEADLOCK_GAME_DIR"], "/games/Deadlock");
+        assert!(server.disabled && server.builtin);
+    }
+
+    #[test]
+    fn an_entry_with_its_own_command_replaces_the_builtin() {
+        let merged = builtin().with_user(user(r#"{"mcpServers": {"vpkmerge": {"command": "/dev/vpkmerge-mcp"}}}"#));
+        let server = &merged.mcp_servers["vpkmerge"];
+        assert_eq!(server.command.as_deref(), Some("/dev/vpkmerge-mcp"));
+        assert!(!server.builtin);
+    }
+
+    #[test]
+    fn builtin_flag_never_reaches_mcp_json() {
+        assert!(!serde_json::to_string(&builtin()).unwrap().contains("builtin"));
+        assert!(!user(r#"{"mcpServers": {"x": {"command": "y", "builtin": true}}}"#).mcp_servers["x"].builtin);
+    }
 }

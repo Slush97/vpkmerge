@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.grimoiremods.workbench",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm sidecar && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm sidecar && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/vpkmerge-mcp"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -8,7 +8,7 @@ use tauri::ipc::Channel;
 use tauri::{Manager, RunEvent, State};
 use tauri_plugin_opener::OpenerExt;
 use workbench_core::config::{Settings, SettingsPatch};
-use workbench_core::mcp::ServerStatus;
+use workbench_core::mcp::{ConfigFile, ServerConfig, ServerStatus};
 use workbench_core::providers::{ModelInfo, ProviderId};
 use workbench_core::skills::Skill;
 use workbench_core::store::{Session, StoredMessage};
@@ -197,6 +197,21 @@ fn open_data_dir(app: tauri::AppHandle, core: Core<'_>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// The MCP servers bundled with the app. Tauri places each `externalBin` sidecar
+/// next to the main executable, in dev and in every bundle format.
+fn builtin_mcp() -> tauri::Result<ConfigFile> {
+    let exe = tauri::utils::platform::current_exe()?;
+    let sidecar = exe.with_file_name(format!("vpkmerge-mcp{}", std::env::consts::EXE_SUFFIX));
+    let vpkmerge = ServerConfig {
+        command: Some(sidecar.to_string_lossy().into_owned()),
+        builtin: true,
+        ..ServerConfig::default()
+    };
+    Ok(ConfigFile {
+        mcp_servers: [("vpkmerge".to_owned(), vpkmerge)].into(),
+    })
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -210,7 +225,7 @@ pub fn run() {
                 settings.set_gtk_xft_hinting(1);
                 settings.set_gtk_xft_hintstyle(Some("hintfull"));
             }
-            let core = App::open(&app.path().app_data_dir()?)?;
+            let core = App::open(&app.path().app_data_dir()?, builtin_mcp()?)?;
             let background = Arc::clone(&core);
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = background.start_mcp().await {

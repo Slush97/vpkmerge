@@ -84,7 +84,7 @@ async fn skill_tool_round_trip() {
     )
     .unwrap();
 
-    let app = App::open(&dir).unwrap();
+    let app = App::open(&dir, workbench_core::mcp::ConfigFile::default()).unwrap();
     app.update_settings(SettingsPatch {
         model: Some(Choice::Model {
             provider: ProviderId::Local,

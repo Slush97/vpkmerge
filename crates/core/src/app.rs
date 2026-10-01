@@ -23,6 +23,8 @@ pub struct App {
     vault: Arc<Vault>,
     settings: RwLock<Settings>,
     pub(crate) mcp: McpManager,
+    /// Servers that ship with the app. `mcp.json` is layered on top.
+    builtin_mcp: mcp::ConfigFile,
     pub(crate) turns: Mutex<HashMap<String, (uuid::Uuid, CancellationToken)>>,
     sign_in: Mutex<Option<CancellationToken>>,
     refresh_lock: tokio::sync::Mutex<()>,
@@ -68,7 +70,7 @@ pub struct ProviderStatus {
 }
 
 impl App {
-    pub fn open(data_dir: &Path) -> anyhow::Result<Arc<Self>> {
+    pub fn open(data_dir: &Path, builtin_mcp: mcp::ConfigFile) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(data_dir)
             .with_context(|| format!("creating {}", data_dir.display()))?;
         std::fs::create_dir_all(data_dir.join("skills"))?;
@@ -84,6 +86,7 @@ impl App {
             http,
             settings: RwLock::new(settings),
             mcp: McpManager::default(),
+            builtin_mcp,
             turns: Mutex::new(HashMap::new()),
             sign_in: Mutex::new(None),
             refresh_lock: tokio::sync::Mutex::new(()),
@@ -340,21 +343,26 @@ impl App {
         }
     }
 
+    /// The built-in servers with the user's `mcp.json` layered on top.
     fn mcp_config(&self) -> anyhow::Result<mcp::ConfigFile> {
-        serde_json::from_str(&self.mcp_config_text()?).context("mcp.json is not valid")
+        let user = serde_json::from_str(&self.mcp_config_text()?).context("mcp.json is not valid")?;
+        Ok(self.builtin_mcp.clone().with_user(user))
     }
 
     /// Connects the configured servers. Call once at startup.
     pub async fn start_mcp(&self) -> anyhow::Result<()> {
-        let config = self.mcp_config()?;
-        self.mcp.apply(&config).await;
-        Ok(())
+        // A broken mcp.json must not take the built-in servers down with it.
+        let config = self.mcp_config();
+        self.mcp
+            .apply(config.as_ref().unwrap_or(&self.builtin_mcp))
+            .await;
+        config.map(drop)
     }
 
     pub async fn save_mcp_config(&self, text: &str) -> anyhow::Result<()> {
-        let config: mcp::ConfigFile = serde_json::from_str(text).context("not valid MCP config JSON")?;
-        crate::write_atomic(&self.mcp_path(), serde_json::to_string_pretty(&config)?.as_bytes())?;
-        self.mcp.apply(&config).await;
+        let user: mcp::ConfigFile = serde_json::from_str(text).context("not valid MCP config JSON")?;
+        crate::write_atomic(&self.mcp_path(), serde_json::to_string_pretty(&user)?.as_bytes())?;
+        self.mcp.apply(&self.builtin_mcp.clone().with_user(user)).await;
         Ok(())
     }
 
@@ -367,7 +375,8 @@ impl App {
     }
 
     pub(crate) fn mcp_config_for_agents(&self) -> mcp::ConfigFile {
-        self.mcp_config().unwrap_or_default()
+        self.mcp_config()
+            .unwrap_or_else(|_| self.builtin_mcp.clone())
     }
 
     // ---- ACP agents ----------------------------------------------------

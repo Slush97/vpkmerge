@@ -12,7 +12,7 @@ use workbench_core::{AgentEvent, App};
 async fn one_turn(agent: AgentId) {
     let dir = std::env::temp_dir().join(format!("workbench-acp-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    let app = App::open(&dir).unwrap();
+    let app = App::open(&dir, workbench_core::mcp::ConfigFile::default()).unwrap();
     app.update_settings(SettingsPatch {
         model: Some(Choice::Agent { agent }),
         agent_cwd: Some(dir.clone()),

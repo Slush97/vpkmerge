@@ -117,6 +117,8 @@ export interface Skill {
 
 export interface McpServerStatus {
   name: string;
+  /** Ships with the app; not listed in mcp.json. */
+  builtin: boolean;
   transport: "stdio" | "http";
   state: "disabled" | "connecting" | "connected" | "failed";
   error: string | null;

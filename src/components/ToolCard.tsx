@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Part } from "../lib/api";
 import { argsSummary, prettyJson, prettyToolName } from "../lib/format";
 import { Icon, type IconName } from "../lib/icons";
+import { labelClass } from "./ui";
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
 export type ToolResult = Extract<Part, { type: "toolResult" }>;
@@ -46,7 +47,7 @@ export function ToolCard({ call, result, pending }: { call: ToolCall; result: To
 function Block({ label, text }: { label: string; text: string }) {
   return (
     <div>
-      <div className="mb-1.5 text-[13px] font-semibold text-muted">{label}</div>
+      <div className={`mb-1.5 ${labelClass}`}>{label}</div>
       <pre className="selectable max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-code px-3.5 py-2.5 font-mono text-[13px] leading-relaxed text-text-2">
         {text}
       </pre>

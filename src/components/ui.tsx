@@ -19,7 +19,7 @@ export const btn = {
 };
 
 const inputBase =
-  "h-9 w-full min-w-0 rounded-lg px-3 text-[14px] text-text outline-none placeholder:text-faint transition-shadow focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_28%,transparent)] focus-visible:outline-none";
+  "h-9 w-full min-w-0 rounded-lg px-3 text-[14px] text-text outline-none placeholder:text-faint transition-shadow focus:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_color-mix(in_srgb,var(--accent)_28%,transparent)] focus-visible:outline-none";
 
 export const inputClass = `${inputBase} bg-fill`;
 export const monoInputClass = `${inputClass} font-mono text-[13px]`;
@@ -27,6 +27,11 @@ export const monoInputClass = `${inputClass} font-mono text-[13px]`;
 /** Fields that sit on a Group surface need their own fill to stay visible. */
 export const groupInputClass = `${inputBase} bg-elevated shadow-card`;
 export const monoGroupInputClass = `${groupInputClass} font-mono text-[13px]`;
+
+/** Small tracked capitals for section labels, like the lettering on a directory board. */
+export const labelClass = "text-[12px] font-semibold uppercase tracking-[0.13em] text-muted";
+
+export const displayClass = "font-display font-normal tracking-[0.01em]";
 
 export function Kbd({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
@@ -42,7 +47,7 @@ export function Dot({ color, className = "" }: { color: string; className?: stri
   return (
     <span
       aria-hidden="true"
-      className={`inline-block size-2 shrink-0 rounded-full ${className}`}
+      className={`inline-block size-[7px] shrink-0 rotate-45 ${className}`}
       style={{ background: color }}
     />
   );
@@ -51,35 +56,33 @@ export function Dot({ color, className = "" }: { color: string; className?: stri
 export function Pill({ color, children }: { color: string; children: ReactNode }) {
   return (
     <span
-      className="inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[13px] font-medium"
+      className="inline-flex h-6 shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 text-[11.5px] font-semibold uppercase tracking-[0.1em]"
       style={{ background: `color-mix(in srgb, ${color} 13%, transparent)`, color }}
     >
-      <span aria-hidden="true" className="size-1.5 rounded-full" style={{ background: color }} />
+      <span aria-hidden="true" className="size-[5px] rotate-45" style={{ background: color }} />
       {children}
     </span>
   );
 }
 
+/** The house sigil: an eye set in a lozenge. */
 export function Mark({ size = 26 }: { size?: number }) {
   return (
-    <span
+    <svg
       aria-hidden="true"
-      className="inline-flex shrink-0 items-center justify-center bg-accent-fill text-on-accent"
-      style={{ width: size, height: size, borderRadius: Math.round(size * 0.3) }}
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={size >= 40 ? 1 : 1.4}
+      strokeLinejoin="miter"
+      className="shrink-0 text-gilt"
     >
-      <svg
-        viewBox="0 0 24 24"
-        width={Math.round(size * 0.56)}
-        height={Math.round(size * 0.56)}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2.2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83zM22 17.65l-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65M22 12.65l-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
-      </svg>
-    </span>
+      <path d="M12 1.2L22.8 12 12 22.8 1.2 12z" />
+      <path d="M5.4 12Q12 5.6 18.6 12Q12 18.4 5.4 12z" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
 
@@ -106,13 +109,13 @@ export function Switch({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-150 disabled:opacity-40 ${
+      className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-md transition-colors duration-150 disabled:opacity-40 ${
         checked ? "bg-accent-fill" : "bg-line-strong"
       }`}
     >
       <span
-        className={`inline-block size-[18px] rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.3)] transition-transform duration-150 ${
-          checked ? "translate-x-[18px]" : "translate-x-[2px]"
+        className={`inline-block size-[16px] rounded-[1px] bg-[#fbf7ee] shadow-[0_1px_3px_rgb(0_0_0/0.35)] transition-transform duration-150 ${
+          checked ? "translate-x-[19px]" : "translate-x-[3px]"
         }`}
       />
     </button>
@@ -131,7 +134,7 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-[9px] bg-fill p-[3px]">
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-xl bg-fill p-[3px]">
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -141,7 +144,7 @@ export function Segmented<T extends string>({
             role="radio"
             aria-checked={on}
             onClick={() => onChange(o.value)}
-            className={`h-7 rounded-[7px] px-3.5 text-[13px] font-medium transition-colors ${
+            className={`h-7 rounded-md px-3.5 text-[13px] font-medium transition-colors ${
               on ? "bg-elevated text-text shadow-card" : "text-muted hover:text-text"
             }`}
           >
@@ -153,7 +156,7 @@ export function Segmented<T extends string>({
   );
 }
 
-/** Settings-style inset group: a title, then rows on a rounded surface. */
+/** Settings-style inset group: a title, then rows on a framed surface. */
 export function Group({
   title,
   description,
@@ -170,13 +173,13 @@ export function Group({
       {(title || action) && (
         <div className="flex items-end gap-3 px-1">
           <div className="min-w-0 flex-1">
-            {title && <h3 className="text-[13px] font-semibold text-muted">{title}</h3>}
-            {description && <p className="mt-0.5 text-[13px] leading-snug text-faint">{description}</p>}
+            {title && <h3 className={labelClass}>{title}</h3>}
+            {description && <p className="mt-1 text-[13px] leading-snug text-faint">{description}</p>}
           </div>
           {action}
         </div>
       )}
-      <div className="overflow-hidden rounded-xl bg-group">{children}</div>
+      <div className="overflow-hidden rounded-xl bg-group shadow-card">{children}</div>
     </section>
   );
 }

@@ -4,7 +4,7 @@ import { Icon } from "../lib/icons";
 import type { PermissionRequest, TurnState } from "../lib/turns";
 import { Markdown } from "./Markdown";
 import { ToolCard, type ToolResult } from "./ToolCard";
-import { btn } from "./ui";
+import { btn, displayClass } from "./ui";
 
 interface Props {
   messages: StoredMessage[];
@@ -79,7 +79,7 @@ function UserMessage({ message }: { message: StoredMessage }) {
     .join("\n\n");
   return (
     <div className="flex justify-end">
-      <div className="selectable max-w-[560px] whitespace-pre-wrap break-words rounded-[20px] bg-fill px-4 py-2.5 text-[16px] leading-[1.55] text-text">
+      <div className="selectable max-w-[560px] whitespace-pre-wrap break-words rounded-lg bg-fill px-4 py-2.5 text-[16px] leading-[1.55] text-text shadow-card">
         {text}
       </div>
     </div>
@@ -126,9 +126,9 @@ function LiveDraft({ turn }: { turn: TurnState }) {
         turn.permissions.length === 0 && (
           <div className="flex items-center gap-2 text-[13.5px] text-muted" aria-live="polite">
             <span className="flex gap-1" aria-hidden="true">
-              <span className="size-1.5 animate-pulse rounded-full bg-faint" />
-              <span className="size-1.5 animate-pulse rounded-full bg-faint [animation-delay:150ms]" />
-              <span className="size-1.5 animate-pulse rounded-full bg-faint [animation-delay:300ms]" />
+              <span className="size-1.5 rotate-45 animate-pulse bg-gilt" />
+              <span className="size-1.5 rotate-45 animate-pulse bg-gilt [animation-delay:150ms]" />
+              <span className="size-1.5 rotate-45 animate-pulse bg-gilt [animation-delay:300ms]" />
             </span>
             <span>Thinking</span>
           </div>
@@ -148,12 +148,12 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
         aria-expanded={open}
         className="inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 -ml-1.5 text-[13.5px] font-medium text-muted transition-colors hover:bg-hover hover:text-text"
       >
-        <Icon name={live ? "loader" : "brain"} size={14} className={live ? "spin text-running" : ""} />
+        <Icon name={live ? "loader" : "eye"} size={14} className={live ? "spin text-running" : ""} />
         <span>{live ? "Thinking" : "Thought process"}</span>
         <Icon name={open ? "chevUp" : "chevDown"} size={14} className="text-faint" />
       </button>
       {open && (
-        <div className="selectable fade-in mt-2 whitespace-pre-wrap break-words border-l-2 border-line-strong pl-4 text-[14px] leading-relaxed text-muted">
+        <div className="selectable fade-in mt-2 whitespace-pre-wrap break-words border-l-[3px] border-double border-line-strong pl-4 text-[14px] italic leading-relaxed text-muted">
           {text}
         </div>
       )}
@@ -193,14 +193,14 @@ function PermissionCard({
     <div
       role="group"
       aria-label="Permission request"
-      className="pop-in flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-pop"
+      className="pop-in deco-frame flex flex-col gap-3 p-4 [--frame-line:color-mix(in_srgb,var(--accent)_70%,transparent)]"
     >
       <div className="flex items-start gap-3">
         <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-ink">
           <Icon name="shield" size={16} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-semibold text-text">Allow this action?</div>
+          <div className={`text-[17px] leading-snug text-text ${displayClass}`}>Allow this action?</div>
           <div className="selectable mt-0.5 break-words font-mono text-[13px] leading-relaxed text-text-2">
             {request.title}
           </div>

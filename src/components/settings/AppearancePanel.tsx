@@ -51,7 +51,7 @@ export function AppearancePanel({ settings, onSettingsChange }: Props) {
 
       <Group title="Accent color" description="Used for buttons, selection and links.">
         <Row className="py-4">
-          <div role="radiogroup" aria-label="Accent color" className="flex flex-wrap gap-4">
+          <div role="radiogroup" aria-label="Accent color" className="flex flex-wrap gap-x-3 gap-y-4">
             {ACCENTS.map((a) => {
               const on = a.value === accent;
               return (
@@ -63,18 +63,20 @@ export function AppearancePanel({ settings, onSettingsChange }: Props) {
                   aria-label={a.name}
                   title={a.name}
                   onClick={() => save({ accent: a.value })}
-                  className="group flex flex-col items-center gap-1.5"
+                  className="group flex w-[68px] flex-col items-center gap-1.5"
                 >
-                  <span
-                    className={`inline-flex size-8 items-center justify-center rounded-full transition-[transform,box-shadow] duration-150 ${
-                      on ? "" : "group-hover:scale-105"
-                    }`}
-                    style={{
-                      background: a.value,
-                      boxShadow: on ? `0 0 0 2px var(--elevated), 0 0 0 4px ${a.value}` : undefined,
-                    }}
-                  >
-                    {on && <Icon name="check" size={15} strokeWidth={3} className="text-white" />}
+                  <span className="inline-flex size-11 items-center justify-center">
+                    <span
+                      className={`inline-flex size-[26px] rotate-45 items-center justify-center transition-[transform,box-shadow] duration-150 ${
+                        on ? "" : "group-hover:scale-110"
+                      }`}
+                      style={{
+                        background: a.value,
+                        boxShadow: on ? `0 0 0 3px var(--group), 0 0 0 4px ${a.value}` : undefined,
+                      }}
+                    >
+                      {on && <Icon name="check" size={14} strokeWidth={3} className="-rotate-45 text-[#18140e]" />}
+                    </span>
                   </span>
                   <span className={`text-[13px] ${on ? "font-medium text-text" : "text-muted"}`}>{a.name}</span>
                 </button>

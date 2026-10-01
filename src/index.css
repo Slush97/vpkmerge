@@ -3,78 +3,92 @@
 /*
  * Theme tokens live on :root[data-theme]. The accent and its derived fill and
  * ink colors are set at runtime by lib/theme.ts from the user's settings.
+ * Dark is lacquer and brass, light is ledger paper and sepia ink. --gilt is
+ * the ornament color (rules, frames, the seal) and does not follow the accent.
  */
 :root {
-  --accent: #0a84ff;
-  --accent-fill: #0974e0;
-  --on-accent: #ffffff;
-  --accent-ink: #0a6fd6;
+  --accent: #c9a24d;
+  --accent-fill: #c9a24d;
+  --on-accent: #18140e;
+  --accent-ink: #c9a24d;
 }
 
 :root,
 :root[data-theme="light"] {
-  --bg: #ffffff;
-  --sidebar: #f5f5f7;
-  --surface: #ffffff;
-  --fill: #f2f2f4;
-  --group: #f5f5f7;
-  --elevated: #ffffff;
-  --hover: rgb(0 0 0 / 0.045);
-  --active: rgb(0 0 0 / 0.075);
-  --line: rgb(0 0 0 / 0.085);
-  --line-strong: rgb(0 0 0 / 0.16);
-  --code: #f5f5f7;
+  --bg: #f4eee0;
+  --sidebar: #ece4d1;
+  --surface: #fbf7ee;
+  --fill: #e8dfcb;
+  --group: #eee6d4;
+  --elevated: #fbf7ee;
+  --hover: rgb(70 48 14 / 0.07);
+  --active: rgb(70 48 14 / 0.12);
+  --line: rgb(84 60 20 / 0.17);
+  --line-strong: rgb(84 60 20 / 0.36);
+  --code: #ebe3d0;
+  --gilt: #7d5f22;
 
-  --text: #1d1d1f;
-  --text-2: #3a3a3d;
-  --muted: #58585d;
-  --faint: #6c6c72;
+  --text: #1d1812;
+  --text-2: #382f23;
+  --muted: #574c3c;
+  --faint: #625645;
 
-  --running: #0a6fd6;
-  --success: #177a33;
-  --warning: #a15c00;
-  --danger: #d1242f;
-  --interrupted: #8a3ffc;
+  --running: #23607f;
+  --success: #36652a;
+  --warning: #875400;
+  --danger: #a5301f;
+  --interrupted: #65469e;
 
-  --body-weight: 430;
-  --pop-shadow: 0 12px 36px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.06);
-  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 0 0 1px rgb(0 0 0 / 0.07);
-  --scrim: rgb(0 0 0 / 0.28);
+  --body-weight: 400;
+  --pop-shadow: 0 14px 36px rgb(60 40 10 / 0.18), 0 0 0 1px var(--line-strong);
+  --card-shadow: 0 0 0 1px var(--line);
+  --scrim: rgb(40 28 10 / 0.36);
+  --wash: radial-gradient(ellipse at 50% 35%, transparent 50%, rgb(120 88 36 / 0.09) 100%);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.25 0 0 0 0 0.1 0.14 0 0 0 -0.02'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
-  --bg: #19191b;
-  --sidebar: #202023;
-  --surface: #232326;
-  --fill: #2b2b2f;
-  --group: #2c2c30;
-  --elevated: #262629;
-  --hover: rgb(255 255 255 / 0.055);
-  --active: rgb(255 255 255 / 0.09);
-  --line: rgb(255 255 255 / 0.08);
-  --line-strong: rgb(255 255 255 / 0.15);
-  --code: #141416;
+  --bg: #13110e;
+  --sidebar: #181510;
+  --surface: #1d1a14;
+  --fill: #27221a;
+  --group: #1f1b15;
+  --elevated: #221e17;
+  --hover: rgb(240 222 180 / 0.06);
+  --active: rgb(240 222 180 / 0.1);
+  --line: rgb(214 184 120 / 0.15);
+  --line-strong: rgb(214 184 120 / 0.32);
+  --code: #0d0b09;
+  --gilt: #c9a55c;
 
-  --text: #f5f5f7;
-  --text-2: #dcdce1;
-  --muted: #b3b3ba;
-  --faint: #9d9da4;
+  --text: #f2ead9;
+  --text-2: #ddd3bc;
+  --muted: #b8ac92;
+  --faint: #a1957d;
 
-  --running: #64a8ff;
-  --success: #3ccf6a;
-  --warning: #f5c542;
-  --danger: #ff6b66;
-  --interrupted: #c49bff;
+  --running: #8fbcd6;
+  --success: #8dbb6c;
+  --warning: #e3b548;
+  --danger: #ee7a68;
+  --interrupted: #bca3e6;
 
-  --body-weight: 450;
-  --pop-shadow: 0 16px 48px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.08);
-  --card-shadow: 0 0 0 1px rgb(255 255 255 / 0.07);
-  --scrim: rgb(0 0 0 / 0.5);
+  --body-weight: 420;
+  --pop-shadow: 0 18px 50px rgb(0 0 0 / 0.6), 0 0 0 1px var(--line-strong);
+  --card-shadow: 0 0 0 1px var(--line);
+  --scrim: rgb(0 0 0 / 0.6);
+  --wash: radial-gradient(110% 65% at 50% -8%, rgb(201 165 92 / 0.1), transparent 62%);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 0.93 0 0 0 0 0.8 0.07 0 0 0 -0.012'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 @theme inline {
-  --font-sans: "Inter Variable", system-ui, sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-sans: "Libre Franklin Variable", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Federo", "Libre Franklin Variable", sans-serif;
+
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 3px;
+  --radius-2xl: 3px;
 
   --color-bg: var(--bg);
   --color-sidebar: var(--sidebar);
@@ -87,6 +101,7 @@
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-code: var(--code);
+  --color-gilt: var(--gilt);
 
   --color-text: var(--text);
   --color-text-2: var(--text-2);
@@ -122,7 +137,6 @@ body {
   font-size: 14px;
   font-weight: var(--body-weight);
   line-height: 1.45;
-  font-feature-settings: "cv05", "cv11", "ss03";
   font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -164,6 +178,77 @@ code {
   }
 }
 
+/* Paper grain sits on the big background panes only, never over text surfaces. */
+.grain {
+  background-image: var(--grain);
+}
+
+.backdrop {
+  background-image: var(--wash), var(--grain);
+}
+
+/*
+ * Setback corners, like a skyscraper's stepped crown. The frame is drawn by two
+ * pseudo-elements so the element itself stays unclipped and popovers can escape.
+ * .deco-clip clips an element's own content to the same shape.
+ */
+.deco-frame,
+.deco-clip {
+  --notch: 5px;
+  --deco-shape: polygon(
+    0 calc(var(--notch) * 2),
+    var(--notch) calc(var(--notch) * 2),
+    var(--notch) var(--notch),
+    calc(var(--notch) * 2) var(--notch),
+    calc(var(--notch) * 2) 0,
+    calc(100% - var(--notch) * 2) 0,
+    calc(100% - var(--notch) * 2) var(--notch),
+    calc(100% - var(--notch)) var(--notch),
+    calc(100% - var(--notch)) calc(var(--notch) * 2),
+    100% calc(var(--notch) * 2),
+    100% calc(100% - var(--notch) * 2),
+    calc(100% - var(--notch)) calc(100% - var(--notch) * 2),
+    calc(100% - var(--notch)) calc(100% - var(--notch)),
+    calc(100% - var(--notch) * 2) calc(100% - var(--notch)),
+    calc(100% - var(--notch) * 2) 100%,
+    calc(var(--notch) * 2) 100%,
+    calc(var(--notch) * 2) calc(100% - var(--notch)),
+    var(--notch) calc(100% - var(--notch)),
+    var(--notch) calc(100% - var(--notch) * 2),
+    0 calc(100% - var(--notch) * 2)
+  );
+}
+
+.deco-clip {
+  clip-path: var(--deco-shape);
+}
+
+.deco-frame {
+  position: relative;
+  isolation: isolate;
+}
+
+.deco-frame::before,
+.deco-frame::after {
+  content: "";
+  position: absolute;
+  clip-path: var(--deco-shape);
+  pointer-events: none;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.deco-frame::before {
+  inset: 0;
+  z-index: -2;
+  background: var(--frame-line, var(--line-strong));
+}
+
+.deco-frame::after {
+  inset: 1px;
+  z-index: -1;
+  background: var(--frame-fill, var(--surface));
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -172,6 +257,16 @@ code {
 
 .spin {
   animation: spin 0.9s linear infinite;
+}
+
+.seal-turn {
+  animation: spin 240s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seal-turn {
+    animation: none;
+  }
 }
 
 @keyframes pop-in {
@@ -226,9 +321,6 @@ code {
 .prose-chat ol {
   padding-left: 1.35em;
 }
-.prose-chat ul {
-  list-style: disc;
-}
 .prose-chat ol {
   list-style: decimal;
 }
@@ -236,27 +328,47 @@ code {
   margin-top: 0.25em;
 }
 .prose-chat li::marker {
-  color: var(--faint);
+  color: var(--gilt);
+  font-variant-numeric: tabular-nums;
+}
+.prose-chat ul > li:not(.task-list-item) {
+  position: relative;
+}
+.prose-chat ul > li:not(.task-list-item)::before {
+  content: "";
+  position: absolute;
+  left: -1.05em;
+  top: 0.62em;
+  width: 5px;
+  height: 5px;
+  background: var(--gilt);
+  transform: rotate(45deg);
 }
 .prose-chat h1,
-.prose-chat h2,
-.prose-chat h3 {
-  margin: 1.2em 0 0.5em;
-  font-weight: 620;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+.prose-chat h2 {
+  margin: 1.1em 0 0.45em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
 }
 .prose-chat h1 {
-  font-size: 1.35em;
+  font-size: 1.65em;
 }
 .prose-chat h2 {
-  font-size: 1.18em;
+  font-size: 1.4em;
 }
 .prose-chat h3 {
-  font-size: 1.03em;
+  margin: 1.5em 0 0.6em;
+  font-size: 0.78em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-2);
 }
 .prose-chat strong {
-  font-weight: 620;
+  font-weight: 650;
 }
 .prose-chat a {
   color: var(--accent-ink);
@@ -272,12 +384,12 @@ code {
   font-family: var(--font-mono);
   font-size: 0.86em;
   padding: 0.1em 0.38em;
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--fill);
 }
 .prose-chat pre {
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: 2px;
   background: var(--code);
   box-shadow: inset 0 0 0 1px var(--line);
   overflow-x: auto;
@@ -290,14 +402,14 @@ code {
 }
 .prose-chat blockquote {
   padding-left: 14px;
-  border-left: 3px solid var(--line-strong);
+  border-left: 3px double var(--gilt);
   color: var(--muted);
 }
 .prose-chat table {
   border-collapse: separate;
   border-spacing: 0;
   font-size: 14px;
-  border-radius: 10px;
+  border-radius: 2px;
   box-shadow: 0 0 0 1px var(--line);
   overflow: hidden;
 }
@@ -312,10 +424,27 @@ code {
 }
 .prose-chat th {
   background: var(--fill);
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .prose-chat hr {
+  position: relative;
   border: 0;
-  border-top: 1px solid var(--line);
-  margin: 1.2em 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 1.4em 0;
+  overflow: visible;
+}
+.prose-chat hr::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 7px;
+  height: 7px;
+  background: var(--gilt);
+  outline: 5px solid var(--bg);
+  transform: translate(-50%, -50%) rotate(45deg);
 }

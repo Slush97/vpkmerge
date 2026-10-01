@@ -4,7 +4,7 @@ import type { ChoiceInfo } from "../lib/choice";
 import { groupSessions } from "../lib/format";
 import { Icon } from "../lib/icons";
 import type { TurnState } from "../lib/turns";
-import { btn, Dot, Kbd, Mark, SrOnly } from "./ui";
+import { btn, Dot, Kbd, labelClass, Mark, SrOnly } from "./ui";
 
 interface SidebarProps {
   sessions: Session[];
@@ -29,9 +29,12 @@ export function Sidebar(props: SidebarProps) {
 const railButton =
   "inline-flex size-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-hover hover:text-text";
 
+const pane = "grain border-r-[3px] border-double border-line-strong bg-sidebar";
+const current = "bg-active shadow-[inset_2px_0_0_var(--accent)]";
+
 function Rail({ choice, onToggle, onNew, onSearch, onOpenSettings }: SidebarProps) {
   return (
-    <nav aria-label="Sessions" className="flex h-full w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line bg-sidebar pb-3">
+    <nav aria-label="Sessions" className={`flex h-full w-[60px] shrink-0 flex-col items-center gap-1 pb-3 ${pane}`}>
       <div data-tauri-drag-region className="flex h-[52px] w-full shrink-0 items-center justify-center">
         <Mark size={26} />
       </div>
@@ -54,7 +57,7 @@ function Rail({ choice, onToggle, onNew, onSearch, onOpenSettings }: SidebarProp
       >
         <Icon name="settings" size={18} />
         {!choice.ready && (
-          <span className="absolute right-1.5 top-1.5 size-2.5 rounded-full border-2 border-sidebar bg-warning" />
+          <span className="absolute right-1.5 top-1.5 size-2.5 rotate-45 border-2 border-sidebar bg-warning" />
         )}
       </button>
     </nav>
@@ -87,10 +90,10 @@ function Expanded({
   }, [sessions, query]);
 
   return (
-    <nav aria-label="Sessions" className="flex h-full w-[264px] shrink-0 flex-col border-r border-line bg-sidebar">
-      <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-2.5 pl-4 pr-2">
+    <nav aria-label="Sessions" className={`flex h-full w-[264px] shrink-0 flex-col ${pane}`}>
+      <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 pl-4 pr-2">
         <Mark />
-        <span data-tauri-drag-region className="text-[15px] font-semibold tracking-[-0.01em]">
+        <span data-tauri-drag-region className="font-display text-[15px] font-normal uppercase tracking-[0.22em]">
           Workbench
         </span>
         <span data-tauri-drag-region className="flex-1 self-stretch" />
@@ -104,7 +107,7 @@ function Expanded({
           type="button"
           onClick={onNew}
           className={`group flex h-9 items-center gap-2.5 rounded-lg px-3 text-[14px] font-medium transition-colors ${
-            activeId === null ? "bg-active text-text" : "text-text hover:bg-hover"
+            activeId === null ? `${current} text-text` : "text-text hover:bg-hover"
           }`}
         >
           <Icon name="compose" size={16} className="text-accent-ink" />
@@ -140,7 +143,10 @@ function Expanded({
         ) : (
           groups.map((g) => (
             <div key={g.label} className="flex flex-col gap-px pt-4">
-              <span className="px-3 pb-1.5 text-[13px] font-semibold text-muted">{g.label}</span>
+              <span className="flex items-center gap-2.5 px-3 pb-1.5">
+                <span className={labelClass}>{g.label}</span>
+                <span aria-hidden="true" className="h-px flex-1 bg-line" />
+              </span>
               {g.items.map((s) => (
                 <SessionRow
                   key={s.id}
@@ -257,7 +263,7 @@ function SessionRow({ session, active, turn, onSelect, onRename, onDelete }: Row
   const failed = !busy && Boolean(turn?.error);
 
   return (
-    <div className={`group flex h-9 items-center rounded-lg transition-colors ${active ? "bg-active" : "hover:bg-hover"}`}>
+    <div className={`group flex h-9 items-center rounded-lg transition-colors ${active ? current : "hover:bg-hover"}`}>
       <button
         type="button"
         onClick={() => onSelect(session.id)}

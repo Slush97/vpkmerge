@@ -45,7 +45,7 @@ const paths = {
   terminal: "M4 17l6-6-6-6M12 19h8",
   sparkles:
     "M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z",
-  brain:"M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18ZM12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18ZM12 5v13",
+  eye: "M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0zM9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
 } as const;
 
 export type IconName = keyof typeof paths;
@@ -70,8 +70,8 @@ export function Icon({
       fill="none"
       stroke="currentColor"
       strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
       className={className ? `shrink-0 ${className}` : "shrink-0"}
     >
       <path d={paths[name]} />

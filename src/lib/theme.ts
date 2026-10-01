@@ -1,20 +1,22 @@
 import type { Theme } from "./api";
 
-export const DEFAULT_ACCENT = "#0a84ff";
+export const DEFAULT_ACCENT = "#c9a24d";
 
 export const ACCENTS: { name: string; value: string }[] = [
-  { name: "Blue", value: "#0a84ff" },
-  { name: "Orange", value: "#f97316" },
-  { name: "Purple", value: "#8b5cf6" },
-  { name: "Green", value: "#22c55e" },
-  { name: "Pink", value: "#ec4899" },
-  { name: "Graphite", value: "#6b7280" },
+  { name: "Brass", value: "#c9a24d" },
+  { name: "Ember", value: "#e2762c" },
+  { name: "Vermilion", value: "#c4452f" },
+  { name: "Verdigris", value: "#3f9c8c" },
+  { name: "Absinthe", value: "#8aa63a" },
+  { name: "Amethyst", value: "#8a6ac8" },
+  { name: "Midnight", value: "#4f7fbf" },
+  { name: "Pewter", value: "#9a9384" },
 ];
 
 type Rgb = [number, number, number];
 
-const BG: Record<"light" | "dark", Rgb> = { light: [255, 255, 255], dark: [25, 25, 27] };
-const NEAR_BLACK: Rgb = [17, 17, 19];
+const BG: Record<"light" | "dark", Rgb> = { light: [244, 238, 224], dark: [19, 17, 14] };
+const NEAR_BLACK: Rgb = [24, 20, 14];
 const WHITE: Rgb = [255, 255, 255];
 
 function parse(hex: string): Rgb | null {

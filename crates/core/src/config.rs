@@ -56,7 +56,7 @@ impl Default for Settings {
             agent_cwd: home_dir(),
             permission_level: PermissionLevel::default(),
             theme: Theme::System,
-            accent: "#0a84ff".into(),
+            accent: "#c9a24d".into(),
         }
     }
 }

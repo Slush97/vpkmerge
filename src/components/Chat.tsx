@@ -5,7 +5,8 @@ import type { TurnState } from "../lib/turns";
 import type { SettingsTab } from "./settings/SettingsModal";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
-import { Pill } from "./ui";
+import { Seal, Whiskers } from "./Seal";
+import { displayClass, Pill } from "./ui";
 import { WindowControls } from "./WindowControls";
 
 const starters = [
@@ -54,9 +55,12 @@ export function Chat(props: Props) {
   );
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-bg">
-      <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-line pl-6 pr-3">
-        <h1 data-tauri-drag-region className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em]">
+    <main className="backdrop flex min-w-0 flex-1 flex-col bg-bg">
+      <header
+        data-tauri-drag-region
+        className="flex h-[52px] shrink-0 items-center gap-3 border-b-[3px] border-double border-line-strong pl-6 pr-3"
+      >
+        <h1 data-tauri-drag-region className={`min-w-0 truncate text-[18px] ${displayClass}`}>
           {session?.title ?? "New session"}
         </h1>
         {busy && <Pill color="var(--running)">Working</Pill>}
@@ -78,7 +82,12 @@ export function Chat(props: Props) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-8 pb-16">
           <div className="flex w-full max-w-[680px] flex-col gap-8">
             <div className="flex flex-col gap-2.5 text-center">
-              <h2 className="text-[32px] font-[650] leading-tight tracking-[-0.022em]">What are we making?</h2>
+              <div className="mb-3 flex items-center gap-5">
+                <Whiskers />
+                <Seal />
+                <Whiskers flip />
+              </div>
+              <h2 className={`text-[38px] leading-tight ${displayClass}`}>What are we making?</h2>
               <p className="text-[15px] leading-normal text-muted">
                 Describe the change you want. Your MCP tools and skills come along.
               </p>
@@ -90,7 +99,7 @@ export function Chat(props: Props) {
                   key={s.text}
                   type="button"
                   onClick={() => setPrefill((p) => ({ text: s.text, n: p.n + 1 }))}
-                  className="inline-flex h-9 items-center gap-2 rounded-full bg-fill px-3.5 text-[13.5px] text-text-2 transition-colors hover:bg-active hover:text-text"
+                  className="inline-flex h-9 items-center gap-2 rounded-lg px-3.5 text-[13.5px] text-text-2 shadow-card transition-colors hover:bg-hover hover:text-text"
                 >
                   <Icon name={s.icon} size={14} className="text-accent-ink" />
                   {s.text}

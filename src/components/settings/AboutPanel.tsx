@@ -19,7 +19,7 @@ export function AboutPanel() {
       <div className="flex items-center gap-4 px-1">
         <Mark size={48} />
         <div>
-          <div className="text-[18px] font-semibold tracking-[-0.01em]">Workbench</div>
+          <div className="font-display text-[20px] font-normal uppercase tracking-[0.22em]">Workbench</div>
           <div className="text-[13.5px] text-muted">Version {info.version}</div>
         </div>
       </div>

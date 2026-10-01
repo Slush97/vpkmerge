@@ -2,7 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon } from "../lib/icons";
 
 const control =
-  "inline-flex size-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-hover hover:text-text";
+  "inline-flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-hover hover:text-text";
 
 export function WindowControls() {
   return (
@@ -16,7 +16,7 @@ export function WindowControls() {
       <button
         type="button"
         aria-label="Close window"
-        className={`${control} hover:bg-[#e5484d] hover:text-white`}
+        className={`${control} hover:bg-[#b3392a] hover:text-white`}
         onClick={() => void getCurrentWindow().close()}
       >
         <Icon name="x" size={15} />

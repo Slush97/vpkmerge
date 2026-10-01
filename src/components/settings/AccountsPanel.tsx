@@ -8,7 +8,7 @@ import {
   type Settings,
 } from "../../lib/api";
 import { Icon } from "../../lib/icons";
-import { btn, Group, groupInputClass, Message, monoGroupInputClass, Pill, Row } from "../ui";
+import { btn, displayClass, Group, groupInputClass, Message, monoGroupInputClass, Pill, Row } from "../ui";
 
 const notes: Record<ProviderId, string> = {
   openai: "Uses your ChatGPT plan through OpenAI's open-source app program, or an API key.",
@@ -63,7 +63,7 @@ export function AccountsPanel({ providers, agents, settings, onSettingsChange, o
 function SectionHeading({ title, text }: { title: string; text: string }) {
   return (
     <div className="flex flex-col gap-1 px-1">
-      <h3 className="text-[16px] font-semibold tracking-[-0.01em]">{title}</h3>
+      <h3 className={`text-[20px] ${displayClass}`}>{title}</h3>
       <p className="text-[13.5px] leading-snug text-muted">{text}</p>
     </div>
   );

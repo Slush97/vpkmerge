@@ -8,13 +8,13 @@ importers:
 
   .:
     dependencies:
-      '@fontsource-variable/geist':
+      '@fontsource-variable/libre-franklin':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource-variable/geist-mono':
+      '@fontsource/federo':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource-variable/inter':
+      '@fontsource/ibm-plex-mono':
         specifier: ^5.3.0
         version: 5.3.0
       '@tauri-apps/api':
@@ -66,14 +66,14 @@ importers:
 
 packages:
 
-  '@fontsource-variable/geist-mono@5.3.0':
-    resolution: {integrity: sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw==}
+  '@fontsource-variable/libre-franklin@5.3.0':
+    resolution: {integrity: sha512-PEQemCKVRtkLZJNpfvR4wG7x87c8iG05XJuEaX59ogMcAQpdtCZz/NXZUrXLJyvyx3/HD70W4LUppWLBdEdU2g==}
 
-  '@fontsource-variable/geist@5.3.0':
-    resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
+  '@fontsource/federo@5.3.0':
+    resolution: {integrity: sha512-w0zBtyzMYyqDP2lGwgFDqj0uaxs/angWugn3UOaR4DmQqiokOmxMDlLO3xJLEv22/gBjR6dlxOLqwxsN1Nn8iA==}
 
-  '@fontsource-variable/inter@5.3.0':
-    resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
+  '@fontsource/ibm-plex-mono@5.3.0':
+    resolution: {integrity: sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -995,11 +995,11 @@ packages:
 
 snapshots:
 
-  '@fontsource-variable/geist-mono@5.3.0': {}
+  '@fontsource-variable/libre-franklin@5.3.0': {}
 
-  '@fontsource-variable/geist@5.3.0': {}
+  '@fontsource/federo@5.3.0': {}
 
-  '@fontsource-variable/inter@5.3.0': {}
+  '@fontsource/ibm-plex-mono@5.3.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

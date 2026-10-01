@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentStatus, ProviderStatus, Settings } from "../../lib/api";
 import { Icon, type IconName } from "../../lib/icons";
-import { btn } from "../ui";
+import { btn, displayClass } from "../ui";
 import { AboutPanel } from "./AboutPanel";
 import { AccountsPanel } from "./AccountsPanel";
 import { AppearancePanel } from "./AppearancePanel";
@@ -58,54 +58,66 @@ export function SettingsModal({ initialTab, settings, providers, agents, onClose
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="pop-in flex h-[min(680px,100%)] w-[min(960px,100%)] overflow-hidden rounded-2xl bg-elevated shadow-pop outline-none focus-visible:outline-none"
+        className="pop-in deco-frame h-[min(680px,100%)] w-[min(960px,100%)] p-px outline-none [--frame-fill:var(--elevated)] [--notch:7px] focus-visible:outline-none"
       >
-        <nav aria-label="Settings sections" className="flex w-[224px] shrink-0 flex-col gap-0.5 border-r border-line bg-sidebar px-3 py-5">
-          <span className="px-3 pb-4 text-[17px] font-semibold tracking-[-0.01em]">Settings</span>
-          {tabs.map((t) => {
-            const on = t.id === tab;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                aria-current={on ? "page" : undefined}
-                className={`flex h-9 items-center gap-2.5 rounded-lg px-3 text-left text-[14px] transition-colors ${
-                  on ? "bg-active font-medium text-text" : "text-text-2 hover:bg-hover"
-                }`}
-              >
-                <Icon name={t.icon} size={16} className={on ? "text-accent-ink" : "text-muted"} />
-                <span>{t.label}</span>
+        <div className="deco-clip flex h-full [--notch:7px]">
+          <nav
+            aria-label="Settings sections"
+            className="grain flex w-[224px] shrink-0 flex-col gap-0.5 border-r-[3px] border-double border-line-strong bg-sidebar px-3 py-5"
+          >
+            <span className="px-3 pb-4 font-display text-[15px] font-normal uppercase tracking-[0.22em]">Settings</span>
+            {tabs.map((t) => {
+              const on = t.id === tab;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  aria-current={on ? "page" : undefined}
+                  className={`flex h-9 items-center gap-2.5 rounded-lg px-3 text-left text-[14px] transition-colors ${
+                    on
+                      ? "bg-active font-medium text-text shadow-[inset_2px_0_0_var(--accent)]"
+                      : "text-text-2 hover:bg-hover"
+                  }`}
+                >
+                  <Icon name={t.icon} size={16} className={on ? "text-accent-ink" : "text-muted"} />
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex shrink-0 items-center gap-4 pb-2 pl-8 pr-4 pt-5">
+              <h2 id="settings-title" className={`flex-1 text-[24px] ${displayClass}`}>
+                {current.label}
+              </h2>
+              <button type="button" aria-label="Close settings" onClick={onClose} className={btn.icon}>
+                <Icon name="x" size={17} />
               </button>
-            );
-          })}
-        </nav>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center gap-4 pb-2 pl-8 pr-4 pt-5">
-            <h2 id="settings-title" className="flex-1 text-[20px] font-semibold tracking-[-0.015em]">
-              {current.label}
-            </h2>
-            <button type="button" aria-label="Close settings" onClick={onClose} className={`${btn.icon} rounded-full`}>
-              <Icon name="x" size={17} />
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8 pt-3">
-            {tab === "accounts" && (
-              <AccountsPanel
-                providers={providers}
-                agents={agents}
-                settings={settings}
-                onSettingsChange={onSettingsChange}
-                onRefresh={onRefresh}
-              />
-            )}
-            {tab === "appearance" && <AppearancePanel settings={settings} onSettingsChange={onSettingsChange} />}
-            {tab === "model" && (
-              <ModelPanel settings={settings} providers={providers} agents={agents} onSettingsChange={onSettingsChange} />
-            )}
-            {tab === "mcp" && <McpPanel />}
-            {tab === "skills" && <SkillsPanel />}
-            {tab === "about" && <AboutPanel />}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8 pt-3">
+              {tab === "accounts" && (
+                <AccountsPanel
+                  providers={providers}
+                  agents={agents}
+                  settings={settings}
+                  onSettingsChange={onSettingsChange}
+                  onRefresh={onRefresh}
+                />
+              )}
+              {tab === "appearance" && <AppearancePanel settings={settings} onSettingsChange={onSettingsChange} />}
+              {tab === "model" && (
+                <ModelPanel
+                  settings={settings}
+                  providers={providers}
+                  agents={agents}
+                  onSettingsChange={onSettingsChange}
+                />
+              )}
+              {tab === "mcp" && <McpPanel />}
+              {tab === "skills" && <SkillsPanel />}
+              {tab === "about" && <AboutPanel />}
+            </div>
           </div>
         </div>
       </section>

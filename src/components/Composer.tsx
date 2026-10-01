@@ -61,7 +61,7 @@ export function Composer({
   };
 
   return (
-    <div className="w-full rounded-2xl bg-surface px-4 pb-3 pt-3.5 shadow-pop transition-shadow focus-within:shadow-[var(--pop-shadow),0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]">
+    <div className="deco-frame w-full px-4 pb-3 pt-3.5 focus-within:[--frame-line:var(--accent)]">
       <textarea
         ref={area}
         rows={rows}

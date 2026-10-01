@@ -12,7 +12,7 @@ import {
 import { describeChoice, sameChoice } from "../lib/choice";
 import { Icon } from "../lib/icons";
 import type { SettingsTab } from "./settings/SettingsModal";
-import { btn, inputClass, monoInputClass } from "./ui";
+import { btn, inputClass, labelClass, monoInputClass } from "./ui";
 
 type ListState = { status: "loading" } | { status: "ok"; models: ModelInfo[] } | { status: "error"; error: string };
 
@@ -218,7 +218,7 @@ export function ModelPicker({ settings, providers, agents, onChange, onOpenSetti
                 choose({ kind: "model", provider: manualProvider, model: manualId.trim() });
             }}
           >
-            <span className="text-[13px] font-semibold text-muted">Use a model ID directly</span>
+            <span className={labelClass}>Use a model ID directly</span>
             <div className="grid grid-cols-[128px_minmax(0,1fr)_auto] gap-2">
               <div className="relative">
                 <select
@@ -268,7 +268,7 @@ export function ModelPicker({ settings, providers, agents, onChange, onOpenSetti
 function Section({ title, busy, children }: { title: string; busy?: boolean; children: ReactNode }) {
   return (
     <section className="pt-2">
-      <div className="flex items-center gap-2 px-3 pb-1 text-[13px] font-semibold text-muted">
+      <div className={`flex items-center gap-2 px-3 pb-1 pt-1 ${labelClass}`}>
         <span>{title}</span>
         {busy && <Icon name="loader" size={12} className="spin text-running" />}
       </div>

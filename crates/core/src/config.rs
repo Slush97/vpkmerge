@@ -5,6 +5,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::AgentId;
+use crate::permissions::PermissionLevel;
 use crate::providers::ProviderId;
 
 /// What answers the next message.
@@ -37,6 +38,8 @@ pub struct Settings {
     pub openai_host_id: Option<String>,
     /// Folder ACP agents work in.
     pub agent_cwd: PathBuf,
+    /// What tools may do without asking, for every model and agent.
+    pub permission_level: PermissionLevel,
     pub theme: Theme,
     pub accent: String,
 }
@@ -51,6 +54,7 @@ impl Default for Settings {
             max_tool_rounds: 24,
             openai_host_id: None,
             agent_cwd: home_dir(),
+            permission_level: PermissionLevel::default(),
             theme: Theme::System,
             accent: "#0a84ff".into(),
         }
@@ -86,6 +90,7 @@ pub struct SettingsPatch {
     pub local_base_url: Option<String>,
     pub max_tool_rounds: Option<u32>,
     pub agent_cwd: Option<PathBuf>,
+    pub permission_level: Option<PermissionLevel>,
     pub theme: Option<Theme>,
     pub accent: Option<String>,
 }

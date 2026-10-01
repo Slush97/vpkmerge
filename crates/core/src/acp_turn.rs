@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::acp::{self, AgentId, AgentProcess, Inbound, PermissionOption};
 use crate::agent::{AgentEvent, Sink};
 use crate::app::App;
+use crate::permissions::{ActionKind, Decision, PendingPermission};
 use crate::providers::{Cancelled, Part, Role};
 
 const TRANSCRIPT_LIMIT: usize = 12_000;
@@ -172,7 +173,7 @@ impl App {
         let mut rx_open = true;
         let grace = tokio::time::sleep(Duration::MAX);
         tokio::pin!(grace);
-        let prompt = process.prompt(&acp_session, Value::Array(blocks));
+        let prompt = process.prompt(&acp_session, Value::Array(blocks), self.settings().permission_level);
         tokio::pin!(prompt);
 
         let outcome = loop {
@@ -188,7 +189,7 @@ impl App {
                         if cancelled {
                             process.answer_permission(rpc_id, None).await;
                         } else {
-                            asked.push(self.ask_permission(&process, rpc_id, &params, sink));
+                            asked.extend(self.on_permission(&process, rpc_id, &params, sink).await);
                         }
                     }
                     None => rx_open = false,
@@ -273,8 +274,15 @@ impl App {
         Ok((sid, true))
     }
 
-    fn ask_permission(&self, process: &Arc<AgentProcess>, rpc_id: Value, params: &Value, sink: Sink<'_>) -> String {
-        let request_id = uuid::Uuid::new_v4().to_string();
+    /// Answers an agent's approval request from the permission level when the
+    /// level settles it. Otherwise shows the prompt and returns its id.
+    async fn on_permission(
+        &self,
+        process: &Arc<AgentProcess>,
+        rpc_id: Value,
+        params: &Value,
+        sink: Sink<'_>,
+    ) -> Option<String> {
         let title = params["toolCall"]["title"]
             .as_str()
             .filter(|t| !t.is_empty())
@@ -282,23 +290,43 @@ impl App {
             .to_owned();
         let options: Vec<PermissionOption> =
             serde_json::from_value(params["options"].clone()).unwrap_or_default();
-        self.permissions
-            .lock()
-            .unwrap()
-            .insert(request_id.clone(), (Arc::clone(process), rpc_id));
+        let option = |kind: &str| options.iter().find(|o| o.kind == kind).map(|o| o.option_id.as_str());
+        let kind = ActionKind::from_acp(params["toolCall"]["kind"].as_str());
+        match (self.settings().permission_level.decide(kind), option("allow_once")) {
+            (Decision::Allow, Some(allow)) => {
+                process.answer_permission(rpc_id, Some(allow)).await;
+                return None;
+            }
+            (Decision::Deny, _) => {
+                process.answer_permission(rpc_id, option("reject_once")).await;
+                sink(AgentEvent::Notice {
+                    message: format!("Read only blocked: {title}"),
+                });
+                return None;
+            }
+            _ => {}
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        self.permissions.lock().unwrap().insert(
+            request_id.clone(),
+            PendingPermission::Agent {
+                process: Arc::clone(process),
+                rpc_id,
+            },
+        );
         sink(AgentEvent::PermissionRequested {
             request_id: request_id.clone(),
             title,
             options,
         });
-        request_id
+        Some(request_id)
     }
 
     /// Answers any still-open prompts from this turn as cancelled.
     async fn drop_permissions(&self, ids: &[String], sink: Sink<'_>) {
         for id in ids {
             let open = self.permissions.lock().unwrap().remove(id);
-            if let Some((process, rpc_id)) = open {
+            if let Some(PendingPermission::Agent { process, rpc_id }) = open {
                 process.answer_permission(rpc_id, None).await;
                 sink(AgentEvent::PermissionResolved { request_id: id.clone() });
             }

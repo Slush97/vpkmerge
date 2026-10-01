@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -11,6 +11,7 @@ use crate::acp::{AgentId, AgentProcess};
 use crate::auth::{self, OpenUrl};
 use crate::config::{Settings, SettingsPatch};
 use crate::mcp::{self, McpManager};
+use crate::permissions::PendingPermission;
 use crate::providers::{self, Endpoint, ModelInfo, ProviderId};
 use crate::secrets::{Credential, Vault};
 use crate::skills::{self, Skill};
@@ -33,7 +34,9 @@ pub struct App {
     /// (our session, agent) to (ACP session id, agent process instance).
     pub(crate) acp_sessions: Mutex<HashMap<(String, AgentId), (String, u64)>>,
     /// Permission prompts waiting on the user, by request id.
-    pub(crate) permissions: Mutex<HashMap<String, (Arc<AgentProcess>, serde_json::Value)>>,
+    pub(crate) permissions: Mutex<HashMap<String, PendingPermission>>,
+    /// (session, tool) pairs the user allowed for the rest of that session.
+    pub(crate) tool_grants: Mutex<HashSet<(String, String)>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +97,7 @@ impl App {
             agent_errors: Mutex::new(HashMap::new()),
             acp_sessions: Mutex::new(HashMap::new()),
             permissions: Mutex::new(HashMap::new()),
+            tool_grants: Mutex::new(HashSet::new()),
         }))
     }
 
@@ -126,6 +130,9 @@ impl App {
         self.edit_settings(|s| {
             if let Some(dir) = patch.agent_cwd {
                 s.agent_cwd = dir;
+            }
+            if let Some(level) = patch.permission_level {
+                s.permission_level = level;
             }
             if let Some(theme) = patch.theme {
                 s.theme = theme;
@@ -426,13 +433,18 @@ impl App {
     }
 
     pub async fn respond_permission(&self, request_id: &str, option_id: Option<&str>) -> anyhow::Result<()> {
-        let (process, rpc_id) = self
+        let pending = self
             .permissions
             .lock()
             .unwrap()
             .remove(request_id)
             .context("that request was already answered or has expired")?;
-        process.answer_permission(rpc_id, option_id).await;
+        match pending {
+            PendingPermission::Agent { process, rpc_id } => process.answer_permission(rpc_id, option_id).await,
+            PendingPermission::Tool(answer) => {
+                let _ = answer.send(option_id.map(str::to_owned));
+            }
+        }
         Ok(())
     }
 

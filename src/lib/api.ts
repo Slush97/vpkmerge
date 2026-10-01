@@ -34,7 +34,7 @@ export type AgentEvent =
   | { type: "toolStarted"; callId: string; name: string }
   | { type: "sessionRenamed"; sessionId: string; title: string }
   | { type: "notice"; message: string }
-  /** An ACP agent wants approval before running a tool. Answer with respondPermission. */
+  /** A tool needs the user's approval before it runs. Answer with respondPermission. */
   | { type: "permissionRequested"; requestId: string; title: string; options: PermissionOption[] }
   | { type: "permissionResolved"; requestId: string }
   | { type: "finished" }
@@ -51,6 +51,9 @@ export type Choice =
 
 export type Theme = "system" | "light" | "dark";
 
+/** What tools may do without asking. One setting for every model and agent. */
+export type PermissionLevel = "readOnly" | "ask" | "autoEdit" | "fullAccess";
+
 export interface Settings {
   model: Choice | null;
   localBaseUrl: string;
@@ -60,6 +63,7 @@ export interface Settings {
   openaiHostId: string | null;
   /** Working folder ACP agents run in. */
   agentCwd: string;
+  permissionLevel: PermissionLevel;
   theme: Theme;
   /** Accent color as #rrggbb. */
   accent: string;
@@ -70,6 +74,7 @@ export interface SettingsPatch {
   localBaseUrl?: string;
   maxToolRounds?: number;
   agentCwd?: string;
+  permissionLevel?: PermissionLevel;
   theme?: Theme;
   accent?: string;
 }

@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 
 use super::{Inbound, Rpc, RpcError, TURN_TIMEOUT};
 use crate::mcp::ConfigFile;
+use crate::permissions::PermissionLevel;
 
 const MAX_OUTPUT: usize = 20_000;
 
@@ -19,8 +20,7 @@ pub(super) struct TurnWaiter {
     done: Option<oneshot::Sender<Result<String, RpcError>>>,
 }
 
-/// `thread/start` params. Our MCP servers ride along as config overrides;
-/// approval and sandbox policy stay whatever the user set in Codex.
+/// `thread/start` params. Our MCP servers ride along as config overrides.
 pub(super) fn thread_start(cwd: &Path, config: &ConfigFile) -> Value {
     let mut overrides = serde_json::Map::new();
     for (name, c) in config.mcp_servers.iter().filter(|(_, c)| !c.disabled) {
@@ -36,7 +36,24 @@ pub(super) fn thread_start(cwd: &Path, config: &ConfigFile) -> Value {
     json!({ "cwd": cwd, "config": overrides })
 }
 
-pub(super) async fn run_turn(rpc: &Rpc, thread_id: &str, blocks: &Value) -> Result<String, RpcError> {
+/// Codex's approval policy and sandbox for a permission level. Read only and
+/// Full access never ask, so the sandbox is what holds the line there. The
+/// levels in between make Codex ask about everything it does not know to be
+/// harmless, and the level answers those requests.
+fn policy(level: PermissionLevel) -> (&'static str, &'static str) {
+    match level {
+        PermissionLevel::ReadOnly => ("never", "readOnly"),
+        PermissionLevel::Ask | PermissionLevel::AutoEdit => ("untrusted", "workspaceWrite"),
+        PermissionLevel::FullAccess => ("never", "dangerFullAccess"),
+    }
+}
+
+pub(super) async fn run_turn(
+    rpc: &Rpc,
+    thread_id: &str,
+    blocks: &Value,
+    level: PermissionLevel,
+) -> Result<String, RpcError> {
     let (tx, rx) = oneshot::channel();
     rpc.codex_turns.lock().unwrap().insert(
         thread_id.to_owned(),
@@ -49,10 +66,15 @@ pub(super) async fn run_turn(rpc: &Rpc, thread_id: &str, blocks: &Value) -> Resu
         .filter_map(|b| b["text"].as_str())
         .map(|text| json!({ "type": "text", "text": text, "text_elements": [] }))
         .collect();
-    match rpc
-        .request("turn/start", json!({ "threadId": thread_id, "input": input }), Duration::from_secs(120))
-        .await
-    {
+    // Sent with every turn, so a level change reaches a thread that is already running.
+    let (approval, sandbox) = policy(level);
+    let params = json!({
+        "threadId": thread_id,
+        "input": input,
+        "approvalPolicy": approval,
+        "sandboxPolicy": { "type": sandbox },
+    });
+    match rpc.request("turn/start", params, Duration::from_secs(120)).await {
         Ok(started) => {
             if let Some(w) = rpc.codex_turns.lock().unwrap().get_mut(thread_id) {
                 w.turn_id = started["turn"]["id"].as_str().map(str::to_owned);
@@ -94,8 +116,9 @@ pub(super) async fn dispatch(rpc: &Arc<Rpc>, method: &str, msg: &Value) {
     if let Some(id) = msg.get("id") {
         match method {
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                let kind = if method == "item/fileChange/requestApproval" { "edit" } else { "execute" };
                 let permission = json!({
-                    "toolCall": { "title": approval_title(method, params) },
+                    "toolCall": { "title": approval_title(method, params), "kind": kind },
                     "options": [
                         { "optionId": "accept", "name": "Allow once", "kind": "allow_once" },
                         { "optionId": "acceptForSession", "name": "Allow for this session", "kind": "allow_always" },

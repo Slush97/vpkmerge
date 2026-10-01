@@ -20,6 +20,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::permissions::PermissionLevel;
+
 /// ACP's "authentication required" error.
 const AUTH_REQUIRED: i64 = -32000;
 const TURN_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
@@ -74,7 +76,10 @@ impl AgentId {
         match self {
             Self::Grok => {
                 let bin = find_program("grok").or_else(|| existing(home.join(".grok/bin/grok")))?;
-                Some((bin, vec!["agent".into(), "stdio".into()]))
+                // Grok has to ask before it acts, whatever its own config says,
+                // so that the app's permission level is what answers.
+                let args = ["--permission-mode", "default", "agent", "stdio"];
+                Some((bin, args.map(String::from).to_vec()))
             }
             Self::Codex => {
                 let bin = find_program("codex").or_else(|| existing(home.join(".npm-global/bin/codex")))?;
@@ -395,9 +400,9 @@ impl AgentProcess {
     }
 
     /// Runs one prompt turn and returns the ACP stop reason.
-    pub async fn prompt(&self, session_id: &str, blocks: Value) -> anyhow::Result<String> {
+    pub async fn prompt(&self, session_id: &str, blocks: Value, level: PermissionLevel) -> anyhow::Result<String> {
         if self.rpc.dialect == Dialect::CodexAppServer {
-            return codex_app::run_turn(&self.rpc, session_id, &blocks)
+            return codex_app::run_turn(&self.rpc, session_id, &blocks, level)
                 .await
                 .map_err(|e| self.explain(&e));
         }

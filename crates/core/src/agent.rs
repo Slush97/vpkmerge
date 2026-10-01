@@ -3,10 +3,12 @@
 
 use anyhow::bail;
 use serde::Serialize;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::config::Choice;
+use crate::permissions::{self, ActionKind, Decision, PendingPermission};
 use crate::providers::{self, Cancelled, ChatMessage, CompletionRequest, Delta, Part, Role, ToolSpec};
 use crate::skills;
 use crate::store::{StoredMessage, UNTITLED};
@@ -15,6 +17,11 @@ const BASE_INSTRUCTIONS: &str = "You are the assistant inside Workbench, a local
 for making Deadlock mods (VPK merging, Blender, sound and texture edits). Use the tools you have \
 when they help, and say plainly when something is outside what they can do. Keep answers short and \
 concrete. Never claim a tool ran or succeeded unless its result says so.";
+
+/// Tool results the model gets when a call is not allowed to run.
+const BLOCKED: &str = "Blocked: Workbench is set to Read only, so this tool cannot run. \
+Do not retry it. Tell the user what you wanted to do.";
+const DECLINED: &str = "The user declined this tool call. Do not retry it. Ask what they want instead.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -168,13 +175,17 @@ impl App {
             }
 
             for (call_id, name, arguments) in calls {
-                sink(AgentEvent::ToolStarted {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                });
-                let outcome = tokio::select! {
-                    () = cancel.cancelled() => return Err(Cancelled.into()),
-                    r = self.run_tool(&name, &arguments, &skill_list) => r,
+                let outcome = if let Some(refusal) = self.authorize(session_id, &name, sink, cancel).await? {
+                    Ok((refusal.to_owned(), true))
+                } else {
+                    sink(AgentEvent::ToolStarted {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                    });
+                    tokio::select! {
+                        () = cancel.cancelled() => return Err(Cancelled.into()),
+                        r = self.run_tool(&name, &arguments, &skill_list) => r,
+                    }
                 };
                 let (output, is_error) = match outcome {
                     Ok(pair) => pair,
@@ -198,6 +209,70 @@ impl App {
             "stopped after {} tool rounds without a final answer (raise the limit in Settings)",
             settings.max_tool_rounds
         )
+    }
+
+    /// Applies the permission level to one tool call. Returns what to tell the
+    /// model when the call may not run.
+    async fn authorize(
+        &self,
+        session_id: &str,
+        name: &str,
+        sink: Sink<'_>,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<Option<&'static str>> {
+        // Skill tools only read skill files, so MCP tools are the ones to gate.
+        let Some((title, read_only)) = self.mcp.describe(name).await else {
+            return Ok(None);
+        };
+        let kind = if read_only { ActionKind::Read } else { ActionKind::Other };
+        Ok(match self.settings().permission_level.decide(kind) {
+            Decision::Allow => None,
+            Decision::Deny => Some(BLOCKED),
+            Decision::Ask => (!self.confirm(session_id, name, title, sink, cancel).await?).then_some(DECLINED),
+        })
+    }
+
+    /// Asks the user about one tool call, unless they already allowed that
+    /// tool for the rest of the session.
+    async fn confirm(
+        &self,
+        session_id: &str,
+        name: &str,
+        title: String,
+        sink: Sink<'_>,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<bool> {
+        let grant = (session_id.to_owned(), name.to_owned());
+        if self.tool_grants.lock().unwrap().contains(&grant) {
+            return Ok(true);
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (answer, answered) = oneshot::channel();
+        self.permissions
+            .lock()
+            .unwrap()
+            .insert(request_id.clone(), PendingPermission::Tool(answer));
+        sink(AgentEvent::PermissionRequested {
+            request_id: request_id.clone(),
+            title,
+            options: permissions::tool_options(),
+        });
+        let choice = tokio::select! {
+            () = cancel.cancelled() => {
+                self.permissions.lock().unwrap().remove(&request_id);
+                sink(AgentEvent::PermissionResolved { request_id });
+                return Err(Cancelled.into());
+            }
+            choice = answered => choice.ok().flatten(),
+        };
+        match choice.as_deref() {
+            Some(permissions::ALLOW_SESSION) => {
+                self.tool_grants.lock().unwrap().insert(grant);
+                Ok(true)
+            }
+            Some(permissions::ALLOW_ONCE) => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     async fn run_tool(&self, name: &str, arguments: &str, skill_list: &[skills::Skill]) -> anyhow::Result<(String, bool)> {
@@ -235,5 +310,80 @@ impl App {
             title,
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    const TOOL: &str = "mcp__blender__run";
+
+    fn open() -> (Arc<App>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("wb-permissions-{}", uuid::Uuid::new_v4()));
+        let app = App::open(&dir, crate::mcp::ConfigFile::default()).unwrap();
+        (app, dir)
+    }
+
+    /// Runs `confirm`, answering any prompt with `answer`, and counts prompts.
+    async fn confirm(app: &Arc<App>, session: &str, answer: Option<&'static str>, prompts: &Arc<AtomicUsize>) -> bool {
+        let responder = Arc::clone(app);
+        let count = Arc::clone(prompts);
+        let sink = move |event: AgentEvent| {
+            if let AgentEvent::PermissionRequested { request_id, .. } = event {
+                count.fetch_add(1, Ordering::SeqCst);
+                let app = Arc::clone(&responder);
+                tokio::spawn(async move { app.respond_permission(&request_id, answer).await });
+            }
+        };
+        app.confirm(session, TOOL, "blender.run".into(), &sink, &CancellationToken::new())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_session_grant_stops_the_prompts_for_that_session_only() {
+        let (app, dir) = open();
+        let prompts = Arc::new(AtomicUsize::new(0));
+        assert!(confirm(&app, "a", Some(permissions::ALLOW_SESSION), &prompts).await);
+        assert!(confirm(&app, "a", None, &prompts).await);
+        assert_eq!(prompts.load(Ordering::SeqCst), 1);
+        assert!(!confirm(&app, "b", None, &prompts).await);
+        assert_eq!(prompts.load(Ordering::SeqCst), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn allowing_once_asks_again_next_time() {
+        let (app, dir) = open();
+        let prompts = Arc::new(AtomicUsize::new(0));
+        assert!(confirm(&app, "a", Some(permissions::ALLOW_ONCE), &prompts).await);
+        assert!(!confirm(&app, "a", Some("deny"), &prompts).await);
+        assert_eq!(prompts.load(Ordering::SeqCst), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_turn_withdraws_the_prompt() {
+        let (app, dir) = open();
+        let cancel = CancellationToken::new();
+        let resolved = Arc::new(AtomicUsize::new(0));
+        let (stop, seen) = (cancel.clone(), Arc::clone(&resolved));
+        let sink = move |event: AgentEvent| match event {
+            AgentEvent::PermissionRequested { .. } => stop.cancel(),
+            AgentEvent::PermissionResolved { .. } => {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
+        };
+        let outcome = app.confirm("a", TOOL, "blender.run".into(), &sink, &cancel).await;
+        assert!(outcome.unwrap_err().is::<Cancelled>());
+        assert_eq!(resolved.load(Ordering::SeqCst), 1);
+        assert!(app.permissions.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

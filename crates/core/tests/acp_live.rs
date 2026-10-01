@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use workbench_core::acp::AgentId;
 use workbench_core::config::{Choice, SettingsPatch};
+use workbench_core::permissions::PermissionLevel;
 use workbench_core::providers::{Part, Role};
 use workbench_core::{AgentEvent, App};
 
@@ -83,17 +84,71 @@ async fn one_turn(agent: AgentId) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Asks the agent to create a file under `level`. Returns whether the file
+/// exists afterwards and how many permission prompts reached the user.
+async fn write_under(agent: AgentId, level: PermissionLevel) -> (bool, usize) {
+    let dir = std::env::temp_dir().join(format!("workbench-acp-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = App::open(&dir, workbench_core::mcp::ConfigFile::default()).unwrap();
+    app.update_settings(SettingsPatch {
+        model: Some(Choice::Agent { agent }),
+        agent_cwd: Some(dir.clone()),
+        permission_level: Some(level),
+        ..SettingsPatch::default()
+    })
+    .unwrap();
+    let session = app.create_session().unwrap();
+    let prompts = Arc::new(Mutex::new(0usize));
+    let asked = Arc::clone(&prompts);
+    let sink = move |e: AgentEvent| {
+        if matches!(e, AgentEvent::PermissionRequested { .. }) {
+            *asked.lock().unwrap() += 1;
+        }
+    };
+    // A blocked write ends some agents' turns early, which is not a failure here.
+    let outcome = app
+        .run_turn(
+            &session.id,
+            "Create a file named made.txt in the current directory containing the word hi. \
+             If you cannot, say so and stop.",
+            &sink,
+        )
+        .await;
+    let made = dir.join("made.txt").exists();
+    let prompts = *prompts.lock().unwrap();
+    println!("{} under {level:?}: made={made} prompts={prompts} outcome={outcome:?}", agent.name());
+    app.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+    (made, prompts)
+}
+
+fn selected() -> Vec<AgentId> {
+    let wanted = std::env::var("WORKBENCH_ACP_AGENTS").unwrap_or_else(|_| "grok,codex".into());
+    AgentId::ALL
+        .into_iter()
+        .filter(|agent| {
+            let key = match agent {
+                AgentId::Grok => "grok",
+                AgentId::Codex => "codex",
+            };
+            wanted.split(',').any(|w| w.trim() == key)
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "talks to real agents with the user's accounts"]
 async fn agents_answer() {
-    let wanted = std::env::var("WORKBENCH_ACP_AGENTS").unwrap_or_else(|_| "grok,codex".into());
-    for agent in AgentId::ALL {
-        let key = match agent {
-            AgentId::Grok => "grok",
-            AgentId::Codex => "codex",
-        };
-        if wanted.split(',').any(|w| w.trim() == key) {
-            one_turn(agent).await;
-        }
+    for agent in selected() {
+        one_turn(agent).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "talks to real agents with the user's accounts"]
+async fn permission_level_holds() {
+    for agent in selected() {
+        assert_eq!(write_under(agent, PermissionLevel::ReadOnly).await, (false, 0));
+        assert_eq!(write_under(agent, PermissionLevel::FullAccess).await, (true, 0));
     }
 }

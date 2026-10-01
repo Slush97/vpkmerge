@@ -98,11 +98,19 @@ struct Slot {
     state: State,
 }
 
+struct Route {
+    server: String,
+    tool: String,
+    /// The server's own `readOnlyHint`. Servers are ones the user configured
+    /// or that ship with the app, so the claim is taken at its word.
+    read_only: bool,
+}
+
 #[derive(Default)]
 pub struct McpManager {
     servers: RwLock<BTreeMap<String, Slot>>,
-    /// Model-facing tool name to (server, tool).
-    routes: RwLock<HashMap<String, (String, String)>>,
+    /// By model-facing tool name.
+    routes: RwLock<HashMap<String, Route>>,
 }
 
 impl McpManager {
@@ -166,7 +174,12 @@ impl McpManager {
         for (server, slot) in servers.iter() {
             if let State::Connected { tools, .. } = &slot.state {
                 for tool in tools {
-                    routes.insert(qualified(server, &tool.name), (server.clone(), tool.name.to_string()));
+                    let route = Route {
+                        server: server.clone(),
+                        tool: tool.name.to_string(),
+                        read_only: tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(true),
+                    };
+                    routes.insert(qualified(server, &tool.name), route);
                 }
             }
         }
@@ -230,6 +243,13 @@ impl McpManager {
         self.routes.read().await.contains_key(name)
     }
 
+    /// A display title for the tool and whether its server marks it read-only.
+    pub async fn describe(&self, qualified_name: &str) -> Option<(String, bool)> {
+        let routes = self.routes.read().await;
+        let route = routes.get(qualified_name)?;
+        Some((format!("{}.{}", route.server, route.tool), route.read_only))
+    }
+
     /// Returns the tool output as text and whether the server flagged an error.
     pub async fn call(&self, qualified_name: &str, arguments: &str) -> anyhow::Result<(String, bool)> {
         let (server, tool) = self
@@ -237,7 +257,7 @@ impl McpManager {
             .read()
             .await
             .get(qualified_name)
-            .cloned()
+            .map(|r| (r.server.clone(), r.tool.clone()))
             .with_context(|| format!("unknown tool {qualified_name}"))?;
         let client = match &self.servers.read().await.get(&server).map(|s| &s.state) {
             Some(State::Connected { client, .. }) => Arc::clone(client),

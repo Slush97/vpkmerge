@@ -3,6 +3,7 @@ import type { AgentStatus, ProviderStatus, Settings } from "../lib/api";
 import { Icon } from "../lib/icons";
 import type { SettingsTab } from "./settings/SettingsModal";
 import { ModelPicker } from "./ModelPicker";
+import { PermissionPicker } from "./PermissionPicker";
 
 interface Props {
   busy: boolean;
@@ -84,6 +85,7 @@ export function Composer({
           onChange={onSettingsChange}
           onOpenSettings={onOpenSettings}
         />
+        <PermissionPicker settings={settings} onChange={onSettingsChange} />
         <span className="flex-1" />
         {!busy && hasModel && text.trim() && (
           <span className="hidden whitespace-nowrap text-[13px] text-faint sm:inline">Enter to send</span>

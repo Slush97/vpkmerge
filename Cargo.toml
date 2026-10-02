@@ -6,6 +6,7 @@ members = [
     "gui/src-tauri",
     "morphic",
     "vpkmerge-harness",
+    "vpkmerge-mcp",
 ]
 exclude = ["vendor/valve_pak"]
 

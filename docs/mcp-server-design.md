@@ -1,8 +1,22 @@
 # Design: `vpkmerge-mcp` (local MCP server)
 
-**Status:** proposal / not yet built
+**Status:** M0 to M3 built 2026-09-30 in `vpkmerge-mcp/` (see its README). M4 `install_mod` and M5 auto-loudness are not built.
 **Date:** 2026-06-26
 **Owner:** slush97
+
+**As built, where it differs from this proposal:**
+- No generic `AddonBuild` struct. The one-call core functions return their own reports:
+  `swap_event_to_addon` -> `EventSwap`, `swap_clip_to_addon` -> `ClipSwap`,
+  `build_icon_addon` -> `Vec<IconReplacement>`, plus `prepare_swap_audio`.
+- Three tools beyond the ten: `game_status` (install found, staging dir, addon slots)
+  and `search_docs` / `read_doc` (the modding knowledge base, embedded in the binary).
+- `browse_sounds` has a third kind, `shared`, for events outside any one hero's file.
+  Build 2026-09-29 moved the melee swing there, so "give Seven a vine-boom melee" is no
+  longer a per-hero swap.
+- `swap_hero_sound` does not require `hero`: it finds the defining soundevents file
+  from the event name, and warns when the event's clips are also played by other heroes.
+- Hero identity is an alias join (display name, roster codename, asset namespaces), not
+  a straight `build_hero_roster` lookup, because the indexes key heroes differently.
 
 A local [Model Context Protocol](https://modelcontextprotocol.io) server that exposes
 `vpkmerge-core`'s asset-forge engine as a toolbox an LLM client (Claude Desktop, Claude
@@ -224,6 +238,10 @@ Backed by the proposed `soundswap::swap_clip_to_addon` (donor read → `mint_swa
 ### 4.3 Image tools
 
 #### `create_icon_mod`
+Shipped as `replace_textures` (optional `maskPath` and `alpha` per replacement, backed by
+`build_texture_addon`), alongside `list_hero_textures` and `map_texture_regions` for
+hero skin painting. See `vpkmerge-mcp/README.md`.
+
 Replace one or more base textures (hero cards, ability icons, item icons) with user PNGs.
 ```jsonc
 {

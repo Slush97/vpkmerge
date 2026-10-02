@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PermissionOption, StoredMessage } from "../lib/api";
 import { Icon } from "../lib/icons";
+import type { ModelPreview } from "../lib/preview";
 import type { PermissionRequest, TurnState } from "../lib/turns";
 import { Markdown } from "./Markdown";
 import { ToolCard, type ToolResult } from "./ToolCard";
@@ -10,9 +11,10 @@ interface Props {
   messages: StoredMessage[];
   turn: TurnState | undefined;
   onPermission: (requestId: string, optionId: string | null) => void;
+  onPreview: (preview: ModelPreview) => void;
 }
 
-export function MessageList({ messages, turn, onPermission }: Props) {
+export function MessageList({ messages, turn, onPermission, onPreview }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const busy = turn?.busy ?? false;
@@ -43,7 +45,9 @@ export function MessageList({ messages, turn, onPermission }: Props) {
         {messages.map((m) => {
           if (m.role === "user") return <UserMessage key={m.id} message={m} />;
           if (m.role === "assistant")
-            return <AssistantMessage key={m.id} message={m} results={results} pending={busy} />;
+            return (
+              <AssistantMessage key={m.id} message={m} results={results} pending={busy} onPreview={onPreview} />
+            );
           return null;
         })}
         {turn && busy && <LiveDraft turn={turn} />}
@@ -90,10 +94,12 @@ function AssistantMessage({
   message,
   results,
   pending,
+  onPreview,
 }: {
   message: StoredMessage;
   results: Map<string, ToolResult>;
   pending: boolean;
+  onPreview: (preview: ModelPreview) => void;
 }) {
   return (
     <div className="flex flex-col gap-3.5">
@@ -104,7 +110,15 @@ function AssistantMessage({
           case "reasoning":
             return <Thinking key={i} text={p.text} live={false} />;
           case "toolCall":
-            return <ToolCard key={p.id || i} call={p} result={results.get(p.id)} pending={pending} />;
+            return (
+              <ToolCard
+                key={p.id || i}
+                call={p}
+                result={results.get(p.id)}
+                pending={pending}
+                onPreview={onPreview}
+              />
+            );
           default:
             return null;
         }

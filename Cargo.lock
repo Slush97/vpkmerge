@@ -5753,6 +5753,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gtk",
+ "percent-encoding",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

@@ -340,7 +340,7 @@ async fn shutdown(state: State) {
 }
 
 /// Provider tool names allow `[A-Za-z0-9_-]{1,64}`.
-fn qualified(server: &str, tool: &str) -> String {
+pub(crate) fn qualified(server: &str, tool: &str) -> String {
     let clean = |s: &str| -> String {
         s.chars()
             .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })

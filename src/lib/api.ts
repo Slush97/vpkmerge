@@ -1,6 +1,6 @@
 // Typed wrappers over the Tauri commands in src-tauri/src/lib.rs.
 // Field names mirror the Rust structs (serde camelCase).
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 export type ProviderId = "openai" | "xai" | "openrouter" | "deepseek" | "local";
 export type Role = "user" | "assistant" | "tool";
@@ -60,6 +60,8 @@ export interface Settings {
   skillDirs: string[];
   disabledSkills: string[];
   maxToolRounds: number;
+  /** Extra instructions for provider models, appended to the built-in ones. */
+  systemPrompt: string;
   openaiHostId: string | null;
   /** Working folder ACP agents run in. */
   agentCwd: string;
@@ -73,6 +75,7 @@ export interface SettingsPatch {
   model?: Choice;
   localBaseUrl?: string;
   maxToolRounds?: number;
+  systemPrompt?: string;
   agentCwd?: string;
   permissionLevel?: PermissionLevel;
   theme?: Theme;
@@ -185,6 +188,14 @@ export const api = {
   openDataDir: () => invoke<void>("open_data_dir"),
   /** http(s) only; opens in the system browser. */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
+  /** Where to fetch a .glb a tool result points at: the app's `preview` scheme, not IPC. */
+  previewUrl: (path: string) => convertFileSrc(path, "preview"),
+  /** Animations a hero preview can play, from the built-in vpkmerge server. */
+  previewAnimations: (hero: string, vpk: string | null) =>
+    invoke<{ codename: string; animations: string[] }>("preview_animations", { hero, vpk }),
+  /** One animation as a skeleton-only .glb, to play on a preview model. */
+  previewAnimation: (hero: string, vpk: string | null, animation: string) =>
+    invoke<ArrayBuffer>("preview_animation", { hero, vpk, animation }),
 };
 
 /** Tauri rejects with the Rust error string. */

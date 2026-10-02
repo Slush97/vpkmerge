@@ -4,6 +4,7 @@ import type { ChoiceInfo } from "../lib/choice";
 import { groupSessions } from "../lib/format";
 import { Icon } from "../lib/icons";
 import type { TurnState } from "../lib/turns";
+import { ResizeHandle, useStoredWidth } from "./ResizeHandle";
 import { btn, Dot, Kbd, labelClass, Mark, SrOnly } from "./ui";
 
 interface SidebarProps {
@@ -79,6 +80,7 @@ function Expanded({
 }: SidebarProps) {
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const size = useStoredWidth("workbench.sidebarWidth", 264, 200, 480);
 
   useEffect(() => {
     if (searchFocusSignal) searchRef.current?.focus();
@@ -90,7 +92,14 @@ function Expanded({
   }, [sessions, query]);
 
   return (
-    <nav aria-label="Sessions" className={`flex h-full w-[264px] shrink-0 flex-col ${pane}`}>
+    <nav aria-label="Sessions" style={{ width: size.width }} className={`relative flex h-full shrink-0 flex-col ${pane}`}>
+      <ResizeHandle
+        side="right"
+        label="Resize sidebar"
+        width={size.width}
+        onResize={size.setWidth}
+        onReset={size.reset}
+      />
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 pl-4 pr-2">
         <Mark />
         <span data-tauri-drag-region className="font-display text-[15px] font-normal uppercase tracking-[0.22em]">

@@ -15,6 +15,7 @@ interface Props {
 export function ModelPanel({ settings, providers, agents, onSettingsChange }: Props) {
   const [rounds, setRounds] = useState(String(settings?.maxToolRounds ?? 24));
   const [cwd, setCwd] = useState(settings?.agentCwd ?? "");
+  const [prompt, setPrompt] = useState(settings?.systemPrompt ?? "");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const choice = settings?.model;
   const info = describeChoice(choice, providers, agents);
@@ -26,6 +27,7 @@ export function ModelPanel({ settings, providers, agents, onSettingsChange }: Pr
       onSettingsChange(s);
       setRounds(String(s.maxToolRounds));
       setCwd(s.agentCwd);
+      setPrompt(s.systemPrompt);
       setMessage({ ok: true, text: done });
     } catch (e) {
       setMessage({ ok: false, text: errorText(e) });
@@ -107,6 +109,32 @@ export function ModelPanel({ settings, providers, agents, onSettingsChange }: Pr
         title="Built-in harness"
         description="Applies to provider models, which Workbench runs itself with your MCP tools and skills."
       >
+        <Row className="py-3">
+          <form
+            className="flex min-w-0 flex-1 flex-col gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save({ systemPrompt: prompt }, "System prompt saved.");
+            }}
+          >
+            <label htmlFor="system-prompt" className="text-[14px] text-text">
+              System prompt
+            </label>
+            <textarea
+              id="system-prompt"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={6}
+              placeholder="Extra instructions sent with every message, after Workbench's own."
+              className="selectable min-h-[120px] w-full resize-y rounded-lg bg-elevated px-3 py-2 text-[14px] leading-relaxed text-text shadow-card outline-none transition-shadow placeholder:text-faint focus:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_color-mix(in_srgb,var(--accent)_28%,transparent)] focus-visible:outline-none"
+            />
+            <div className="flex justify-end">
+              <button type="submit" disabled={prompt === (settings?.systemPrompt ?? "")} className={btn.secondary}>
+                Save
+              </button>
+            </div>
+          </form>
+        </Row>
         <Row>
           <form
             className="flex min-w-0 flex-1 items-center gap-3"

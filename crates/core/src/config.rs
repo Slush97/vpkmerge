@@ -34,6 +34,8 @@ pub struct Settings {
     pub skill_dirs: Vec<PathBuf>,
     pub disabled_skills: BTreeSet<String>,
     pub max_tool_rounds: u32,
+    /// Extra instructions for provider models, appended to the built-in ones.
+    pub system_prompt: String,
     /// `ext_agent_host_id` for Sign in with ChatGPT. Chosen once per install.
     pub openai_host_id: Option<String>,
     /// Folder ACP agents work in.
@@ -52,6 +54,7 @@ impl Default for Settings {
             skill_dirs: Vec::new(),
             disabled_skills: BTreeSet::new(),
             max_tool_rounds: 24,
+            system_prompt: String::new(),
             openai_host_id: None,
             agent_cwd: home_dir(),
             permission_level: PermissionLevel::default(),
@@ -89,6 +92,7 @@ pub struct SettingsPatch {
     pub model: Option<Choice>,
     pub local_base_url: Option<String>,
     pub max_tool_rounds: Option<u32>,
+    pub system_prompt: Option<String>,
     pub agent_cwd: Option<PathBuf>,
     pub permission_level: Option<PermissionLevel>,
     pub theme: Option<Theme>,

@@ -15,7 +15,7 @@ pub mod skills;
 pub mod store;
 
 pub use agent::AgentEvent;
-pub use app::{AgentStatus, App, AppInfo, ProviderStatus};
+pub use app::{AgentStatus, App, AppInfo, PreviewAnimations, ProviderStatus};
 
 pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()

@@ -109,6 +109,10 @@ impl App {
         let endpoint = self.endpoint(provider).await?;
         let skill_list = self.skills();
         let mut instructions = BASE_INSTRUCTIONS.to_owned();
+        if !settings.system_prompt.is_empty() {
+            instructions.push_str("\n\n");
+            instructions.push_str(&settings.system_prompt);
+        }
         let mut tools: Vec<ToolSpec> = self.mcp.tool_specs().await;
         if let Some(index) = skills::index_prompt(&skill_list) {
             instructions.push_str("\n\n");

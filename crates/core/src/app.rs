@@ -39,6 +39,15 @@ pub struct App {
     pub(crate) tool_grants: Mutex<HashSet<(String, String)>>,
 }
 
+/// What vpkmerge's `list_hero_animations` returns, for the preview viewer.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewAnimations {
+    /// Prefix of the hero's own animation names.
+    pub codename: String,
+    pub animations: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatus {
@@ -148,6 +157,9 @@ impl App {
             }
             if let Some(n) = patch.max_tool_rounds {
                 s.max_tool_rounds = n.clamp(1, 200);
+            }
+            if let Some(prompt) = patch.system_prompt {
+                prompt.trim().clone_into(&mut s.system_prompt);
             }
         })
     }
@@ -384,6 +396,34 @@ impl App {
     pub(crate) fn mcp_config_for_agents(&self) -> mcp::ConfigFile {
         self.mcp_config()
             .unwrap_or_else(|_| self.builtin_mcp.clone())
+    }
+
+    // ---- model previews ------------------------------------------------
+    // The preview viewer asks the vpkmerge server for animations itself, so
+    // playing one never goes through a model.
+
+    pub async fn preview_animations(&self, hero: &str, vpk: Option<&str>) -> anyhow::Result<PreviewAnimations> {
+        let args = serde_json::json!({ "hero": hero, "vpk": vpk });
+        let out = self.call_tool("vpkmerge", "list_hero_animations", &args).await?;
+        serde_json::from_value(out).context("list_hero_animations returned an unexpected shape")
+    }
+
+    /// Path of a skeleton-only GLB carrying one animation.
+    pub async fn preview_animation(&self, hero: &str, vpk: Option<&str>, animation: &str) -> anyhow::Result<PathBuf> {
+        let args = serde_json::json!({ "hero": hero, "vpk": vpk, "animation": animation });
+        let out = self.call_tool("vpkmerge", "preview_hero_animation", &args).await?;
+        out["animationGlb"]
+            .as_str()
+            .map(PathBuf::from)
+            .context("preview_hero_animation returned no file")
+    }
+
+    async fn call_tool(&self, server: &str, tool: &str, args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let (output, is_error) = self.mcp.call(&mcp::qualified(server, tool), &args.to_string()).await?;
+        if is_error {
+            bail!("{output}");
+        }
+        serde_json::from_str(&output).with_context(|| format!("{tool} returned {output}"))
     }
 
     // ---- ACP agents ----------------------------------------------------

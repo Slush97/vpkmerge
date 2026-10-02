@@ -35,7 +35,10 @@ impl Pkce {
         let verifier = random_token();
         let digest = sha2::Sha256::digest(verifier.as_bytes());
         let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
-        Self { verifier, challenge }
+        Self {
+            verifier,
+            challenge,
+        }
     }
 }
 
@@ -90,10 +93,20 @@ impl Loopback {
                 bail!("sign-in failed: {detail}");
             }
             if state.is_some_and(|s| params.get("state").map(String::as_str) != Some(s)) {
-                respond(&mut stream, 400, "This sign-in link is stale. Start again from Workbench.").await;
+                respond(
+                    &mut stream,
+                    400,
+                    "This sign-in link is stale. Start again from Workbench.",
+                )
+                .await;
                 continue;
             }
-            respond(&mut stream, 200, "Signed in. You can close this tab and go back to Workbench.").await;
+            respond(
+                &mut stream,
+                200,
+                "Signed in. You can close this tab and go back to Workbench.",
+            )
+            .await;
             return Ok(params);
         }
     }
@@ -163,7 +176,10 @@ pub(crate) async fn post_token_form(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        bail!("token request failed ({status}): {}", crate::providers::error_message(&text));
+        bail!(
+            "token request failed ({status}): {}",
+            crate::providers::error_message(&text)
+        );
     }
     Ok(resp.json().await?)
 }
@@ -185,7 +201,9 @@ mod tests {
     use super::*;
 
     async fn get(port: u16, target: &str) -> String {
-        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
         s.write_all(format!("GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
             .await
             .unwrap();
@@ -201,8 +219,12 @@ mod tests {
         let cancel = CancellationToken::new();
         let client = tokio::spawn(async move {
             assert!(get(port, "/favicon.ico").await.starts_with("HTTP/1.1 404"));
-            assert!(get(port, "/cb?code=evil&state=nope").await.starts_with("HTTP/1.1 400"));
-            assert!(get(port, "/cb?code=abc&state=s1").await.starts_with("HTTP/1.1 200"));
+            assert!(get(port, "/cb?code=evil&state=nope")
+                .await
+                .starts_with("HTTP/1.1 400"));
+            assert!(get(port, "/cb?code=abc&state=s1")
+                .await
+                .starts_with("HTTP/1.1 200"));
         });
         let params = lb.wait("/cb", Some("s1"), &cancel).await.unwrap();
         client.await.unwrap();
@@ -214,7 +236,13 @@ mod tests {
         let lb = Loopback::bind(0).await.unwrap();
         let port = lb.port();
         let cancel = CancellationToken::new();
-        tokio::spawn(async move { get(port, "/cb?error=access_denied&error_description=User%20said%20no").await });
+        tokio::spawn(async move {
+            get(
+                port,
+                "/cb?error=access_denied&error_description=User%20said%20no",
+            )
+            .await
+        });
         let err = lb.wait("/cb", Some("s"), &cancel).await.unwrap_err();
         assert!(err.to_string().contains("User said no"));
 
@@ -227,7 +255,8 @@ mod tests {
     #[test]
     fn pkce_challenge_is_s256_of_verifier() {
         let p = Pkce::new();
-        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(p.verifier.as_bytes()));
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(p.verifier.as_bytes()));
         assert_eq!(p.challenge, expected);
         assert!(p.verifier.len() >= 43);
     }

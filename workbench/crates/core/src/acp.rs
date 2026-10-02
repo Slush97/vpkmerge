@@ -58,8 +58,12 @@ impl AgentId {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Grok => "xAI's coding agent, run through your Grok Build CLI with its own Grok sign-in.",
-            Self::Codex => "OpenAI's coding agent, run through your Codex CLI with its own ChatGPT sign-in.",
+            Self::Grok => {
+                "xAI's coding agent, run through your Grok Build CLI with its own Grok sign-in."
+            }
+            Self::Codex => {
+                "OpenAI's coding agent, run through your Codex CLI with its own ChatGPT sign-in."
+            }
         }
     }
 
@@ -82,7 +86,8 @@ impl AgentId {
                 Some((bin, args.map(String::from).to_vec()))
             }
             Self::Codex => {
-                let bin = find_program("codex").or_else(|| existing(home.join(".npm-global/bin/codex")))?;
+                let bin = find_program("codex")
+                    .or_else(|| existing(home.join(".npm-global/bin/codex")))?;
                 Some((bin, vec!["app-server".into()]))
             }
         }
@@ -149,7 +154,10 @@ struct RpcError {
 
 impl RpcError {
     fn exited() -> Self {
-        Self { code: 0, message: "the agent process has exited".into() }
+        Self {
+            code: 0,
+            message: "the agent process has exited".into(),
+        }
     }
 }
 
@@ -169,7 +177,12 @@ impl Rpc {
             .await;
     }
 
-    async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, RpcError> {
         if !self.alive.load(Ordering::SeqCst) {
             return Err(RpcError::exited());
         }
@@ -179,14 +192,20 @@ impl Rpc {
         let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if let Err(e) = self.write(&msg).await {
             self.pending.lock().unwrap().remove(&id);
-            return Err(RpcError { code: 0, message: format!("writing to the agent failed: {e}") });
+            return Err(RpcError {
+                code: 0,
+                message: format!("writing to the agent failed: {e}"),
+            });
         }
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(RpcError::exited()),
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
-                Err(RpcError { code: 0, message: format!("{method} timed out") })
+                Err(RpcError {
+                    code: 0,
+                    message: format!("{method} timed out"),
+                })
             }
         }
     }
@@ -212,7 +231,9 @@ impl Rpc {
     }
 
     async fn dispatch(self: &Arc<Self>, line: &str) {
-        let Ok(msg) = serde_json::from_str::<Value>(line) else { return };
+        let Ok(msg) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
         if let Some(method) = msg["method"].as_str() {
             match self.dialect {
                 Dialect::Acp => self.dispatch_acp(method, &msg).await,
@@ -221,7 +242,9 @@ impl Rpc {
             return;
         }
         let Some(id) = msg["id"].as_u64() else { return };
-        let Some(tx) = self.pending.lock().unwrap().remove(&id) else { return };
+        let Some(tx) = self.pending.lock().unwrap().remove(&id) else {
+            return;
+        };
         let result = if msg.get("error").is_some_and(|e| !e.is_null()) {
             Err(RpcError {
                 code: msg["error"]["code"].as_i64().unwrap_or(0),
@@ -244,7 +267,11 @@ impl Rpc {
             }
             ("session/request_permission", Some(id)) => {
                 let delivered = route.is_some_and(|r| {
-                    r.send(Inbound::Permission { rpc_id: id.clone(), params }).is_ok()
+                    r.send(Inbound::Permission {
+                        rpc_id: id.clone(),
+                        params,
+                    })
+                    .is_ok()
                 });
                 if !delivered {
                     self.respond(id.clone(), json!({ "outcome": { "outcome": "cancelled" } }))
@@ -281,9 +308,13 @@ pub struct AgentProcess {
 
 impl AgentProcess {
     pub async fn spawn(agent: AgentId) -> anyhow::Result<Self> {
-        let (program, args) = agent
-            .command()
-            .with_context(|| format!("{} is not installed (`{}` not found)", agent.name(), agent.command_label()))?;
+        let (program, args) = agent.command().with_context(|| {
+            format!(
+                "{} is not installed (`{}` not found)",
+                agent.name(),
+                agent.command_label()
+            )
+        })?;
         let mut child = Command::new(&program)
             .args(&args)
             .stdin(Stdio::piped())
@@ -340,7 +371,9 @@ impl AgentProcess {
             rpc,
             _child: Mutex::new(child),
             auth_methods: serde_json::from_value(init["authMethods"].clone()).unwrap_or_default(),
-            http_mcp: init["agentCapabilities"]["mcpCapabilities"]["http"].as_bool().unwrap_or(false),
+            http_mcp: init["agentCapabilities"]["mcpCapabilities"]["http"]
+                .as_bool()
+                .unwrap_or(false),
         })
     }
 
@@ -361,13 +394,21 @@ impl AgentProcess {
             bail!("Codex uses its own login. Run `codex login` in a terminal, then try again.");
         }
         self.rpc
-            .request("authenticate", json!({ "methodId": method_id }), Duration::from_secs(600))
+            .request(
+                "authenticate",
+                json!({ "methodId": method_id }),
+                Duration::from_secs(600),
+            )
             .await
             .map(|_| ())
             .map_err(|e| anyhow!("{} sign-in failed: {}", self.agent.name(), e.message))
     }
 
-    pub async fn new_session(&self, cwd: &Path, config: &crate::mcp::ConfigFile) -> anyhow::Result<String> {
+    pub async fn new_session(
+        &self,
+        cwd: &Path,
+        config: &crate::mcp::ConfigFile,
+    ) -> anyhow::Result<String> {
         let (method, params) = match self.rpc.dialect {
             Dialect::Acp => (
                 "session/new",
@@ -391,7 +432,11 @@ impl AgentProcess {
     /// until [`Self::unregister`].
     pub fn register(&self, session_id: &str) -> mpsc::UnboundedReceiver<Inbound> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.rpc.routes.lock().unwrap().insert(session_id.to_owned(), tx);
+        self.rpc
+            .routes
+            .lock()
+            .unwrap()
+            .insert(session_id.to_owned(), tx);
         rx
     }
 
@@ -400,7 +445,12 @@ impl AgentProcess {
     }
 
     /// Runs one prompt turn and returns the ACP stop reason.
-    pub async fn prompt(&self, session_id: &str, blocks: Value, level: PermissionLevel) -> anyhow::Result<String> {
+    pub async fn prompt(
+        &self,
+        session_id: &str,
+        blocks: Value,
+        level: PermissionLevel,
+    ) -> anyhow::Result<String> {
         if self.rpc.dialect == Dialect::CodexAppServer {
             return codex_app::run_turn(&self.rpc, session_id, &blocks, level)
                 .await
@@ -415,12 +465,19 @@ impl AgentProcess {
             )
             .await
             .map_err(|e| self.explain(&e))?;
-        Ok(result["stopReason"].as_str().unwrap_or("end_turn").to_owned())
+        Ok(result["stopReason"]
+            .as_str()
+            .unwrap_or("end_turn")
+            .to_owned())
     }
 
     pub async fn cancel(&self, session_id: &str) {
         match self.rpc.dialect {
-            Dialect::Acp => self.rpc.notify("session/cancel", json!({ "sessionId": session_id })).await,
+            Dialect::Acp => {
+                self.rpc
+                    .notify("session/cancel", json!({ "sessionId": session_id }))
+                    .await;
+            }
             Dialect::CodexAppServer => codex_app::interrupt(&self.rpc, session_id).await,
         }
     }
@@ -453,7 +510,9 @@ impl AgentProcess {
 /// Our MCP servers in ACP's `session/new` shape.
 fn mcp_servers(config: &crate::mcp::ConfigFile, http_ok: bool) -> Value {
     let pairs = |m: &std::collections::BTreeMap<String, String>| -> Vec<Value> {
-        m.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect()
+        m.iter()
+            .map(|(k, v)| json!({ "name": k, "value": v }))
+            .collect()
     };
     config
         .mcp_servers

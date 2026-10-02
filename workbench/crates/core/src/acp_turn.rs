@@ -44,10 +44,10 @@ impl Mirror<'_> {
         if parts.is_empty() {
             return Ok(());
         }
-        let saved = self
-            .app
-            .store
-            .append(self.session_id, Role::Assistant, parts, Some(self.model))?;
+        let saved =
+            self.app
+                .store
+                .append(self.session_id, Role::Assistant, parts, Some(self.model))?;
         (self.sink)(AgentEvent::MessageSaved { message: saved });
         Ok(())
     }
@@ -59,7 +59,12 @@ impl Mirror<'_> {
         let failed = update["status"] == "failed";
         let mut output = acp::tool_output(update);
         if output.trim().is_empty() {
-            output = if failed { "The tool failed without output." } else { "Done." }.into();
+            output = if failed {
+                "The tool failed without output."
+            } else {
+                "Done."
+            }
+            .into();
         }
         let saved = self.app.store.append(
             self.session_id,
@@ -114,7 +119,10 @@ impl Mirror<'_> {
                         arguments,
                     }))?;
                     self.open.insert(id.clone(), title.clone());
-                    (self.sink)(AgentEvent::ToolStarted { call_id: id.clone(), name: title });
+                    (self.sink)(AgentEvent::ToolStarted {
+                        call_id: id.clone(),
+                        name: title,
+                    });
                 }
                 if done {
                     self.finish_call(&id, u)?;
@@ -173,7 +181,11 @@ impl App {
         let mut rx_open = true;
         let grace = tokio::time::sleep(Duration::MAX);
         tokio::pin!(grace);
-        let prompt = process.prompt(&acp_session, Value::Array(blocks), self.settings().permission_level);
+        let prompt = process.prompt(
+            &acp_session,
+            Value::Array(blocks),
+            self.settings().permission_level,
+        );
         tokio::pin!(prompt);
 
         let outcome = loop {
@@ -237,7 +249,9 @@ impl App {
             _ => None,
         };
         if let Some(message) = note {
-            sink(AgentEvent::Notice { message: message.into() });
+            sink(AgentEvent::Notice {
+                message: message.into(),
+            });
         }
         Ok(())
     }
@@ -290,15 +304,25 @@ impl App {
             .to_owned();
         let options: Vec<PermissionOption> =
             serde_json::from_value(params["options"].clone()).unwrap_or_default();
-        let option = |kind: &str| options.iter().find(|o| o.kind == kind).map(|o| o.option_id.as_str());
+        let option = |kind: &str| {
+            options
+                .iter()
+                .find(|o| o.kind == kind)
+                .map(|o| o.option_id.as_str())
+        };
         let kind = ActionKind::from_acp(params["toolCall"]["kind"].as_str());
-        match (self.settings().permission_level.decide(kind), option("allow_once")) {
+        match (
+            self.settings().permission_level.decide(kind),
+            option("allow_once"),
+        ) {
             (Decision::Allow, Some(allow)) => {
                 process.answer_permission(rpc_id, Some(allow)).await;
                 return None;
             }
             (Decision::Deny, _) => {
-                process.answer_permission(rpc_id, option("reject_once")).await;
+                process
+                    .answer_permission(rpc_id, option("reject_once"))
+                    .await;
                 sink(AgentEvent::Notice {
                     message: format!("Read only blocked: {title}"),
                 });
@@ -328,7 +352,9 @@ impl App {
             let open = self.permissions.lock().unwrap().remove(id);
             if let Some(PendingPermission::Agent { process, rpc_id }) = open {
                 process.answer_permission(rpc_id, None).await;
-                sink(AgentEvent::PermissionResolved { request_id: id.clone() });
+                sink(AgentEvent::PermissionResolved {
+                    request_id: id.clone(),
+                });
             }
         }
     }
@@ -342,7 +368,9 @@ impl App {
             for part in &m.parts {
                 match (m.role, part) {
                     (Role::User, Part::Text { text }) => lines.push(format!("User: {text}")),
-                    (Role::Assistant, Part::Text { text }) => lines.push(format!("Assistant: {text}")),
+                    (Role::Assistant, Part::Text { text }) => {
+                        lines.push(format!("Assistant: {text}"));
+                    }
                     (Role::Assistant, Part::ToolCall { name, .. }) => {
                         lines.push(format!("(Assistant ran the tool: {name})"));
                     }

@@ -7,12 +7,12 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{Manager, RunEvent, State};
 use tauri_plugin_opener::OpenerExt;
+use workbench_core::acp::AgentId;
 use workbench_core::config::{Settings, SettingsPatch};
 use workbench_core::mcp::{ConfigFile, ServerConfig, ServerStatus};
 use workbench_core::providers::{ModelInfo, ProviderId};
 use workbench_core::skills::Skill;
 use workbench_core::store::{Session, StoredMessage};
-use workbench_core::acp::AgentId;
 use workbench_core::{AgentEvent, AgentStatus, App, AppInfo, PreviewAnimations, ProviderStatus};
 
 type Core<'a> = State<'a, Arc<App>>;
@@ -128,7 +128,11 @@ async fn agent_sign_in(core: Core<'_>, agent: AgentId, method_id: String) -> Cmd
 }
 
 #[tauri::command]
-async fn respond_permission(core: Core<'_>, request_id: String, option_id: Option<String>) -> CmdResult<()> {
+async fn respond_permission(
+    core: Core<'_>,
+    request_id: String,
+    option_id: Option<String>,
+) -> CmdResult<()> {
     core.respond_permission(&request_id, option_id.as_deref())
         .await
         .map_err(err)
@@ -198,8 +202,14 @@ fn open_data_dir(app: tauri::AppHandle, core: Core<'_>) -> CmdResult<()> {
 }
 
 #[tauri::command]
-async fn preview_animations(core: Core<'_>, hero: String, vpk: Option<String>) -> CmdResult<PreviewAnimations> {
-    core.preview_animations(&hero, vpk.as_deref()).await.map_err(err)
+async fn preview_animations(
+    core: Core<'_>,
+    hero: String,
+    vpk: Option<String>,
+) -> CmdResult<PreviewAnimations> {
+    core.preview_animations(&hero, vpk.as_deref())
+        .await
+        .map_err(err)
 }
 
 /// One animation for the preview viewer: skeleton-only GLB bytes.
@@ -210,7 +220,10 @@ async fn preview_animation(
     vpk: Option<String>,
     animation: String,
 ) -> CmdResult<tauri::ipc::Response> {
-    let path = core.preview_animation(&hero, vpk.as_deref(), &animation).await.map_err(err)?;
+    let path = core
+        .preview_animation(&hero, vpk.as_deref(), &animation)
+        .await
+        .map_err(err)?;
     let bytes = tauri::async_runtime::spawn_blocking(move || read_glb(&path))
         .await
         .map_err(|e| e.to_string())??;
@@ -229,7 +242,14 @@ fn serve_preview(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Respon
     };
     tauri::http::Response::builder()
         .status(status)
-        .header("Content-Type", if status == 200 { "model/gltf-binary" } else { "text/plain" })
+        .header(
+            "Content-Type",
+            if status == 200 {
+                "model/gltf-binary"
+            } else {
+                "text/plain"
+            },
+        )
         // The page's origin (the dev server, or tauri://localhost) differs from this scheme's.
         .header("Access-Control-Allow-Origin", "*")
         .body(body)
@@ -238,11 +258,16 @@ fn serve_preview(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Respon
 
 /// The path comes from model output, so only binary glTF is read, never arbitrary files.
 fn read_glb(path: &Path) -> Result<Vec<u8>, String> {
-    if path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("glb")) {
+    if path
+        .extension()
+        .is_none_or(|e| !e.eq_ignore_ascii_case("glb"))
+    {
         return Err("only .glb previews can be opened".into());
     }
     let bytes = std::fs::read(path).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => "This preview was cleaned up. Ask for a new one.".to_owned(),
+        std::io::ErrorKind::NotFound => {
+            "This preview was cleaned up. Ask for a new one.".to_owned()
+        }
         _ => e.to_string(),
     })?;
     if !bytes.starts_with(b"glTF") {

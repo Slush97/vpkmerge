@@ -123,8 +123,18 @@ impl McpManager {
         {
             let mut servers = self.servers.write().await;
             for (name, cfg) in &config.mcp_servers {
-                let state = if cfg.disabled { State::Disabled } else { State::Connecting };
-                servers.insert(name.clone(), Slot { config: cfg.clone(), state });
+                let state = if cfg.disabled {
+                    State::Disabled
+                } else {
+                    State::Connecting
+                };
+                servers.insert(
+                    name.clone(),
+                    Slot {
+                        config: cfg.clone(),
+                        state,
+                    },
+                );
             }
         }
         let names: Vec<String> = config
@@ -140,7 +150,9 @@ impl McpManager {
     pub async fn reconnect(&self, name: &str) -> anyhow::Result<()> {
         let old = {
             let mut servers = self.servers.write().await;
-            let slot = servers.get_mut(name).with_context(|| format!("no MCP server named {name}"))?;
+            let slot = servers
+                .get_mut(name)
+                .with_context(|| format!("no MCP server named {name}"))?;
             std::mem::replace(&mut slot.state, State::Connecting)
         };
         shutdown(old).await;
@@ -150,7 +162,13 @@ impl McpManager {
     }
 
     async fn connect(&self, name: &str) {
-        let Some(config) = self.servers.read().await.get(name).map(|s| s.config.clone()) else {
+        let Some(config) = self
+            .servers
+            .read()
+            .await
+            .get(name)
+            .map(|s| s.config.clone())
+        else {
             return;
         };
         let state = match start(&config).await {
@@ -177,7 +195,8 @@ impl McpManager {
                     let route = Route {
                         server: server.clone(),
                         tool: tool.name.to_string(),
-                        read_only: tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(true),
+                        read_only: tool.annotations.as_ref().and_then(|a| a.read_only_hint)
+                            == Some(true),
                     };
                     routes.insert(qualified(server, &tool.name), route);
                 }
@@ -202,7 +221,11 @@ impl McpManager {
                             .iter()
                             .map(|t| ToolSummary {
                                 name: t.name.to_string(),
-                                description: t.description.as_deref().unwrap_or_default().to_owned(),
+                                description: t
+                                    .description
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .to_owned(),
                             })
                             .collect(),
                     ),
@@ -210,7 +233,11 @@ impl McpManager {
                 ServerStatus {
                     name: name.clone(),
                     builtin: slot.config.builtin,
-                    transport: if slot.config.url.is_some() { "http" } else { "stdio" },
+                    transport: if slot.config.url.is_some() {
+                        "http"
+                    } else {
+                        "stdio"
+                    },
                     state,
                     error,
                     tools,
@@ -251,7 +278,11 @@ impl McpManager {
     }
 
     /// Returns the tool output as text and whether the server flagged an error.
-    pub async fn call(&self, qualified_name: &str, arguments: &str) -> anyhow::Result<(String, bool)> {
+    pub async fn call(
+        &self,
+        qualified_name: &str,
+        arguments: &str,
+    ) -> anyhow::Result<(String, bool)> {
         let (server, tool) = self
             .routes
             .read()
@@ -327,7 +358,8 @@ async fn start(config: &ServerConfig) -> anyhow::Result<RunningService<RoleClien
         .context("server needs either `command` or `url`")?;
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(&config.args).envs(&config.env);
-    let transport = TokioChildProcess::new(cmd).with_context(|| format!("could not start `{command}`"))?;
+    let transport =
+        TokioChildProcess::new(cmd).with_context(|| format!("could not start `{command}`"))?;
     Ok(().serve(transport).await?)
 }
 
@@ -343,7 +375,13 @@ async fn shutdown(state: State) {
 pub(crate) fn qualified(server: &str, tool: &str) -> String {
     let clean = |s: &str| -> String {
         s.chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect()
     };
     let mut name = format!("{TOOL_PREFIX}{}__{}", clean(server), clean(tool));
@@ -374,7 +412,8 @@ mod tests {
 
     #[test]
     fn builtin_servers_stay_alongside_the_users() {
-        let merged = builtin().with_user(user(r#"{"mcpServers": {"blender": {"command": "uvx"}}}"#));
+        let merged =
+            builtin().with_user(user(r#"{"mcpServers": {"blender": {"command": "uvx"}}}"#));
         assert_eq!(merged.mcp_servers.len(), 2);
         assert!(merged.mcp_servers["vpkmerge"].builtin);
         assert!(!merged.mcp_servers["blender"].builtin);
@@ -393,7 +432,9 @@ mod tests {
 
     #[test]
     fn an_entry_with_its_own_command_replaces_the_builtin() {
-        let merged = builtin().with_user(user(r#"{"mcpServers": {"vpkmerge": {"command": "/dev/vpkmerge-mcp"}}}"#));
+        let merged = builtin().with_user(user(
+            r#"{"mcpServers": {"vpkmerge": {"command": "/dev/vpkmerge-mcp"}}}"#,
+        ));
         let server = &merged.mcp_servers["vpkmerge"];
         assert_eq!(server.command.as_deref(), Some("/dev/vpkmerge-mcp"));
         assert!(!server.builtin);
@@ -401,7 +442,12 @@ mod tests {
 
     #[test]
     fn builtin_flag_never_reaches_mcp_json() {
-        assert!(!serde_json::to_string(&builtin()).unwrap().contains("builtin"));
-        assert!(!user(r#"{"mcpServers": {"x": {"command": "y", "builtin": true}}}"#).mcp_servers["x"].builtin);
+        assert!(!serde_json::to_string(&builtin())
+            .unwrap()
+            .contains("builtin"));
+        assert!(
+            !user(r#"{"mcpServers": {"x": {"command": "y", "builtin": true}}}"#).mcp_servers["x"]
+                .builtin
+        );
     }
 }

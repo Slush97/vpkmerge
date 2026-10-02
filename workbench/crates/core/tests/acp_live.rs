@@ -31,7 +31,11 @@ async fn one_turn(agent: AgentId) {
             &sink,
         )
         .await;
-    println!("{} last event: {:?}", agent.name(), events.lock().unwrap().last());
+    println!(
+        "{} last event: {:?}",
+        agent.name(),
+        events.lock().unwrap().last()
+    );
     result.unwrap();
     let messages = app.messages(&session.id).unwrap();
     let reply: String = messages
@@ -51,11 +55,21 @@ async fn one_turn(agent: AgentId) {
     let asked = Arc::new(Mutex::new(0usize));
     let asked_in_sink = Arc::clone(&asked);
     let sink = move |e: AgentEvent| {
-        if let AgentEvent::PermissionRequested { request_id, options, .. } = e {
+        if let AgentEvent::PermissionRequested {
+            request_id,
+            options,
+            ..
+        } = e
+        {
             *asked_in_sink.lock().unwrap() += 1;
-            let allow = options.iter().find(|o| o.kind == "allow_once").map(|o| o.option_id.clone());
+            let allow = options
+                .iter()
+                .find(|o| o.kind == "allow_once")
+                .map(|o| o.option_id.clone());
             let app = Arc::clone(&approver);
-            tokio::spawn(async move { app.respond_permission(&request_id, allow.as_deref()).await });
+            tokio::spawn(
+                async move { app.respond_permission(&request_id, allow.as_deref()).await },
+            );
         }
     };
     app.run_turn(
@@ -70,7 +84,12 @@ async fn one_turn(agent: AgentId) {
         .iter()
         .flat_map(|m| &m.parts)
         .filter_map(|p| match p {
-            Part::ToolResult { name, output, is_error, .. } => Some((name.clone(), output.clone(), *is_error)),
+            Part::ToolResult {
+                name,
+                output,
+                is_error,
+                ..
+            } => Some((name.clone(), output.clone(), *is_error)),
             _ => None,
         })
         .collect();
@@ -79,7 +98,9 @@ async fn one_turn(agent: AgentId) {
         agent.name(),
         asked.lock().unwrap()
     );
-    assert!(tool_results.iter().any(|(_, out, err)| !err && out.contains("workbench-ok")));
+    assert!(tool_results
+        .iter()
+        .any(|(_, out, err)| !err && out.contains("workbench-ok")));
     app.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -116,7 +137,10 @@ async fn write_under(agent: AgentId, level: PermissionLevel) -> (bool, usize) {
         .await;
     let made = dir.join("made.txt").exists();
     let prompts = *prompts.lock().unwrap();
-    println!("{} under {level:?}: made={made} prompts={prompts} outcome={outcome:?}", agent.name());
+    println!(
+        "{} under {level:?}: made={made} prompts={prompts} outcome={outcome:?}",
+        agent.name()
+    );
     app.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
     (made, prompts)
@@ -148,7 +172,13 @@ async fn agents_answer() {
 #[ignore = "talks to real agents with the user's accounts"]
 async fn permission_level_holds() {
     for agent in selected() {
-        assert_eq!(write_under(agent, PermissionLevel::ReadOnly).await, (false, 0));
-        assert_eq!(write_under(agent, PermissionLevel::FullAccess).await, (true, 0));
+        assert_eq!(
+            write_under(agent, PermissionLevel::ReadOnly).await,
+            (false, 0)
+        );
+        assert_eq!(
+            write_under(agent, PermissionLevel::FullAccess).await,
+            (true, 0)
+        );
     }
 }

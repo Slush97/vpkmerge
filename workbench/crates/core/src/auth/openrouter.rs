@@ -8,7 +8,11 @@ use tokio_util::sync::CancellationToken;
 use super::{Loopback, OpenUrl, Pkce};
 use crate::secrets::Credential;
 
-pub async fn sign_in(http: &reqwest::Client, open: OpenUrl<'_>, cancel: &CancellationToken) -> anyhow::Result<Credential> {
+pub async fn sign_in(
+    http: &reqwest::Client,
+    open: OpenUrl<'_>,
+    cancel: &CancellationToken,
+) -> anyhow::Result<Credential> {
     let loopback = Loopback::bind(0).await?;
     let path = format!("/callback/{}", super::random_token());
     let callback = format!("http://localhost:{}{path}", loopback.port());
@@ -23,7 +27,9 @@ pub async fn sign_in(http: &reqwest::Client, open: OpenUrl<'_>, cancel: &Cancell
     open(url.as_str())?;
 
     let params = loopback.wait(&path, None, cancel).await?;
-    let code = params.get("code").context("the callback had no authorization code")?;
+    let code = params
+        .get("code")
+        .context("the callback had no authorization code")?;
     let resp = http
         .post("https://openrouter.ai/api/v1/auth/keys")
         .json(&json!({
@@ -36,9 +42,14 @@ pub async fn sign_in(http: &reqwest::Client, open: OpenUrl<'_>, cancel: &Cancell
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        bail!("OpenRouter key exchange failed ({status}): {}", crate::providers::error_message(&text));
+        bail!(
+            "OpenRouter key exchange failed ({status}): {}",
+            crate::providers::error_message(&text)
+        );
     }
     let body: serde_json::Value = resp.json().await?;
     let key = body["key"].as_str().context("OpenRouter returned no key")?;
-    Ok(Credential::ApiKey { key: key.to_owned() })
+    Ok(Credential::ApiKey {
+        key: key.to_owned(),
+    })
 }

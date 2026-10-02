@@ -91,7 +91,9 @@ impl Vault {
         }
         let loaded = match &self.backend {
             Backend::Keyring => match entry(provider)?.get_password() {
-                Ok(json) => Some(serde_json::from_str(&json).context("stored credential is corrupt")?),
+                Ok(json) => {
+                    Some(serde_json::from_str(&json).context("stored credential is corrupt")?)
+                }
                 Err(keyring::Error::NoEntry) => None,
                 Err(e) => return Err(e).context("reading the keychain"),
             },

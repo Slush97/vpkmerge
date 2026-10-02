@@ -57,7 +57,10 @@ pub(super) async fn run_turn(
     let (tx, rx) = oneshot::channel();
     rpc.codex_turns.lock().unwrap().insert(
         thread_id.to_owned(),
-        TurnWaiter { turn_id: None, done: Some(tx) },
+        TurnWaiter {
+            turn_id: None,
+            done: Some(tx),
+        },
     );
     let input: Vec<Value> = blocks
         .as_array()
@@ -74,7 +77,10 @@ pub(super) async fn run_turn(
         "approvalPolicy": approval,
         "sandboxPolicy": { "type": sandbox },
     });
-    match rpc.request("turn/start", params, Duration::from_secs(120)).await {
+    match rpc
+        .request("turn/start", params, Duration::from_secs(120))
+        .await
+    {
         Ok(started) => {
             if let Some(w) = rpc.codex_turns.lock().unwrap().get_mut(thread_id) {
                 w.turn_id = started["turn"]["id"].as_str().map(str::to_owned);
@@ -88,7 +94,10 @@ pub(super) async fn run_turn(
     match tokio::time::timeout(TURN_TIMEOUT, rx).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err(RpcError::exited()),
-        Err(_) => Err(RpcError { code: 0, message: "the turn timed out".into() }),
+        Err(_) => Err(RpcError {
+            code: 0,
+            message: "the turn timed out".into(),
+        }),
     }
 }
 
@@ -116,7 +125,11 @@ pub(super) async fn dispatch(rpc: &Arc<Rpc>, method: &str, msg: &Value) {
     if let Some(id) = msg.get("id") {
         match method {
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-                let kind = if method == "item/fileChange/requestApproval" { "edit" } else { "execute" };
+                let kind = if method == "item/fileChange/requestApproval" {
+                    "edit"
+                } else {
+                    "execute"
+                };
                 let permission = json!({
                     "toolCall": { "title": approval_title(method, params), "kind": kind },
                     "options": [
@@ -126,10 +139,15 @@ pub(super) async fn dispatch(rpc: &Arc<Rpc>, method: &str, msg: &Value) {
                     ],
                 });
                 let delivered = rpc.route(thread).is_some_and(|r| {
-                    r.send(Inbound::Permission { rpc_id: id.clone(), params: permission }).is_ok()
+                    r.send(Inbound::Permission {
+                        rpc_id: id.clone(),
+                        params: permission,
+                    })
+                    .is_ok()
                 });
                 if !delivered {
-                    rpc.respond(id.clone(), json!({ "decision": "cancel" })).await;
+                    rpc.respond(id.clone(), json!({ "decision": "cancel" }))
+                        .await;
                 }
             }
             _ => rpc.reject(id.clone(), method).await,
@@ -164,9 +182,10 @@ fn finish_turn(rpc: &Rpc, thread: &str, turn: &Value) {
         Some("interrupted") => Ok("cancelled".to_owned()),
         _ => Err(RpcError {
             code: 0,
-            message: turn["error"]["message"]
-                .as_str()
-                .map_or_else(|| "the turn failed".to_owned(), crate::providers::error_message),
+            message: turn["error"]["message"].as_str().map_or_else(
+                || "the turn failed".to_owned(),
+                crate::providers::error_message,
+            ),
         }),
     };
     let waiter = rpc.codex_turns.lock().unwrap().remove(thread);
@@ -176,7 +195,10 @@ fn finish_turn(rpc: &Rpc, thread: &str, turn: &Value) {
 }
 
 fn approval_title(method: &str, params: &Value) -> String {
-    let reason = params["reason"].as_str().map(|r| format!(" ({r})")).unwrap_or_default();
+    let reason = params["reason"]
+        .as_str()
+        .map(|r| format!(" ({r})"))
+        .unwrap_or_default();
     if method == "item/fileChange/requestApproval" {
         return format!("Apply file changes{reason}");
     }
@@ -197,7 +219,10 @@ fn short(s: &str) -> String {
 fn tool_view(item: &Value) -> Option<(String, Value)> {
     match item["type"].as_str()? {
         "commandExecution" => Some((
-            format!("Run {}", short(item["command"].as_str().unwrap_or("a command"))),
+            format!(
+                "Run {}",
+                short(item["command"].as_str().unwrap_or("a command"))
+            ),
             json!({ "command": item["command"], "cwd": item["cwd"] }),
         )),
         "fileChange" => {
@@ -251,7 +276,10 @@ fn tool_completed(item: &Value) -> Option<Value> {
     let mut failed = matches!(item["status"].as_str(), Some("failed" | "declined"));
     let text = match kind {
         "commandExecution" => {
-            let out = item["aggregatedOutput"].as_str().unwrap_or_default().trim_end();
+            let out = item["aggregatedOutput"]
+                .as_str()
+                .unwrap_or_default()
+                .trim_end();
             match item["exitCode"].as_i64() {
                 Some(code) if code != 0 => {
                     failed = true;
@@ -265,7 +293,10 @@ fn tool_completed(item: &Value) -> Option<Value> {
             .into_iter()
             .flatten()
             .map(|c| {
-                let verb = c["kind"]["type"].as_str().or_else(|| c["kind"].as_str()).unwrap_or("update");
+                let verb = c["kind"]["type"]
+                    .as_str()
+                    .or_else(|| c["kind"].as_str())
+                    .unwrap_or("update");
                 format!("{verb} {}", c["path"].as_str().unwrap_or("?"))
             })
             .collect::<Vec<_>>()

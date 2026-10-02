@@ -27,7 +27,11 @@ pub(super) fn body(req: &CompletionRequest<'_>) -> Value {
                     .parts
                     .iter()
                     .filter_map(|p| match p {
-                        Part::ToolCall { id, name, arguments } => Some(json!({
+                        Part::ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        } => Some(json!({
                             "id": id,
                             "type": "function",
                             "function": { "name": name, "arguments": arguments },
@@ -43,7 +47,10 @@ pub(super) fn body(req: &CompletionRequest<'_>) -> Value {
             }
             Role::Tool => {
                 for part in &msg.parts {
-                    if let Part::ToolResult { call_id, output, .. } = part {
+                    if let Part::ToolResult {
+                        call_id, output, ..
+                    } = part
+                    {
                         messages.push(json!({
                             "role": "tool",
                             "tool_call_id": call_id,
@@ -86,7 +93,11 @@ pub(super) struct Decoder {
 }
 
 impl Decoder {
-    pub(super) fn feed(&mut self, v: &Value, on_delta: &mut (dyn FnMut(Delta<'_>) + Send)) -> anyhow::Result<bool> {
+    pub(super) fn feed(
+        &mut self,
+        v: &Value,
+        on_delta: &mut (dyn FnMut(Delta<'_>) + Send),
+    ) -> anyhow::Result<bool> {
         if !v["error"].is_null() {
             let message = v["error"]["message"]
                 .as_str()
@@ -125,8 +136,13 @@ impl Decoder {
             }
         }
         match choice["finish_reason"].as_str() {
-            Some("length") => self.out.stop_note = Some("Response cut short: output token limit".into()),
-            Some("content_filter") => self.out.stop_note = Some("Response stopped by the provider's content filter".into()),
+            Some("length") => {
+                self.out.stop_note = Some("Response cut short: output token limit".into());
+            }
+            Some("content_filter") => {
+                self.out.stop_note =
+                    Some("Response stopped by the provider's content filter".into());
+            }
             _ => {}
         }
         Ok(false)
@@ -134,8 +150,16 @@ impl Decoder {
 
     pub(super) fn finish(mut self) -> Completion {
         for (index, (id, name, args)) in std::mem::take(&mut self.calls) {
-            let id = if id.is_empty() { format!("call_{index}") } else { id };
-            let args = if args.trim().is_empty() { "{}".to_owned() } else { args };
+            let id = if id.is_empty() {
+                format!("call_{index}")
+            } else {
+                id
+            };
+            let args = if args.trim().is_empty() {
+                "{}".to_owned()
+            } else {
+                args
+            };
             self.out.tool_calls.push((id, name, args));
         }
         self.out

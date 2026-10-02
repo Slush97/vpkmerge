@@ -141,7 +141,11 @@ impl Completion {
         parts.extend(
             self.tool_calls
                 .into_iter()
-                .map(|(id, name, arguments)| Part::ToolCall { id, name, arguments }),
+                .map(|(id, name, arguments)| Part::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }),
         );
         parts
     }
@@ -173,7 +177,11 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub fn new(provider: ProviderId, credential: Option<&Credential>, local_base_url: &str) -> Self {
+    pub fn new(
+        provider: ProviderId,
+        credential: Option<&Credential>,
+        local_base_url: &str,
+    ) -> Self {
         let base_url = match provider {
             ProviderId::Openai => "https://api.openai.com/v1",
             ProviderId::Xai => "https://api.x.ai/v1",
@@ -193,7 +201,12 @@ impl Endpoint {
         }
     }
 
-    fn request(&self, http: &reqwest::Client, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    fn request(
+        &self,
+        http: &reqwest::Client,
+        method: reqwest::Method,
+        path: &str,
+    ) -> reqwest::RequestBuilder {
         let mut req = http.request(method, format!("{}/{path}", self.base_url));
         if let Some(token) = &self.bearer {
             req = req.bearer_auth(token);
@@ -214,7 +227,12 @@ pub struct ModelInfo {
 }
 
 pub async fn list_models(http: &reqwest::Client, ep: &Endpoint) -> anyhow::Result<Vec<ModelInfo>> {
-    let resp = checked(ep.request(http, reqwest::Method::GET, "models").send().await?).await?;
+    let resp = checked(
+        ep.request(http, reqwest::Method::GET, "models")
+            .send()
+            .await?,
+    )
+    .await?;
     let body: Value = resp.json().await?;
     let items = body["data"]
         .as_array()
@@ -242,7 +260,15 @@ pub async fn list_models(http: &reqwest::Client, ep: &Endpoint) -> anyhow::Resul
 /// OpenAI's key-based model list includes embeddings, audio and image models.
 fn looks_like_chat_model(id: &str) -> bool {
     const SKIP: [&str; 9] = [
-        "embedding", "tts", "whisper", "dall-e", "moderation", "transcribe", "realtime", "audio", "image",
+        "embedding",
+        "tts",
+        "whisper",
+        "dall-e",
+        "moderation",
+        "transcribe",
+        "realtime",
+        "audio",
+        "image",
     ];
     !SKIP.iter().any(|s| id.contains(s))
 }
@@ -258,7 +284,10 @@ pub async fn complete(
         Wire::Responses => ("responses", responses::body(req)),
         Wire::ChatCompletions => ("chat/completions", chat::body(req)),
     };
-    let send = ep.request(http, reqwest::Method::POST, path).json(&body).send();
+    let send = ep
+        .request(http, reqwest::Method::POST, path)
+        .json(&body)
+        .send();
     let resp = tokio::select! {
         () = cancel.cancelled() => return Err(Cancelled.into()),
         resp = send => checked(resp?).await?,

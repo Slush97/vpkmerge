@@ -32,7 +32,9 @@ struct FrontMatter {
 pub fn scan(dirs: &[PathBuf], disabled: &BTreeSet<String>) -> Vec<Skill> {
     let mut skills: Vec<Skill> = Vec::new();
     for root in dirs {
-        let Ok(entries) = std::fs::read_dir(root) else { continue };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
         let mut found: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
         found.sort();
         if root.join("SKILL.md").is_file() {
@@ -40,7 +42,9 @@ pub fn scan(dirs: &[PathBuf], disabled: &BTreeSet<String>) -> Vec<Skill> {
         }
         for dir in found {
             let file = dir.join("SKILL.md");
-            let Ok(text) = std::fs::read_to_string(&file) else { continue };
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
             let (front, _) = split_front_matter(&text);
             let meta: Option<FrontMatter> = front.and_then(|f| serde_yaml_ng::from_str(f).ok());
             let name = meta
@@ -70,7 +74,10 @@ fn split_front_matter(text: &str) -> (Option<&str>, &str) {
     match rest.find("\n---") {
         Some(end) => {
             let body = &rest[end + 4..];
-            (Some(&rest[..end]), body.trim_start_matches(['-', '\r', '\n']))
+            (
+                Some(&rest[..end]),
+                body.trim_start_matches(['-', '\r', '\n']),
+            )
         }
         None => (None, text),
     }
@@ -104,7 +111,8 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: READ_FILE_TOOL.into(),
-            description: "Read a file that ships with a skill, by path relative to the skill folder.".into(),
+            description:
+                "Read a file that ships with a skill, by path relative to the skill folder.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -126,7 +134,10 @@ pub fn load(skills: &[Skill], name: &str) -> anyhow::Result<String> {
     files.retain(|f| f != "SKILL.md");
     let mut out = body.to_owned();
     if !files.is_empty() {
-        let _ = writeln!(out, "\n\n---\nFiles in this skill (read with `{READ_FILE_TOOL}`):");
+        let _ = writeln!(
+            out,
+            "\n\n---\nFiles in this skill (read with `{READ_FILE_TOOL}`):"
+        );
         for f in files.iter().take(200) {
             let _ = writeln!(out, "- {f}");
         }
@@ -159,10 +170,15 @@ fn find<'a>(skills: &'a [Skill], name: &str) -> anyhow::Result<&'a Skill> {
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        {
             continue;
         }
         if path.is_dir() {
@@ -205,7 +221,10 @@ mod tests {
         let body = load(&skills, "vpk-merge").unwrap();
         assert!(body.starts_with("Step one."));
         assert!(body.contains("refs/policy.md"));
-        assert_eq!(read_file(&skills, "vpk-merge", "refs/policy.md").unwrap(), "first wins");
+        assert_eq!(
+            read_file(&skills, "vpk-merge", "refs/policy.md").unwrap(),
+            "first wins"
+        );
         assert!(read_file(&skills, "vpk-merge", "../plain/SKILL.md").is_err());
         assert!(load(&skills, "plain").is_err());
         let _ = std::fs::remove_dir_all(&root);

@@ -41,7 +41,9 @@ pub enum Decision {
 impl PermissionLevel {
     pub fn decide(self, kind: ActionKind) -> Decision {
         match (self, kind) {
-            (_, ActionKind::Read) | (Self::FullAccess, _) | (Self::AutoEdit, ActionKind::Edit) => Decision::Allow,
+            (_, ActionKind::Read) | (Self::FullAccess, _) | (Self::AutoEdit, ActionKind::Edit) => {
+                Decision::Allow
+            }
             (Self::ReadOnly, _) => Decision::Deny,
             (Self::Ask | Self::AutoEdit, _) => Decision::Ask,
         }
@@ -121,6 +123,9 @@ mod tests {
     #[test]
     fn a_new_install_asks_first() {
         assert_eq!(PermissionLevel::default(), PermissionLevel::Ask);
-        assert_eq!(serde_json::to_string(&PermissionLevel::AutoEdit).unwrap(), r#""autoEdit""#);
+        assert_eq!(
+            serde_json::to_string(&PermissionLevel::AutoEdit).unwrap(),
+            r#""autoEdit""#
+        );
     }
 }

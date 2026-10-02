@@ -53,7 +53,9 @@ pub async fn sign_in(
     open(url.as_str())?;
 
     let params = loopback.wait(CALLBACK_PATH, Some(&state), cancel).await?;
-    let code = params.get("code").context("the callback had no authorization code")?;
+    let code = params
+        .get("code")
+        .context("the callback had no authorization code")?;
     let client_id = params
         .get("client_id")
         .map(String::as_str)
@@ -79,7 +81,9 @@ pub async fn sign_in(
         .as_deref()
         .is_some_and(|s| !s.split_whitespace().any(|x| x == PLAN_SCOPE))
     {
-        bail!("this account did not grant ChatGPT plan usage; check the plan and the consent screen");
+        bail!(
+            "this account did not grant ChatGPT plan usage; check the plan and the consent screen"
+        );
     }
     let account = match &token.id_token {
         Some(id_token) => check_id_token(id_token, &client_id, &nonce)?,
@@ -149,7 +153,10 @@ fn check_id_token(id_token: &str, client_id: &str, nonce: &str) -> anyhow::Resul
     if claims["nonce"] != nonce {
         bail!("ID token nonce mismatch");
     }
-    if claims["exp"].as_i64().is_some_and(|exp| exp < crate::now_secs()) {
+    if claims["exp"]
+        .as_i64()
+        .is_some_and(|exp| exp < crate::now_secs())
+    {
         bail!("ID token already expired");
     }
     Ok(claims["email"].as_str().map(str::to_owned))

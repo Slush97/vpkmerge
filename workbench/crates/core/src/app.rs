@@ -15,7 +15,7 @@ use crate::permissions::PendingPermission;
 use crate::providers::{self, Endpoint, ModelInfo, ProviderId};
 use crate::secrets::{Credential, Vault};
 use crate::skills::{self, Skill};
-use crate::store::{Session, StoredMessage, Store};
+use crate::store::{Session, Store, StoredMessage};
 
 pub struct App {
     data_dir: PathBuf,
@@ -207,7 +207,11 @@ impl App {
         tokio::task::spawn_blocking(move || vault.get(provider)).await?
     }
 
-    async fn save_credential(&self, provider: ProviderId, credential: Credential) -> anyhow::Result<()> {
+    async fn save_credential(
+        &self,
+        provider: ProviderId,
+        credential: Credential,
+    ) -> anyhow::Result<()> {
         let vault = Arc::clone(&self.vault);
         tokio::task::spawn_blocking(move || vault.set(provider, &credential)).await?
     }
@@ -252,7 +256,8 @@ impl App {
                     Some(Credential::OAuth { client_id, .. }) => client_id,
                     _ => None,
                 };
-                auth::openai::sign_in(&self.http, &host_id, known_client.as_deref(), open, &cancel).await?
+                auth::openai::sign_in(&self.http, &host_id, known_client.as_deref(), open, &cancel)
+                    .await?
             }
             ProviderId::Openrouter => auth::openrouter::sign_in(&self.http, open, &cancel).await?,
             _ => bail!("{} connects with an API key", provider.name()),
@@ -271,8 +276,13 @@ impl App {
         if key.is_empty() {
             bail!("the key is empty");
         }
-        self.save_credential(provider, Credential::ApiKey { key: key.to_owned() })
-            .await
+        self.save_credential(
+            provider,
+            Credential::ApiKey {
+                key: key.to_owned(),
+            },
+        )
+        .await
     }
 
     pub async fn sign_out(&self, provider: ProviderId) -> anyhow::Result<()> {
@@ -296,7 +306,10 @@ impl App {
             }
         }
         if cred.is_none() && provider != ProviderId::Local {
-            bail!("{} is not connected. Open Settings, then Accounts.", provider.name());
+            bail!(
+                "{} is not connected. Open Settings, then Accounts.",
+                provider.name()
+            );
         }
         Ok(Endpoint::new(provider, cred.as_ref(), &local_url))
     }
@@ -364,7 +377,8 @@ impl App {
 
     /// The built-in servers with the user's `mcp.json` layered on top.
     fn mcp_config(&self) -> anyhow::Result<mcp::ConfigFile> {
-        let user = serde_json::from_str(&self.mcp_config_text()?).context("mcp.json is not valid")?;
+        let user =
+            serde_json::from_str(&self.mcp_config_text()?).context("mcp.json is not valid")?;
         Ok(self.builtin_mcp.clone().with_user(user))
     }
 
@@ -379,9 +393,15 @@ impl App {
     }
 
     pub async fn save_mcp_config(&self, text: &str) -> anyhow::Result<()> {
-        let user: mcp::ConfigFile = serde_json::from_str(text).context("not valid MCP config JSON")?;
-        crate::write_atomic(&self.mcp_path(), serde_json::to_string_pretty(&user)?.as_bytes())?;
-        self.mcp.apply(&self.builtin_mcp.clone().with_user(user)).await;
+        let user: mcp::ConfigFile =
+            serde_json::from_str(text).context("not valid MCP config JSON")?;
+        crate::write_atomic(
+            &self.mcp_path(),
+            serde_json::to_string_pretty(&user)?.as_bytes(),
+        )?;
+        self.mcp
+            .apply(&self.builtin_mcp.clone().with_user(user))
+            .await;
         Ok(())
     }
 
@@ -402,24 +422,45 @@ impl App {
     // The preview viewer asks the vpkmerge server for animations itself, so
     // playing one never goes through a model.
 
-    pub async fn preview_animations(&self, hero: &str, vpk: Option<&str>) -> anyhow::Result<PreviewAnimations> {
+    pub async fn preview_animations(
+        &self,
+        hero: &str,
+        vpk: Option<&str>,
+    ) -> anyhow::Result<PreviewAnimations> {
         let args = serde_json::json!({ "hero": hero, "vpk": vpk });
-        let out = self.call_tool("vpkmerge", "list_hero_animations", &args).await?;
+        let out = self
+            .call_tool("vpkmerge", "list_hero_animations", &args)
+            .await?;
         serde_json::from_value(out).context("list_hero_animations returned an unexpected shape")
     }
 
     /// Path of a skeleton-only GLB carrying one animation.
-    pub async fn preview_animation(&self, hero: &str, vpk: Option<&str>, animation: &str) -> anyhow::Result<PathBuf> {
+    pub async fn preview_animation(
+        &self,
+        hero: &str,
+        vpk: Option<&str>,
+        animation: &str,
+    ) -> anyhow::Result<PathBuf> {
         let args = serde_json::json!({ "hero": hero, "vpk": vpk, "animation": animation });
-        let out = self.call_tool("vpkmerge", "preview_hero_animation", &args).await?;
+        let out = self
+            .call_tool("vpkmerge", "preview_hero_animation", &args)
+            .await?;
         out["animationGlb"]
             .as_str()
             .map(PathBuf::from)
             .context("preview_hero_animation returned no file")
     }
 
-    async fn call_tool(&self, server: &str, tool: &str, args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let (output, is_error) = self.mcp.call(&mcp::qualified(server, tool), &args.to_string()).await?;
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let (output, is_error) = self
+            .mcp
+            .call(&mcp::qualified(server, tool), &args.to_string())
+            .await?;
         if is_error {
             bail!("{output}");
         }
@@ -442,7 +483,10 @@ impl App {
                 Ok(p)
             }
             Err(e) => {
-                self.agent_errors.lock().unwrap().insert(agent, format!("{e:#}"));
+                self.agent_errors
+                    .lock()
+                    .unwrap()
+                    .insert(agent, format!("{e:#}"));
                 Err(e)
             }
         }
@@ -472,7 +516,11 @@ impl App {
         self.agent(agent).await?.authenticate(method_id).await
     }
 
-    pub async fn respond_permission(&self, request_id: &str, option_id: Option<&str>) -> anyhow::Result<()> {
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        option_id: Option<&str>,
+    ) -> anyhow::Result<()> {
         let pending = self
             .permissions
             .lock()
@@ -480,7 +528,9 @@ impl App {
             .remove(request_id)
             .context("that request was already answered or has expired")?;
         match pending {
-            PendingPermission::Agent { process, rpc_id } => process.answer_permission(rpc_id, option_id).await,
+            PendingPermission::Agent { process, rpc_id } => {
+                process.answer_permission(rpc_id, option_id).await;
+            }
             PendingPermission::Tool(answer) => {
                 let _ = answer.send(option_id.map(str::to_owned));
             }

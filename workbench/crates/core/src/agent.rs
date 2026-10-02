@@ -9,11 +9,14 @@ use tokio_util::sync::CancellationToken;
 use crate::app::App;
 use crate::config::Choice;
 use crate::permissions::{self, ActionKind, Decision, PendingPermission};
-use crate::providers::{self, Cancelled, ChatMessage, CompletionRequest, Delta, Part, Role, ToolSpec};
+use crate::providers::{
+    self, Cancelled, ChatMessage, CompletionRequest, Delta, Part, Role, ToolSpec,
+};
 use crate::skills;
 use crate::store::{StoredMessage, UNTITLED};
 
-const BASE_INSTRUCTIONS: &str = "You are the assistant inside Workbench, a local desktop workbench \
+const BASE_INSTRUCTIONS: &str =
+    "You are the assistant inside Workbench, a local desktop workbench \
 for making Deadlock mods (VPK merging, Blender, sound and texture edits). Use the tools you have \
 when they help, and say plainly when something is outside what they can do. Keep answers short and \
 concrete. Never claim a tool ran or succeeded unless its result says so.";
@@ -21,19 +24,34 @@ concrete. Never claim a tool ran or succeeded unless its result says so.";
 /// Tool results the model gets when a call is not allowed to run.
 const BLOCKED: &str = "Blocked: Workbench is set to Read only, so this tool cannot run. \
 Do not retry it. Tell the user what you wanted to do.";
-const DECLINED: &str = "The user declined this tool call. Do not retry it. Ask what they want instead.";
+const DECLINED: &str =
+    "The user declined this tool call. Do not retry it. Ask what they want instead.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentEvent {
-    MessageSaved { message: StoredMessage },
-    TextDelta { text: String },
-    ReasoningDelta { text: String },
+    MessageSaved {
+        message: StoredMessage,
+    },
+    TextDelta {
+        text: String,
+    },
+    ReasoningDelta {
+        text: String,
+    },
     #[serde(rename_all = "camelCase")]
-    ToolStarted { call_id: String, name: String },
+    ToolStarted {
+        call_id: String,
+        name: String,
+    },
     #[serde(rename_all = "camelCase")]
-    SessionRenamed { session_id: String, title: String },
-    Notice { message: String },
+    SessionRenamed {
+        session_id: String,
+        title: String,
+    },
+    Notice {
+        message: String,
+    },
     #[serde(rename_all = "camelCase")]
     PermissionRequested {
         request_id: String,
@@ -41,10 +59,14 @@ pub enum AgentEvent {
         options: Vec<crate::acp::PermissionOption>,
     },
     #[serde(rename_all = "camelCase")]
-    PermissionResolved { request_id: String },
+    PermissionResolved {
+        request_id: String,
+    },
     Finished,
     Cancelled,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
 }
 
 pub(crate) type Sink<'a> = &'a (dyn Fn(AgentEvent) + Send + Sync);
@@ -58,7 +80,12 @@ impl App {
 
     /// Runs one user turn to completion. Every outcome, including failure,
     /// is reported through `sink`; the return value is for logging only.
-    pub async fn run_turn(&self, session_id: &str, text: &str, sink: Sink<'_>) -> anyhow::Result<()> {
+    pub async fn run_turn(
+        &self,
+        session_id: &str,
+        text: &str,
+        sink: Sink<'_>,
+    ) -> anyhow::Result<()> {
         let cancel = CancellationToken::new();
         let turn_id = uuid::Uuid::new_v4();
         if let Some((_, previous)) = self
@@ -86,7 +113,13 @@ impl App {
         result
     }
 
-    async fn turn(&self, session_id: &str, text: &str, sink: Sink<'_>, cancel: &CancellationToken) -> anyhow::Result<()> {
+    async fn turn(
+        &self,
+        session_id: &str,
+        text: &str,
+        sink: Sink<'_>,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<()> {
         let text = text.trim();
         if text.is_empty() {
             bail!("message is empty");
@@ -96,14 +129,21 @@ impl App {
             bail!("pick a model first (model menu under the message box)");
         };
 
-        let user = self
-            .store
-            .append(session_id, Role::User, vec![Part::Text { text: text.to_owned() }], None)?;
+        let user = self.store.append(
+            session_id,
+            Role::User,
+            vec![Part::Text {
+                text: text.to_owned(),
+            }],
+            None,
+        )?;
         sink(AgentEvent::MessageSaved { message: user });
         self.maybe_title(session_id, text, sink)?;
 
         let (provider, model) = match choice {
-            Choice::Agent { agent } => return self.acp_turn(session_id, text, agent, sink, cancel).await,
+            Choice::Agent { agent } => {
+                return self.acp_turn(session_id, text, agent, sink, cancel).await
+            }
             Choice::Model { provider, model } => (provider, model),
         };
         let endpoint = self.endpoint(provider).await?;
@@ -125,7 +165,10 @@ impl App {
                 .store
                 .messages(session_id)?
                 .into_iter()
-                .map(|m| ChatMessage { role: m.role, parts: m.parts })
+                .map(|m| ChatMessage {
+                    role: m.role,
+                    parts: m.parts,
+                })
                 .collect();
             let request = CompletionRequest {
                 model: &model,
@@ -141,29 +184,38 @@ impl App {
                 }
                 Delta::Reasoning(t) => sink(AgentEvent::ReasoningDelta { text: t.to_owned() }),
             };
-            let completion = match providers::complete(&self.http, &endpoint, &request, cancel, &mut on_delta).await {
-                Ok(c) => c,
-                Err(e) => {
-                    if e.is::<Cancelled>() && !partial.is_empty() {
-                        let saved = self.store.append(
-                            session_id,
-                            Role::Assistant,
-                            vec![Part::Text { text: partial }],
-                            Some(&model),
-                        )?;
-                        sink(AgentEvent::MessageSaved { message: saved });
+            let completion =
+                match providers::complete(&self.http, &endpoint, &request, cancel, &mut on_delta)
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        if e.is::<Cancelled>() && !partial.is_empty() {
+                            let saved = self.store.append(
+                                session_id,
+                                Role::Assistant,
+                                vec![Part::Text { text: partial }],
+                                Some(&model),
+                            )?;
+                            sink(AgentEvent::MessageSaved { message: saved });
+                        }
+                        return Err(e);
                     }
-                    return Err(e);
-                }
-            };
+                };
             if let Some(note) = &completion.stop_note {
-                sink(AgentEvent::Notice { message: note.clone() });
+                sink(AgentEvent::Notice {
+                    message: note.clone(),
+                });
             }
             let parts = completion.into_parts();
             let calls: Vec<(String, String, String)> = parts
                 .iter()
                 .filter_map(|p| match p {
-                    Part::ToolCall { id, name, arguments } => Some((id.clone(), name.clone(), arguments.clone())),
+                    Part::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } => Some((id.clone(), name.clone(), arguments.clone())),
                     _ => None,
                 })
                 .collect();
@@ -179,18 +231,19 @@ impl App {
             }
 
             for (call_id, name, arguments) in calls {
-                let outcome = if let Some(refusal) = self.authorize(session_id, &name, sink, cancel).await? {
-                    Ok((refusal.to_owned(), true))
-                } else {
-                    sink(AgentEvent::ToolStarted {
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                    });
-                    tokio::select! {
-                        () = cancel.cancelled() => return Err(Cancelled.into()),
-                        r = self.run_tool(&name, &arguments, &skill_list) => r,
-                    }
-                };
+                let outcome =
+                    if let Some(refusal) = self.authorize(session_id, &name, sink, cancel).await? {
+                        Ok((refusal.to_owned(), true))
+                    } else {
+                        sink(AgentEvent::ToolStarted {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                        });
+                        tokio::select! {
+                            () = cancel.cancelled() => return Err(Cancelled.into()),
+                            r = self.run_tool(&name, &arguments, &skill_list) => r,
+                        }
+                    };
                 let (output, is_error) = match outcome {
                     Ok(pair) => pair,
                     Err(e) => (format!("{e:#}"), true),
@@ -228,11 +281,17 @@ impl App {
         let Some((title, read_only)) = self.mcp.describe(name).await else {
             return Ok(None);
         };
-        let kind = if read_only { ActionKind::Read } else { ActionKind::Other };
+        let kind = if read_only {
+            ActionKind::Read
+        } else {
+            ActionKind::Other
+        };
         Ok(match self.settings().permission_level.decide(kind) {
             Decision::Allow => None,
             Decision::Deny => Some(BLOCKED),
-            Decision::Ask => (!self.confirm(session_id, name, title, sink, cancel).await?).then_some(DECLINED),
+            Decision::Ask => {
+                (!self.confirm(session_id, name, title, sink, cancel).await?).then_some(DECLINED)
+            }
         })
     }
 
@@ -279,7 +338,12 @@ impl App {
         }
     }
 
-    async fn run_tool(&self, name: &str, arguments: &str, skill_list: &[skills::Skill]) -> anyhow::Result<(String, bool)> {
+    async fn run_tool(
+        &self,
+        name: &str,
+        arguments: &str,
+        skill_list: &[skills::Skill],
+    ) -> anyhow::Result<(String, bool)> {
         if name == skills::LOAD_TOOL || name == skills::READ_FILE_TOOL {
             let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
             let skill = args["name"].as_str().unwrap_or_default();
@@ -334,7 +398,12 @@ mod tests {
     }
 
     /// Runs `confirm`, answering any prompt with `answer`, and counts prompts.
-    async fn confirm(app: &Arc<App>, session: &str, answer: Option<&'static str>, prompts: &Arc<AtomicUsize>) -> bool {
+    async fn confirm(
+        app: &Arc<App>,
+        session: &str,
+        answer: Option<&'static str>,
+        prompts: &Arc<AtomicUsize>,
+    ) -> bool {
         let responder = Arc::clone(app);
         let count = Arc::clone(prompts);
         let sink = move |event: AgentEvent| {
@@ -344,9 +413,15 @@ mod tests {
                 tokio::spawn(async move { app.respond_permission(&request_id, answer).await });
             }
         };
-        app.confirm(session, TOOL, "blender.run".into(), &sink, &CancellationToken::new())
-            .await
-            .unwrap()
+        app.confirm(
+            session,
+            TOOL,
+            "blender.run".into(),
+            &sink,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -384,7 +459,9 @@ mod tests {
             }
             _ => {}
         };
-        let outcome = app.confirm("a", TOOL, "blender.run".into(), &sink, &cancel).await;
+        let outcome = app
+            .confirm("a", TOOL, "blender.run".into(), &sink, &cancel)
+            .await;
         assert!(outcome.unwrap_err().is::<Cancelled>());
         assert_eq!(resolved.load(Ordering::SeqCst), 1);
         assert!(app.permissions.lock().unwrap().is_empty());

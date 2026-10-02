@@ -27,7 +27,17 @@ async fn connects_and_lists_tools() {
     assert_eq!(status[0].state, "connected", "{:?}", status[0].error);
     assert!(!status[0].tools.is_empty());
     let specs = manager.tool_specs().await;
-    assert!(specs.iter().all(|s| s.name.starts_with("mcp__live__") && s.name.len() <= 64));
-    println!("{} tools: {}", specs.len(), specs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "));
+    assert!(specs
+        .iter()
+        .all(|s| s.name.starts_with("mcp__live__") && s.name.len() <= 64));
+    println!(
+        "{} tools: {}",
+        specs.len(),
+        specs
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     manager.shutdown_all().await;
 }

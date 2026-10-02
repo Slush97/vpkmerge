@@ -10,7 +10,9 @@ use workbench_core::providers::{Part, ProviderId, Role};
 use workbench_core::{AgentEvent, App};
 
 fn sse(chunks: &[&str]) -> String {
-    let mut out = String::from("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
+    let mut out = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+    );
     for c in chunks {
         out.push_str("data: ");
         out.push_str(c);
@@ -36,15 +38,23 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, String) {
         .lines()
         .find_map(|l| {
             let (k, v) = l.split_once(':')?;
-            k.eq_ignore_ascii_case("content-length").then(|| v.trim().parse().ok())?
+            k.eq_ignore_ascii_case("content-length")
+                .then(|| v.trim().parse().ok())?
         })
         .unwrap_or(0);
     while buf.len() < head_end + len {
         let n = stream.read(&mut chunk).await.unwrap();
         buf.extend_from_slice(&chunk[..n]);
     }
-    let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
-    (path, String::from_utf8_lossy(&buf[head_end..head_end + len]).to_string())
+    let path = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned();
+    (
+        path,
+        String::from_utf8_lossy(&buf[head_end..head_end + len]).to_string(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -70,7 +80,9 @@ async fn skill_tool_round_trip() {
             let (mut stream, _) = listener.accept().await.unwrap();
             let (path, body) = read_request(&mut stream).await;
             assert_eq!(path, "/v1/chat/completions");
-            seen.lock().unwrap().push(serde_json::from_str(&body).unwrap());
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_str(&body).unwrap());
             stream.write_all(reply.as_bytes()).await.unwrap();
             stream.shutdown().await.unwrap();
         }
@@ -114,12 +126,17 @@ async fn skill_tool_round_trip() {
 
     let messages = app.messages(&session.id).unwrap();
     let roles: Vec<Role> = messages.iter().map(|m| m.role).collect();
-    assert_eq!(roles, [Role::User, Role::Assistant, Role::Tool, Role::Assistant]);
+    assert_eq!(
+        roles,
+        [Role::User, Role::Assistant, Role::Tool, Role::Assistant]
+    );
     assert!(matches!(
         &messages[2].parts[0],
         Part::ToolResult { output, is_error: false, .. } if output.contains("hello from skill")
     ));
-    assert!(matches!(&messages[3].parts[0], Part::Text { text } if text == "The skill says hello."));
+    assert!(
+        matches!(&messages[3].parts[0], Part::Text { text } if text == "The skill says hello.")
+    );
 
     let bodies = bodies.lock().unwrap();
     assert_eq!(bodies[0]["model"], "fake-model");
@@ -131,7 +148,10 @@ async fn skill_tool_round_trip() {
     let tool_msg = second.iter().find(|m| m["role"] == "tool").unwrap();
     assert_eq!(tool_msg["tool_call_id"], "call_1");
     let assistant = second.iter().find(|m| m["role"] == "assistant").unwrap();
-    assert_eq!(assistant["tool_calls"][0]["function"]["arguments"], r#"{"name":"demo"}"#);
+    assert_eq!(
+        assistant["tool_calls"][0]["function"]["arguments"],
+        r#"{"name":"demo"}"#
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

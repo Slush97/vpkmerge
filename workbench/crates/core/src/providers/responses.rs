@@ -25,7 +25,12 @@ pub(super) fn body(req: &CompletionRequest<'_>) -> Value {
                     input.push(json!({ "role": "assistant", "content": text }));
                 }
                 for part in &msg.parts {
-                    if let Part::ToolCall { id, name, arguments } = part {
+                    if let Part::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } = part
+                    {
                         input.push(json!({
                             "type": "function_call",
                             "call_id": id,
@@ -37,7 +42,10 @@ pub(super) fn body(req: &CompletionRequest<'_>) -> Value {
             }
             Role::Tool => {
                 for part in &msg.parts {
-                    if let Part::ToolResult { call_id, output, .. } = part {
+                    if let Part::ToolResult {
+                        call_id, output, ..
+                    } = part
+                    {
                         input.push(json!({
                             "type": "function_call_output",
                             "call_id": call_id,
@@ -80,7 +88,11 @@ pub(super) struct Decoder {
 
 impl Decoder {
     /// Returns true once the response is complete.
-    pub(super) fn feed(&mut self, v: &Value, on_delta: &mut (dyn FnMut(Delta<'_>) + Send)) -> anyhow::Result<bool> {
+    pub(super) fn feed(
+        &mut self,
+        v: &Value,
+        on_delta: &mut (dyn FnMut(Delta<'_>) + Send),
+    ) -> anyhow::Result<bool> {
         match v["type"].as_str().unwrap_or_default() {
             "response.output_text.delta" => {
                 let d = v["delta"].as_str().unwrap_or_default();
@@ -115,7 +127,9 @@ impl Decoder {
             "response.failed" => {
                 let err = &v["response"]["error"];
                 let code = err["code"].as_str().unwrap_or("failed");
-                let message = err["message"].as_str().unwrap_or("the model request failed");
+                let message = err["message"]
+                    .as_str()
+                    .unwrap_or("the model request failed");
                 bail!("{code}: {message}");
             }
             "error" => {
@@ -148,31 +162,62 @@ mod tests {
     #[test]
     fn history_maps_to_input_items() {
         let messages = [
-            ChatMessage { role: Role::User, parts: vec![Part::Text { text: "hi".into() }] },
+            ChatMessage {
+                role: Role::User,
+                parts: vec![Part::Text { text: "hi".into() }],
+            },
             ChatMessage {
                 role: Role::Assistant,
                 parts: vec![
-                    Part::Reasoning { text: "thinking".into() },
-                    Part::Text { text: "checking".into() },
-                    Part::ToolCall { id: "c1".into(), name: "t".into(), arguments: "{}".into() },
+                    Part::Reasoning {
+                        text: "thinking".into(),
+                    },
+                    Part::Text {
+                        text: "checking".into(),
+                    },
+                    Part::ToolCall {
+                        id: "c1".into(),
+                        name: "t".into(),
+                        arguments: "{}".into(),
+                    },
                 ],
             },
             ChatMessage {
                 role: Role::Tool,
-                parts: vec![Part::ToolResult { call_id: "c1".into(), name: "t".into(), output: "ok".into(), is_error: false }],
+                parts: vec![Part::ToolResult {
+                    call_id: "c1".into(),
+                    name: "t".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                }],
             },
         ];
-        let tools = [ToolSpec { name: "t".into(), description: "d".into(), parameters: json!({"type": "object"}) }];
-        let req = CompletionRequest { model: "m", instructions: "sys", messages: &messages, tools: &tools };
+        let tools = [ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            parameters: json!({"type": "object"}),
+        }];
+        let req = CompletionRequest {
+            model: "m",
+            instructions: "sys",
+            messages: &messages,
+            tools: &tools,
+        };
         let b = body(&req);
         assert_eq!(b["store"], false);
         assert_eq!(b["stream"], true);
         assert_eq!(b["instructions"], "sys");
         let input = b["input"].as_array().unwrap();
         assert_eq!(input.len(), 4);
-        assert_eq!(input[1], json!({"role": "assistant", "content": "checking"}));
+        assert_eq!(
+            input[1],
+            json!({"role": "assistant", "content": "checking"})
+        );
         assert_eq!(input[2]["type"], "function_call");
-        assert_eq!(input[3], json!({"type": "function_call_output", "call_id": "c1", "output": "ok"}));
+        assert_eq!(
+            input[3],
+            json!({"type": "function_call_output", "call_id": "c1", "output": "ok"})
+        );
         assert_eq!(b["tools"][0]["type"], "function");
     }
 
@@ -192,11 +237,16 @@ mod tests {
         ] {
             assert!(!d.feed(&ev, &mut sink).unwrap());
         }
-        assert!(d.feed(&json!({"type": "response.completed"}), &mut sink).unwrap());
+        assert!(d
+            .feed(&json!({"type": "response.completed"}), &mut sink)
+            .unwrap());
         let out = d.finish().unwrap();
         assert_eq!(seen, "Hello");
         assert_eq!(out.text, "Hello");
-        assert_eq!(out.tool_calls, [("c9".into(), "x".into(), "{\"a\":1}".into())]);
+        assert_eq!(
+            out.tool_calls,
+            [("c9".into(), "x".into(), "{\"a\":1}".into())]
+        );
     }
 
     #[test]

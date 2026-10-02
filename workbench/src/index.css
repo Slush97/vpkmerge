@@ -1,0 +1,450 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens live on :root[data-theme]. The accent and its derived fill and
+ * ink colors are set at runtime by lib/theme.ts from the user's settings.
+ * Dark is lacquer and brass, light is ledger paper and sepia ink. --gilt is
+ * the ornament color (rules, frames, the seal) and does not follow the accent.
+ */
+:root {
+  --accent: #c9a24d;
+  --accent-fill: #c9a24d;
+  --on-accent: #18140e;
+  --accent-ink: #c9a24d;
+}
+
+:root,
+:root[data-theme="light"] {
+  --bg: #f4eee0;
+  --sidebar: #ece4d1;
+  --surface: #fbf7ee;
+  --fill: #e8dfcb;
+  --group: #eee6d4;
+  --elevated: #fbf7ee;
+  --hover: rgb(70 48 14 / 0.07);
+  --active: rgb(70 48 14 / 0.12);
+  --line: rgb(84 60 20 / 0.17);
+  --line-strong: rgb(84 60 20 / 0.36);
+  --code: #ebe3d0;
+  --gilt: #7d5f22;
+
+  --text: #1d1812;
+  --text-2: #382f23;
+  --muted: #574c3c;
+  --faint: #625645;
+
+  --running: #23607f;
+  --success: #36652a;
+  --warning: #875400;
+  --danger: #a5301f;
+  --interrupted: #65469e;
+
+  --body-weight: 400;
+  --pop-shadow: 0 14px 36px rgb(60 40 10 / 0.18), 0 0 0 1px var(--line-strong);
+  --card-shadow: 0 0 0 1px var(--line);
+  --scrim: rgb(40 28 10 / 0.36);
+  --wash: radial-gradient(ellipse at 50% 35%, transparent 50%, rgb(120 88 36 / 0.09) 100%);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.25 0 0 0 0 0.1 0.14 0 0 0 -0.02'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] {
+  --bg: #13110e;
+  --sidebar: #181510;
+  --surface: #1d1a14;
+  --fill: #27221a;
+  --group: #1f1b15;
+  --elevated: #221e17;
+  --hover: rgb(240 222 180 / 0.06);
+  --active: rgb(240 222 180 / 0.1);
+  --line: rgb(214 184 120 / 0.15);
+  --line-strong: rgb(214 184 120 / 0.32);
+  --code: #0d0b09;
+  --gilt: #c9a55c;
+
+  --text: #f2ead9;
+  --text-2: #ddd3bc;
+  --muted: #b8ac92;
+  --faint: #a1957d;
+
+  --running: #8fbcd6;
+  --success: #8dbb6c;
+  --warning: #e3b548;
+  --danger: #ee7a68;
+  --interrupted: #bca3e6;
+
+  --body-weight: 420;
+  --pop-shadow: 0 18px 50px rgb(0 0 0 / 0.6), 0 0 0 1px var(--line-strong);
+  --card-shadow: 0 0 0 1px var(--line);
+  --scrim: rgb(0 0 0 / 0.6);
+  --wash: radial-gradient(110% 65% at 50% -8%, rgb(201 165 92 / 0.1), transparent 62%);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 0.93 0 0 0 0 0.8 0.07 0 0 0 -0.012'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@theme inline {
+  --font-sans: "Libre Franklin Variable", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Federo", "Libre Franklin Variable", sans-serif;
+
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 3px;
+  --radius-2xl: 3px;
+
+  --color-bg: var(--bg);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-fill: var(--fill);
+  --color-group: var(--group);
+  --color-elevated: var(--elevated);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-code: var(--code);
+  --color-gilt: var(--gilt);
+
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+
+  --color-accent: var(--accent);
+  --color-accent-fill: var(--accent-fill);
+  --color-on-accent: var(--on-accent);
+  --color-accent-ink: var(--accent-ink);
+
+  --color-running: var(--running);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-interrupted: var(--interrupted);
+
+  --shadow-pop: var(--pop-shadow);
+  --shadow-card: var(--card-shadow);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: var(--body-weight);
+  line-height: 1.45;
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Conversation text and inputs stay selectable. */
+.selectable,
+textarea,
+input,
+pre,
+code {
+  user-select: text;
+}
+
+/* In the base layer so Tailwind utilities like outline-none can override. */
+@layer base {
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+    outline-offset: 2px;
+  }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+/* Paper grain sits on the big background panes only, never over text surfaces. */
+.grain {
+  background-image: var(--grain);
+}
+
+.backdrop {
+  background-image: var(--wash), var(--grain);
+}
+
+/*
+ * Setback corners, like a skyscraper's stepped crown. The frame is drawn by two
+ * pseudo-elements so the element itself stays unclipped and popovers can escape.
+ * .deco-clip clips an element's own content to the same shape.
+ */
+.deco-frame,
+.deco-clip {
+  --notch: 5px;
+  --deco-shape: polygon(
+    0 calc(var(--notch) * 2),
+    var(--notch) calc(var(--notch) * 2),
+    var(--notch) var(--notch),
+    calc(var(--notch) * 2) var(--notch),
+    calc(var(--notch) * 2) 0,
+    calc(100% - var(--notch) * 2) 0,
+    calc(100% - var(--notch) * 2) var(--notch),
+    calc(100% - var(--notch)) var(--notch),
+    calc(100% - var(--notch)) calc(var(--notch) * 2),
+    100% calc(var(--notch) * 2),
+    100% calc(100% - var(--notch) * 2),
+    calc(100% - var(--notch)) calc(100% - var(--notch) * 2),
+    calc(100% - var(--notch)) calc(100% - var(--notch)),
+    calc(100% - var(--notch) * 2) calc(100% - var(--notch)),
+    calc(100% - var(--notch) * 2) 100%,
+    calc(var(--notch) * 2) 100%,
+    calc(var(--notch) * 2) calc(100% - var(--notch)),
+    var(--notch) calc(100% - var(--notch)),
+    var(--notch) calc(100% - var(--notch) * 2),
+    0 calc(100% - var(--notch) * 2)
+  );
+}
+
+.deco-clip {
+  clip-path: var(--deco-shape);
+}
+
+.deco-frame {
+  position: relative;
+  isolation: isolate;
+}
+
+.deco-frame::before,
+.deco-frame::after {
+  content: "";
+  position: absolute;
+  clip-path: var(--deco-shape);
+  pointer-events: none;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.deco-frame::before {
+  inset: 0;
+  z-index: -2;
+  background: var(--frame-line, var(--line-strong));
+}
+
+.deco-frame::after {
+  inset: 1px;
+  z-index: -1;
+  background: var(--frame-fill, var(--surface));
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.seal-turn {
+  animation: spin 240s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seal-turn {
+    animation: none;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pop-in {
+  animation: pop-in 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fade-in 160ms ease-out;
+}
+
+/* Rendered markdown in assistant messages. */
+.prose-chat {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > :last-child {
+  margin-bottom: 0;
+}
+.prose-chat p,
+.prose-chat ul,
+.prose-chat ol,
+.prose-chat pre,
+.prose-chat table,
+.prose-chat blockquote {
+  margin: 0 0 0.8em;
+}
+.prose-chat ul,
+.prose-chat ol {
+  padding-left: 1.35em;
+}
+.prose-chat ol {
+  list-style: decimal;
+}
+.prose-chat li + li {
+  margin-top: 0.25em;
+}
+.prose-chat li::marker {
+  color: var(--gilt);
+  font-variant-numeric: tabular-nums;
+}
+.prose-chat ul > li:not(.task-list-item) {
+  position: relative;
+}
+.prose-chat ul > li:not(.task-list-item)::before {
+  content: "";
+  position: absolute;
+  left: -1.05em;
+  top: 0.62em;
+  width: 5px;
+  height: 5px;
+  background: var(--gilt);
+  transform: rotate(45deg);
+}
+.prose-chat h1,
+.prose-chat h2 {
+  margin: 1.1em 0 0.45em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+.prose-chat h1 {
+  font-size: 1.65em;
+}
+.prose-chat h2 {
+  font-size: 1.4em;
+}
+.prose-chat h3 {
+  margin: 1.5em 0 0.6em;
+  font-size: 0.78em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.prose-chat strong {
+  font-weight: 650;
+}
+.prose-chat a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent-ink) 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.prose-chat a:hover {
+  text-decoration-color: currentColor;
+}
+.prose-chat code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.38em;
+  border-radius: 2px;
+  background: var(--fill);
+}
+.prose-chat pre {
+  padding: 14px 16px;
+  border-radius: 2px;
+  background: var(--code);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow-x: auto;
+}
+.prose-chat pre code {
+  padding: 0;
+  background: none;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prose-chat blockquote {
+  padding-left: 14px;
+  border-left: 3px double var(--gilt);
+  color: var(--muted);
+}
+.prose-chat table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.prose-chat th,
+.prose-chat td {
+  padding: 7px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.prose-chat tr:last-child td {
+  border-bottom: 0;
+}
+.prose-chat th {
+  background: var(--fill);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.prose-chat hr {
+  position: relative;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 1.4em 0;
+  overflow: visible;
+}
+.prose-chat hr::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 7px;
+  height: 7px;
+  background: var(--gilt);
+  outline: 5px solid var(--bg);
+  transform: translate(-50%, -50%) rotate(45deg);
+}

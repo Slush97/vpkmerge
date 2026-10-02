@@ -37,6 +37,13 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all --check
 
+      - name: workbench sidecar placeholder
+        # workbench's build.rs (and tauri-build) only check that the bundled
+        # vpkmerge-mcp binary exists; lint and tests never run it.
+        run: |
+          mkdir -p workbench/src-tauri/binaries
+          touch "workbench/src-tauri/binaries/vpkmerge-mcp-$(rustc -vV | sed -n 's/^host: //p')"
+
       - name: clippy (pedantic, deny warnings)
         # --lib --bins --tests, not --all-targets: the `examples/` are dev-only
         # scratch (ad-hoc analysis tools), exempt from the pedantic gate.

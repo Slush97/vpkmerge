@@ -7,6 +7,8 @@ members = [
     "morphic",
     "vpkmerge-harness",
     "vpkmerge-mcp",
+    "workbench/crates/core",
+    "workbench/src-tauri",
 ]
 exclude = ["vendor/valve_pak"]
 

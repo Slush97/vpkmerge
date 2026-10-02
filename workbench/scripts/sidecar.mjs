@@ -1,19 +1,13 @@
-// Builds the vpkmerge-mcp server from the vpkmerge checkout and puts it where
+// Builds the vpkmerge-mcp server from the enclosing workspace and puts it where
 // Tauri's `externalBin` expects it: src-tauri/binaries/vpkmerge-mcp-<target triple>.
-// The checkout defaults to ../vpkmerge; point VPKMERGE_DIR somewhere else to override.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const vpkmerge = resolve(process.env.VPKMERGE_DIR ?? join(root, "..", "vpkmerge"));
-const manifest = join(vpkmerge, "Cargo.toml");
-if (!existsSync(manifest)) {
-  console.error(`No vpkmerge checkout at ${vpkmerge}. Clone it there or set VPKMERGE_DIR.`);
-  process.exit(1);
-}
+const manifest = join(root, "..", "Cargo.toml");
 
 const cargo = (args, options) => execFileSync("cargo", [...args, "--manifest-path", manifest], options);
 

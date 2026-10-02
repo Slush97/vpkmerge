@@ -16,6 +16,10 @@ vpkmerge-mcp/         local MCP server `vpkmerge-mcp` on top of core (stdio, rmc
 gui/
   src/                Vue 3 + Vite + Tailwind 4 frontend
   src-tauri/          Tauri v2 desktop app wrapping the same engine
+workbench/            LLM agent desktop app driving vpkmerge-mcp (Tauri v2 + React 19)
+  crates/core/        workbench-core: providers, agent loop, MCP + ACP clients, skills, sqlite store
+  src-tauri/          Tauri shell; bundles vpkmerge-mcp as a sidecar
+  src/                React frontend
 morphic/              pure-Rust Source 2 decoder: .vtex_c + KV3 + .vmdl_c->.glb (lib, v0.2.0)
   src/                resource / kv3 / texture / model modules
   src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed, lossless v5 writer)
@@ -148,11 +152,12 @@ the rest after the user confirms.
   invalidates them without a restart.
 - Tests: `tests/stdio.rs` drives the real binary over JSON-RPC (runs in CI);
   `tests/live.rs` builds real mods, gated on `DEADLOCK_PAK`.
-- **The workbench app bundles this binary** (`../workbench`): `scripts/sidecar.mjs`
-  builds `-p vpkmerge-mcp --release` from this checkout into
-  `src-tauri/binaries/vpkmerge-mcp-<triple>` (Tauri `externalBin`), and the app
-  registers it as the built-in MCP server `vpkmerge`. Renaming the crate's binary or
-  moving the crate breaks that script.
+- **The workbench app bundles this binary** (`workbench/`): `workbench/scripts/sidecar.mjs`
+  builds `-p vpkmerge-mcp --release` from this workspace into
+  `workbench/src-tauri/binaries/vpkmerge-mcp-<triple>` (Tauri `externalBin`), and the app
+  registers it as the built-in MCP server `vpkmerge`. Renaming the crate's binary
+  breaks that script. `workbench/src-tauri` won't compile until the binary exists, so
+  run `pnpm sidecar` in `workbench/` first (CI touches an empty placeholder instead).
 
 ## CI
 

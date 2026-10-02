@@ -30,7 +30,7 @@ use crate::texture_catalog::{build_texture_index, TextureEntry};
 
 /// On-disk format version. Bump when the cached JSON shape changes so older
 /// caches are treated as a miss instead of mis-parsed.
-pub const CACHE_SCHEMA_VERSION: u32 = 1;
+pub const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Cache-file stem for the voice-line index.
 const KIND_VOICELINE: &str = "voiceline";

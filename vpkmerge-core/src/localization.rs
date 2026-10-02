@@ -211,17 +211,19 @@ pub fn build_hero_roster(
             continue;
         }
         // Only nodes that actually carry the hero flags are heroes.
-        let Some(selectable) = node.get("m_bPlayerSelectable").and_then(Value::as_bool) else {
+        let player_selectable = node.get("m_bPlayerSelectable").and_then(Value::as_bool);
+        let disabled = node.get("m_bDisabled").and_then(Value::as_bool);
+        if player_selectable.is_none() && disabled.is_none() {
             continue;
-        };
+        }
+        let disabled = disabled.unwrap_or(false);
         let in_development = node
             .get("m_bInDevelopment")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let disabled = node
-            .get("m_bDisabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        // Builds from 2026-09 on dropped `m_bPlayerSelectable`; a hero is
+        // pickable when it is neither disabled nor in development.
+        let selectable = player_selectable.unwrap_or(!disabled && !in_development);
 
         let name = names
             .get(key)

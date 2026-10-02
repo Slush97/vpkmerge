@@ -18,12 +18,18 @@
 //! connected component in the index graph is exactly a UV island (a seam is where
 //! the exporter split a vertex, which severs the component). Pure geometry, no
 //! .NET and no Blender, matching this project's runtime-free ethos.
+//!
+//! Only triangles with a non-zero 3D area count. Deadlock hero meshes carry many
+//! zero-area stitch triangles (a third of Vindicta's dress): two corners share
+//! one position while their UVs sit on opposite sides of a seam. They never
+//! rasterize on screen, but in UV space they span half the sheet, which streaked
+//! masks and joined unrelated islands into one.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
 use crate::error::DecodeError;
-use crate::model::{MeshPart, Model, Primitive};
+use crate::model::{MeshPart, Model, Primitive, Skeleton, VertexBuffer};
 
 /// How to partition a model's triangles into regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +40,17 @@ pub enum SegmentBy {
     Material,
     /// One region per connected component in UV space (a UV island).
     Island,
+    /// One region per skeleton bone: each triangle goes to the bone that carries
+    /// most of its skin weight, and a bone whose region is under 1% of the total
+    /// UV area folds into its parent (fingers into the hand). Labels are bone
+    /// names, so regions read as body areas. Unskinned meshes form one region
+    /// per mesh part.
+    Bone,
 }
+
+/// A bone whose region holds less than this share of the segmented UV area is
+/// folded into its parent in [`SegmentBy::Bone`].
+const MIN_BONE_SHARE: f32 = 0.01;
 
 /// A texture-space triangle: the UV coordinates of its three corners.
 #[derive(Debug, Clone, Copy)]
@@ -54,9 +70,38 @@ pub struct Segment {
     /// Source mesh part this region came from.
     pub mesh: String,
     tris: Vec<UvTri>,
+    /// Skeleton bone index -> skin weight times 3D surface area, summed.
+    bones: BTreeMap<usize, f32>,
+    /// Triangles whose UV winding is negative.
+    negative: usize,
 }
 
 impl Segment {
+    fn new(label: String, mesh: String) -> Self {
+        Self {
+            id: 0,
+            label,
+            mesh,
+            tris: Vec::new(),
+            bones: BTreeMap::new(),
+            negative: 0,
+        }
+    }
+
+    /// Adds triangle `t` (vertex indices into `vb`), weighting its skin by its
+    /// 3D area so large faces count for more than slivers.
+    fn push(&mut self, vb: &VertexBuffer, uvs: &[[f32; 2]], t: [usize; 3]) {
+        let uv = [uvs[t[0]], uvs[t[1]], uvs[t[2]]];
+        if edge(uv[0], uv[1], uv[2]) < 0.0 {
+            self.negative += 1;
+        }
+        self.tris.push(UvTri { uv });
+        let area = surface_area(vb, t).unwrap_or(1.0) / 3.0;
+        for (bone, w) in t.into_iter().flat_map(|v| vertex_influences(vb, v)) {
+            *self.bones.entry(bone).or_default() += w * area;
+        }
+    }
+
     /// Number of texture-space triangles in this region.
     #[must_use]
     pub fn triangle_count(&self) -> usize {
@@ -98,6 +143,109 @@ impl Segment {
             })
             .sum()
     }
+
+    /// Skin influence per skeleton bone index, as shares of the region's total
+    /// (summing to 1), largest first. Empty for an unskinned region.
+    #[must_use]
+    pub fn bone_weights(&self) -> Vec<(usize, f32)> {
+        let total: f32 = self.bones.values().sum();
+        if total <= 0.0 {
+            return Vec::new();
+        }
+        let mut out: Vec<(usize, f32)> = self.bones.iter().map(|(&b, &w)| (b, w / total)).collect();
+        out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        out
+    }
+
+    /// Share of triangles wound against the region's majority in UV space. A
+    /// mesh's faces wind consistently in 3D, so a minority winding in UV means
+    /// those faces are mirrored: near 0.5 is a left/right pair sharing texels.
+    #[must_use]
+    pub fn mirrored_fraction(&self) -> f32 {
+        if self.tris.is_empty() {
+            return 0.0;
+        }
+        let minority = self.negative.min(self.tris.len() - self.negative);
+        #[allow(clippy::cast_precision_loss)]
+        let share = minority as f32 / self.tris.len() as f32;
+        share
+    }
+
+    /// Calls `f` with the buffer index (`y * width + x`) of every texel whose
+    /// center lies inside one of the region's triangles, on a `width` x `height`
+    /// texture (top-left origin). A texel under several triangles is visited
+    /// once per triangle.
+    pub fn for_each_texel(&self, width: u32, height: u32, mut f: impl FnMut(usize)) {
+        for t in &self.tris {
+            for_each_texel(width as usize, height as usize, &t.uv, &mut f);
+        }
+    }
+}
+
+/// The triangles of `prim` that can own texels: UV layer 0 present, indices in
+/// range, and a non-zero 3D area (see the module docs on stitch triangles).
+fn renderable_tris<'a>(
+    vb: &'a VertexBuffer,
+    prim: &'a Primitive,
+) -> Option<(&'a [[f32; 2]], impl Iterator<Item = [usize; 3]> + 'a)> {
+    let uvs = vb
+        .texcoords
+        .first()
+        .filter(|uvs| uvs.len() == vb.element_count)?;
+    let n = vb.element_count;
+    let tris = prim
+        .indices
+        .chunks_exact(3)
+        .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
+        .filter(move |t| t.iter().all(|&i| i < n))
+        .filter(move |&t| surface_area(vb, t).is_none_or(|a| a > 0.0));
+    Some((uvs.as_slice(), tris))
+}
+
+/// 3D area of triangle `t`, or `None` when the buffer has no positions. Exactly
+/// coincident corners (and float noise around them) read as zero.
+fn surface_area(vb: &VertexBuffer, t: [usize; 3]) -> Option<f32> {
+    if vb.positions.len() != vb.element_count {
+        return None;
+    }
+    let [a, b, c] = t.map(|i| vb.positions[i]);
+    let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let cross = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    let twice = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+    let longest = [a, b, c]
+        .iter()
+        .zip([b, c, a])
+        .map(|(p, q)| (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2))
+        .fold(0.0f32, f32::max);
+    Some(if twice <= 1e-6 * longest {
+        0.0
+    } else {
+        0.5 * twice
+    })
+}
+
+/// The (bone, weight) lanes of vertex `v` that carry weight. A rigid buffer
+/// (joints but no weights) binds lane 0 fully.
+fn vertex_influences(vb: &VertexBuffer, v: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
+    let joints = vb
+        .joints
+        .get(v)
+        .filter(|_| vb.joints.len() == vb.element_count);
+    let weights = vb
+        .weights
+        .get(v)
+        .filter(|_| vb.weights.len() == vb.element_count);
+    joints.into_iter().flat_map(move |j| {
+        (0..4).filter_map(move |lane| {
+            let w = weights.map_or(if lane == 0 { 1.0 } else { 0.0 }, |w| w[lane]);
+            (w > 0.0).then(|| (usize::from(j[lane]), w))
+        })
+    })
 }
 
 /// Distinct picking color for a segment id (golden-angle hue, fixed S+V). The
@@ -115,23 +263,36 @@ pub fn segment_color(id: usize) -> [u8; 3] {
 /// largest-first by UV area and assigned contiguous ids `0..n`.
 #[must_use]
 pub fn segments(model: &Model, by: SegmentBy, part: Option<&str>) -> Vec<Segment> {
-    let filtered;
-    let meshes: &[MeshPart] = if let Some(want) = part {
-        let want = want.to_lowercase();
-        filtered = model
-            .meshes
-            .iter()
-            .filter(|m| m.name.to_lowercase().contains(&want))
-            .cloned()
-            .collect::<Vec<_>>();
-        &filtered
-    } else {
-        &model.meshes
-    };
+    let want = part.map(str::to_lowercase);
+    segments_where(model, by, &|mesh, _| {
+        want.as_deref()
+            .is_none_or(|w| mesh.name.to_lowercase().contains(w))
+    })
+}
+
+/// [`segments`] over only the primitives `keep` accepts, e.g. the draw calls
+/// whose material samples one texture, so the regions describe that texture's
+/// UV space alone.
+#[must_use]
+pub fn segments_where(
+    model: &Model,
+    by: SegmentBy,
+    keep: &dyn Fn(&MeshPart, &Primitive) -> bool,
+) -> Vec<Segment> {
+    let meshes: Vec<(String, &MeshPart, Vec<&Primitive>)> = model
+        .meshes
+        .iter()
+        .enumerate()
+        .map(|(mi, mesh)| {
+            let prims = mesh.primitives.iter().filter(|p| keep(mesh, p)).collect();
+            (mesh_name(mesh, mi), mesh, prims)
+        })
+        .collect();
     let mut segs = match by {
-        SegmentBy::Part => by_part(meshes),
-        SegmentBy::Material => by_material(meshes),
-        SegmentBy::Island => by_island(meshes),
+        SegmentBy::Part => by_part(&meshes),
+        SegmentBy::Material => by_material(&meshes),
+        SegmentBy::Island => by_island(&meshes),
+        SegmentBy::Bone => by_bone(&meshes, &model.skeleton),
     };
     segs.retain(|s| !s.tris.is_empty());
     segs.sort_by(|a, b| {
@@ -216,85 +377,59 @@ pub fn mask_png(segs: &[Segment], selected: &[usize], res: u32) -> Result<Vec<u8
 
 // --- segment extraction ----------------------------------------------------
 
-/// Texture-space triangles of one primitive (UV layer 0). Empty when the
-/// primitive has no UVs or its buffer is out of range.
-fn prim_uv_tris(mesh: &MeshPart, prim: &Primitive) -> Vec<UvTri> {
-    let Some(vb) = mesh.vertex_buffers.get(prim.vertex_buffer) else {
-        return Vec::new();
-    };
-    let Some(uvs) = vb.texcoords.first() else {
-        return Vec::new();
-    };
-    if uvs.len() != vb.element_count {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(prim.indices.len() / 3);
-    for t in prim.indices.chunks_exact(3) {
-        let (i0, i1, i2) = (t[0] as usize, t[1] as usize, t[2] as usize);
-        if i0 >= uvs.len() || i1 >= uvs.len() || i2 >= uvs.len() {
-            continue;
-        }
-        out.push(UvTri {
-            uv: [uvs[i0], uvs[i1], uvs[i2]],
-        });
-    }
-    out
+/// A mesh part's display name and the primitives being segmented.
+type MeshPrims<'a> = (String, &'a MeshPart, Vec<&'a Primitive>);
+
+/// Every renderable triangle of `prims`, with the buffer it indexes.
+fn each_tri<'a>(
+    mesh: &'a MeshPart,
+    prims: &'a [&'a Primitive],
+) -> impl Iterator<Item = (&'a Primitive, &'a VertexBuffer, &'a [[f32; 2]], [usize; 3])> + 'a {
+    prims.iter().flat_map(move |p| {
+        let vb = mesh.vertex_buffers.get(p.vertex_buffer);
+        vb.and_then(|vb| renderable_tris(vb, p).map(|(uvs, tris)| (vb, uvs, tris)))
+            .into_iter()
+            .flat_map(move |(vb, uvs, tris)| tris.map(move |t| (*p, vb, uvs, t)))
+    })
 }
 
-fn by_part(meshes: &[MeshPart]) -> Vec<Segment> {
+fn by_part(meshes: &[MeshPrims]) -> Vec<Segment> {
     meshes
         .iter()
-        .enumerate()
-        .map(|(mi, mesh)| {
-            let name = mesh_name(mesh, mi);
-            let mut tris = Vec::new();
-            for p in &mesh.primitives {
-                tris.extend(prim_uv_tris(mesh, p));
+        .map(|(name, mesh, prims)| {
+            let mut seg = Segment::new(name.clone(), name.clone());
+            for (_, vb, uvs, t) in each_tri(mesh, prims) {
+                seg.push(vb, uvs, t);
             }
-            Segment {
-                id: 0,
-                label: name.clone(),
-                mesh: name,
-                tris,
-            }
+            seg
         })
         .collect()
 }
 
-fn by_material(meshes: &[MeshPart]) -> Vec<Segment> {
+fn by_material(meshes: &[MeshPrims]) -> Vec<Segment> {
     // Preserve first-seen mesh per material; key on the material path.
-    let mut map: BTreeMap<String, (String, Vec<UvTri>)> = BTreeMap::new();
-    for (mi, mesh) in meshes.iter().enumerate() {
-        let name = mesh_name(mesh, mi);
-        for p in &mesh.primitives {
-            let entry = map
-                .entry(p.material.clone())
-                .or_insert_with(|| (name.clone(), Vec::new()));
-            entry.1.extend(prim_uv_tris(mesh, p));
+    let mut map: BTreeMap<&str, Segment> = BTreeMap::new();
+    for (name, mesh, prims) in meshes {
+        for (p, vb, uvs, t) in each_tri(mesh, prims) {
+            map.entry(p.material.as_str())
+                .or_insert_with(|| {
+                    let label = p.material.rsplit('/').next().unwrap_or(&p.material);
+                    let label = label.strip_suffix("_c").unwrap_or(label);
+                    Segment::new(label.to_owned(), name.clone())
+                })
+                .push(vb, uvs, t);
         }
     }
-    map.into_iter()
-        .map(|(mat, (mesh, tris))| {
-            let label = mat.rsplit('/').next().unwrap_or(mat.as_str()).to_string();
-            let label = label.strip_suffix("_c").unwrap_or(&label).to_string();
-            Segment {
-                id: 0,
-                label,
-                mesh,
-                tris,
-            }
-        })
-        .collect()
+    map.into_values().collect()
 }
 
-fn by_island(meshes: &[MeshPart]) -> Vec<Segment> {
+fn by_island(meshes: &[MeshPrims]) -> Vec<Segment> {
     let mut out = Vec::new();
-    for (mi, mesh) in meshes.iter().enumerate() {
-        let name = mesh_name(mesh, mi);
+    for (name, mesh, prims) in meshes {
         // Group primitives by the vertex buffer they draw from: the index graph
         // (and thus island connectivity) only joins within a single buffer.
         let mut by_buf: BTreeMap<usize, Vec<&Primitive>> = BTreeMap::new();
-        for p in &mesh.primitives {
+        for p in prims {
             by_buf.entry(p.vertex_buffer).or_default().push(p);
         }
         let mut island_no = 0usize;
@@ -302,47 +437,107 @@ fn by_island(meshes: &[MeshPart]) -> Vec<Segment> {
             let Some(vb) = mesh.vertex_buffers.get(bi) else {
                 continue;
             };
-            let Some(uvs) = vb.texcoords.first() else {
-                continue;
-            };
-            if uvs.len() != vb.element_count {
-                continue;
+            let mut uf = UnionFind::new(vb.element_count);
+            for (_, _, _, [a, b, c]) in each_tri(mesh, &prims) {
+                uf.union(a, b);
+                uf.union(a, c);
             }
-            let n = vb.element_count;
-            let mut uf = UnionFind::new(n);
-            for p in &prims {
-                for t in p.indices.chunks_exact(3) {
-                    let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
-                    if a < n && b < n && c < n {
-                        uf.union(a, b);
-                        uf.union(a, c);
-                    }
-                }
+            let mut groups: BTreeMap<usize, Segment> = BTreeMap::new();
+            for (_, vb, uvs, t) in each_tri(mesh, &prims) {
+                groups
+                    .entry(uf.find(t[0]))
+                    .or_insert_with(|| {
+                        let seg = Segment::new(format!("{name} island {island_no}"), name.clone());
+                        island_no += 1;
+                        seg
+                    })
+                    .push(vb, uvs, t);
             }
-            let mut groups: BTreeMap<usize, Vec<UvTri>> = BTreeMap::new();
-            for p in &prims {
-                for t in p.indices.chunks_exact(3) {
-                    let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
-                    if a >= n || b >= n || c >= n {
-                        continue;
-                    }
-                    groups.entry(uf.find(a)).or_default().push(UvTri {
-                        uv: [uvs[a], uvs[b], uvs[c]],
-                    });
-                }
-            }
-            for tris in groups.into_values() {
-                out.push(Segment {
-                    id: 0,
-                    label: format!("{name} island {island_no}"),
-                    mesh: name.clone(),
-                    tris,
-                });
-                island_no += 1;
-            }
+            out.extend(groups.into_values());
         }
     }
     out
+}
+
+fn by_bone(meshes: &[MeshPrims], skeleton: &Skeleton) -> Vec<Segment> {
+    // Each triangle's dominant bone, or None when its buffer carries no skin.
+    let dominant = |vb: &VertexBuffer, t: [usize; 3]| {
+        let mut sum: BTreeMap<usize, f32> = BTreeMap::new();
+        for (bone, w) in t.into_iter().flat_map(|v| vertex_influences(vb, v)) {
+            *sum.entry(bone).or_default() += w;
+        }
+        sum.into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(bone, _)| bone)
+    };
+    let uv_area =
+        |uvs: &[[f32; 2]], t: [usize; 3]| 0.5 * edge(uvs[t[0]], uvs[t[1]], uvs[t[2]]).abs();
+
+    let bones = skeleton.bones.len();
+    let mut area = vec![0.0f32; bones];
+    let mut total = 0.0f32;
+    for (_, mesh, prims) in meshes {
+        for (_, vb, uvs, t) in each_tri(mesh, prims) {
+            let a = uv_area(uvs, t);
+            total += a;
+            if let Some(b) = dominant(vb, t).filter(|&b| b < bones) {
+                area[b] += a;
+            }
+        }
+    }
+
+    // Fold small regions into their parents, deepest bones first so a chain of
+    // small bones (finger joints) collapses all the way up in one pass.
+    let depth = |mut b: usize| {
+        let mut d = 0;
+        while let Some(p) = skeleton.bones[b].parent.filter(|&p| p < bones && p != b) {
+            b = p;
+            d += 1;
+            if d > bones {
+                break;
+            }
+        }
+        d
+    };
+    let mut order: Vec<usize> = (0..bones).collect();
+    order.sort_by_key(|&b| std::cmp::Reverse(depth(b)));
+    let mut owner: Vec<usize> = (0..bones).collect();
+    for b in order {
+        if area[b] > 0.0 && area[b] < MIN_BONE_SHARE * total {
+            if let Some(p) = skeleton.bones[b].parent.filter(|&p| p < bones && p != b) {
+                area[p] += area[b];
+                area[b] = 0.0;
+                owner[b] = p;
+            }
+        }
+    }
+    let resolve = |mut b: usize| {
+        for _ in 0..bones {
+            if owner[b] == b {
+                break;
+            }
+            b = owner[b];
+        }
+        b
+    };
+
+    let mut by_key: BTreeMap<Result<usize, String>, Segment> = BTreeMap::new();
+    for (name, mesh, prims) in meshes {
+        for (_, vb, uvs, t) in each_tri(mesh, prims) {
+            let key = dominant(vb, t)
+                .filter(|&b| b < bones)
+                .map(resolve)
+                .ok_or_else(|| name.clone());
+            by_key
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    let label = key.map_or_else(|mesh| mesh, |b| skeleton.bones[b].name.clone());
+                    Segment::new(label, name.clone())
+                })
+                .push(vb, uvs, t);
+        }
+    }
+    by_key.into_values().collect()
 }
 
 fn mesh_name(mesh: &MeshPart, index: usize) -> String {
@@ -375,14 +570,14 @@ fn rasterize_ids(segs: &[Segment], paint: &[usize], res: u32, dilate: u32) -> Ve
 }
 
 fn fill_tri(ids: &mut [i32], r: usize, id: i32, uv: &[[f32; 2]; 3]) {
-    for_each_texel(r, uv, |idx| ids[idx] = id);
+    for_each_texel(r, r, uv, |idx| ids[idx] = id);
 }
 
 /// Marks every texel of `uv` with `generation` in `stamp`, counting each texel
 /// only the first time this generation touches it (so overlapping triangles in
 /// one segment do not double-count its coverage).
 fn stamp_tri(stamp: &mut [u32], r: usize, generation: u32, uv: &[[f32; 2]; 3], count: &mut usize) {
-    for_each_texel(r, uv, |idx| {
+    for_each_texel(r, r, uv, |idx| {
         if stamp[idx] != generation {
             stamp[idx] = generation;
             *count += 1;
@@ -391,19 +586,19 @@ fn stamp_tri(stamp: &mut [u32], r: usize, generation: u32, uv: &[[f32; 2]; 3], c
 }
 
 /// Walks the texel centers covered by a UV-space triangle (top-left origin, UV
-/// mapped straight to `[0, r)` to match how the reskin builders sample textures),
-/// invoking `f` with each covered buffer index.
+/// mapped straight to `[0, w) x [0, h)` to match how the reskin builders sample
+/// textures), invoking `f` with each covered buffer index (`y * w + x`).
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn for_each_texel(r: usize, uv: &[[f32; 2]; 3], mut f: impl FnMut(usize)) {
-    let res = r as f32;
+fn for_each_texel(w: usize, h: usize, uv: &[[f32; 2]; 3], mut f: impl FnMut(usize)) {
+    let (fw, fh) = (w as f32, h as f32);
     let p = [
-        [uv[0][0] * res, uv[0][1] * res],
-        [uv[1][0] * res, uv[1][1] * res],
-        [uv[2][0] * res, uv[2][1] * res],
+        [uv[0][0] * fw, uv[0][1] * fh],
+        [uv[1][0] * fw, uv[1][1] * fh],
+        [uv[2][0] * fw, uv[2][1] * fh],
     ];
     let area = edge(p[0], p[1], p[2]);
     if area.abs() < 1e-9 {
@@ -422,9 +617,9 @@ fn for_each_texel(r: usize, uv: &[[f32; 2]; 3], mut f: impl FnMut(usize)) {
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil();
     let x0 = min_x.max(0.0) as usize;
-    let x1 = (max_x.min(res) as usize).min(r);
+    let x1 = (max_x.min(fw) as usize).min(w);
     let y0 = min_y.max(0.0) as usize;
-    let y1 = (max_y.min(res) as usize).min(r);
+    let y1 = (max_y.min(fh) as usize).min(h);
     for y in y0..y1 {
         for x in x0..x1 {
             let px = [x as f32 + 0.5, y as f32 + 0.5];
@@ -437,7 +632,7 @@ fn for_each_texel(r: usize, uv: &[[f32; 2]; 3], mut f: impl FnMut(usize)) {
                 w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
             };
             if inside {
-                f(y * r + x);
+                f(y * w + x);
             }
         }
     }
@@ -538,12 +733,14 @@ impl UnionFind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::VertexBuffer;
+    use crate::model::math::{Mat4, Quat, Vec3};
+    use crate::model::Bone;
 
     /// A clean two-island mesh: a lower-left 0.4x0.4 UV quad and an upper-right
     /// one, each two triangles, sharing no vertex indices (so two UV islands).
-    fn two_quad_mesh() -> MeshPart {
-        let vb = VertexBuffer {
+    /// Each quad is a unit square in 3D, skinned fully to its own bone.
+    fn two_quad_model() -> Model {
+        let mut vb = VertexBuffer {
             element_count: 8,
             texcoords: vec![vec![
                 [0.0, 0.0],
@@ -557,6 +754,12 @@ mod tests {
             ]],
             ..Default::default()
         };
+        vb.positions = vb.texcoords[0]
+            .iter()
+            .map(|uv| [uv[0], uv[1], 0.0])
+            .collect();
+        vb.joints = (0..8).map(|v| [u16::from(v >= 4) + 1, 0, 0, 0]).collect();
+        vb.weights = vec![[1.0, 0.0, 0.0, 0.0]; 8];
         let prim = Primitive {
             vertex_buffer: 0,
             vertex_buffers: vec![0],
@@ -564,50 +767,145 @@ mod tests {
             vertex_count: 8,
             indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
         };
-        MeshPart {
-            name: "body".into(),
-            mesh_index: 0,
-            vertex_buffers: vec![vb],
-            primitives: vec![prim],
-            min_bounds: [0.0; 3],
-            max_bounds: [0.0; 3],
-            bone_weight_count: 0,
+        let bone = |name: &str, parent| Bone {
+            name: name.to_owned(),
+            parent,
+            flags: 0,
+            position: Vec3::default(),
+            rotation: Quat::default(),
+            local_bind: Mat4::IDENTITY,
+            global_bind: Mat4::IDENTITY,
+            inverse_bind: Mat4::IDENTITY,
+        };
+        Model {
+            skeleton: Skeleton {
+                bones: vec![
+                    bone("root", None),
+                    bone("arm", Some(0)),
+                    bone("hand", Some(1)),
+                ],
+            },
+            meshes: vec![MeshPart {
+                name: "body".into(),
+                mesh_index: 0,
+                vertex_buffers: vec![vb],
+                primitives: vec![prim],
+                min_bounds: [0.0; 3],
+                max_bounds: [0.0; 3],
+                bone_weight_count: 1,
+            }],
+            animations: Vec::new(),
+            cloth: None,
         }
-    }
-
-    /// Mirror `segments()`' sort + id assignment without needing a full `Model`.
-    fn finalize(mut segs: Vec<Segment>) -> Vec<Segment> {
-        segs.retain(|s| !s.tris.is_empty());
-        segs.sort_by(|a, b| {
-            b.uv_area()
-                .partial_cmp(&a.uv_area())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for (i, s) in segs.iter_mut().enumerate() {
-            s.id = i;
-        }
-        segs
     }
 
     #[test]
     fn island_mode_separates_the_two_quads() {
-        let meshes = [two_quad_mesh()];
-        let segs = finalize(by_island(&meshes));
+        let segs = segments(&two_quad_model(), SegmentBy::Island, None);
         assert_eq!(segs.len(), 2, "two disjoint UV charts are two islands");
         assert!(segs.iter().all(|s| s.triangle_count() == 2));
     }
 
     #[test]
     fn part_and_material_modes_collapse_to_one_region() {
-        let meshes = [two_quad_mesh()];
-        assert_eq!(by_part(&meshes).len(), 1);
-        assert_eq!(by_material(&meshes).len(), 1);
+        let model = two_quad_model();
+        assert_eq!(segments(&model, SegmentBy::Part, None).len(), 1);
+        assert_eq!(segments(&model, SegmentBy::Material, None).len(), 1);
+    }
+
+    #[test]
+    fn zero_area_stitch_triangles_neither_paint_nor_join_islands() {
+        let mut model = two_quad_model();
+        // A stitch: corners 2 and 4 moved onto one 3D point, so the triangle has
+        // no surface while its UVs span from one quad to the other.
+        let vb = &mut model.meshes[0].vertex_buffers[0];
+        vb.positions[4] = vb.positions[2];
+        model.meshes[0].primitives[0].indices.extend([2, 4, 3]);
+        let segs = segments(&model, SegmentBy::Island, None);
+        assert_eq!(segs.len(), 2, "the stitch must not merge the two islands");
+        assert!(segs.iter().all(|s| s.triangle_count() == 2));
+        let png = mask_png(&segs, &[0, 1], 64).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(
+            img.get_pixel(32, 32)[0],
+            0,
+            "the gap between the quads stays black"
+        );
+    }
+
+    #[test]
+    fn bone_mode_labels_regions_by_bone_and_reports_weights() {
+        let segs = segments(&two_quad_model(), SegmentBy::Bone, None);
+        let mut labels: Vec<&str> = segs.iter().map(|s| s.label.as_str()).collect();
+        labels.sort_unstable();
+        assert_eq!(labels, ["arm", "hand"]);
+        for s in &segs {
+            let weights = s.bone_weights();
+            assert_eq!(weights.len(), 1);
+            assert!((weights[0].1 - 1.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn bone_mode_folds_a_tiny_bone_into_its_parent() {
+        let mut model = two_quad_model();
+        // Shrink the "hand" quad to a sliver of UV space, under 1% of the total.
+        let uvs = &mut model.meshes[0].vertex_buffers[0].texcoords[0];
+        for uv in &mut uvs[4..] {
+            *uv = [0.6 + (uv[0] - 0.6) * 0.05, 0.6 + (uv[1] - 0.6) * 0.05];
+        }
+        let segs = segments(&model, SegmentBy::Bone, None);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].label, "arm");
+        assert_eq!(segs[0].triangle_count(), 4);
+    }
+
+    #[test]
+    fn mirrored_fraction_counts_the_minority_winding() {
+        let mut model = two_quad_model();
+        // Mirror the second quad in U: its triangles now wind the other way.
+        let uvs = &mut model.meshes[0].vertex_buffers[0].texcoords[0];
+        for uv in &mut uvs[4..] {
+            uv[0] = 1.6 - uv[0];
+        }
+        let segs = segments(&model, SegmentBy::Part, None);
+        assert!((segs[0].mirrored_fraction() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn segments_where_keeps_only_accepted_primitives() {
+        let mut model = two_quad_model();
+        let mut other = model.meshes[0].primitives[0].clone();
+        other.material = "models/heroes/gun.vmat_c".into();
+        other.indices = vec![4, 5, 6, 4, 6, 7];
+        model.meshes[0].primitives[0].indices.truncate(6);
+        model.meshes[0].primitives.push(other);
+        let segs = segments_where(&model, SegmentBy::Island, &|_, p| {
+            p.material.contains("body")
+        });
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].uv_bounds()[2] <= 0.4 + 1e-6);
+    }
+
+    #[test]
+    fn for_each_texel_handles_non_square_textures() {
+        let segs = segments(&two_quad_model(), SegmentBy::Island, None);
+        let lower_left = segs.iter().find(|s| s.uv_bounds()[0] < 0.5).unwrap();
+        let (w, h) = (100u32, 50u32);
+        let mut hits = std::collections::HashSet::new();
+        lower_left.for_each_texel(w, h, |i| {
+            hits.insert(i);
+        });
+        // 0.4 x 0.4 of a 100 x 50 sheet is 40 x 20 texels.
+        assert_eq!(hits.len(), 800);
+        assert!(hits
+            .iter()
+            .all(|&i| i % (w as usize) < 40 && i / (w as usize) < 20));
     }
 
     #[test]
     fn coverage_tracks_each_quad_area() {
-        let meshes = [two_quad_mesh()];
-        let segs = finalize(by_island(&meshes));
+        let segs = segments(&two_quad_model(), SegmentBy::Island, None);
         // Each 0.4 x 0.4 quad is 0.16 of the unit texture.
         for c in segment_coverage(&segs, 256) {
             assert!((c - 0.16).abs() < 0.02, "coverage {c} not ~0.16");
@@ -616,8 +914,7 @@ mod tests {
 
     #[test]
     fn mask_paints_only_the_selected_island() {
-        let meshes = [two_quad_mesh()];
-        let segs = finalize(by_island(&meshes));
+        let segs = segments(&two_quad_model(), SegmentBy::Island, None);
         // The lower-left quad is the island whose UV bbox starts near the origin.
         let lower_left = segs
             .iter()

@@ -56,6 +56,9 @@ pub struct VoiceLine {
     pub label: String,
     /// Clip path(s) the event plays (more than one == a randomizer pool).
     pub vsnd: Vec<String>,
+    /// The `.vsndevts_c` entry that defines the event: the file an event swap
+    /// reads the pool from (and edits, in collapse mode).
+    pub source: String,
     /// Engine playback duration in seconds, if the event records one.
     pub duration: Option<f64>,
     /// Authored English subtitle, if the caption database resolves this event.
@@ -180,9 +183,15 @@ impl CaptionDb {
 /// [`build_voiceline_index_with_captions`].
 pub fn build_voiceline_index(vpk_path: impl AsRef<Path>) -> Result<Vec<VoiceLine>> {
     let vpk_path = vpk_path.as_ref();
-    let caption_bytes = crate::read_vpk_entry(vpk_path, ENGLISH_CAPTIONS_ENTRY)
-        .with_context(|| format!("reading {ENGLISH_CAPTIONS_ENTRY}"))?;
-    let captions = CaptionDb::parse(&caption_bytes)?;
+    // Builds from 2026-09 on no longer ship the compiled caption DB in pak01.
+    // Captions never resolved for hero VO anyway, so its absence only drops the
+    // best-effort `caption` field, not the index.
+    let captions = match crate::read_vpk_entry(vpk_path, ENGLISH_CAPTIONS_ENTRY) {
+        Ok(bytes) => CaptionDb::parse(&bytes)?,
+        Err(_) => CaptionDb {
+            by_hash: HashMap::new(),
+        },
+    };
     build_voiceline_index_with_captions(vpk_path, &captions)
 }
 
@@ -235,21 +244,14 @@ pub fn build_voiceline_index_with_captions(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .or_else(|| file_hero.clone());
-            let vsnd = match event.get("vsnd_files") {
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect(),
-                Some(Value::String(s)) => vec![s.clone()],
-                _ => Vec::new(),
-            };
+            let vsnd = event_clips(event);
             lines.push(VoiceLine {
                 label: pretty_label(name, hero.as_deref()),
                 caption: captions.for_event(name).map(str::to_owned),
                 duration: event.get("vsnd_duration").and_then(Value::as_f64),
                 hero,
                 vsnd,
+                source: entry.clone(),
                 event: name.clone(),
             });
         }
@@ -362,6 +364,9 @@ pub struct HeroSound {
     pub label: String,
     /// Clip path(s) the event plays (more than one == a randomizer pool).
     pub vsnd: Vec<String>,
+    /// The `.vsndevts_c` entry that defines the event: the file an event swap
+    /// reads the pool from (and edits, in collapse mode).
+    pub source: String,
     /// Engine playback duration in seconds, if the event records one.
     pub duration: Option<f64>,
 }
@@ -409,15 +414,7 @@ pub fn build_hero_sound_index(vpk_path: impl AsRef<Path>) -> Result<Vec<HeroSoun
             if name == "base" {
                 continue;
             }
-            let vsnd = match event.get("vsnd_files") {
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect(),
-                Some(Value::String(s)) => vec![s.clone()],
-                _ => Vec::new(),
-            };
+            let vsnd = event_clips(event);
             // Events with no clips (pure parameter/template rows) aren't playable.
             if vsnd.is_empty() {
                 continue;
@@ -438,12 +435,99 @@ pub fn build_hero_sound_index(vpk_path: impl AsRef<Path>) -> Result<Vec<HeroSoun
                 duration: event.get("vsnd_duration").and_then(Value::as_f64),
                 hero: hero.clone(),
                 vsnd,
+                source: entry.clone(),
                 event: name.clone(),
             });
         }
     }
 
     sounds.sort_by(|a, b| a.hero.cmp(&b.hero).then_with(|| a.event.cmp(&b.event)));
+    Ok(sounds)
+}
+
+/// The clip path(s) an event plays: its `vsnd_files`, one string or an array.
+fn event_clips(event: &Value) -> Vec<String> {
+    match event.get("vsnd_files") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// One playable sound event that belongs to no single hero: the shared hero
+/// defaults (`soundevents/hero/_shared`: melee swing, footsteps), plus player,
+/// item, NPC, UI, music and ambience events.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SharedSound {
+    /// Soundevent name, e.g. `Hero.Default.Melee.Swing`. Usable verbatim as the
+    /// swap target in the soundevents layer.
+    pub event: String,
+    /// The event name with its separators spelled as spaces. The searchable text.
+    pub label: String,
+    /// Clip path(s) the event plays (more than one == a randomizer pool).
+    pub vsnd: Vec<String>,
+    /// The `.vsndevts_c` entry that defines the event.
+    pub source: String,
+    /// Engine playback duration in seconds, if the event records one.
+    pub duration: Option<f64>,
+}
+
+/// Build the index of every playable sound event outside the VO tree and the
+/// per-hero files: the counterpart to [`build_voiceline_index`] and
+/// [`build_hero_sound_index`] that completes the swappable surface. Rows are
+/// sorted by source file then event.
+pub fn build_shared_sound_index(vpk_path: impl AsRef<Path>) -> Result<Vec<SharedSound>> {
+    let vpk_path = vpk_path.as_ref();
+    let vpk =
+        valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+
+    let mut entries: Vec<String> = vpk
+        .file_paths()
+        .filter(|p| {
+            p.starts_with("soundevents/")
+                && p.ends_with(".vsndevts_c")
+                && !p.starts_with(VO_TREE_PREFIX)
+                && !(p.starts_with(HERO_TREE_PREFIX) && hero_from_hero_entry(p).is_some())
+        })
+        .cloned()
+        .collect();
+    entries.sort();
+
+    let mut sounds = Vec::new();
+    for entry in &entries {
+        let mut file = vpk
+            .get_file(entry)
+            .with_context(|| format!("locating {entry}"))?;
+        let bytes = file
+            .read_all()
+            .with_context(|| format!("reading {entry}"))?;
+        // A file that fails to decode should not sink the whole index.
+        let Ok(se) = SoundEvents::from_bytes(bytes) else {
+            continue;
+        };
+        let Value::Object(pairs) = &se.root else {
+            continue;
+        };
+        for (name, event) in pairs {
+            let vsnd = event_clips(event);
+            if name == "base" || vsnd.is_empty() {
+                continue;
+            }
+            sounds.push(SharedSound {
+                label: name.replace(['.', '_'], " "),
+                duration: event.get("vsnd_duration").and_then(Value::as_f64),
+                vsnd,
+                source: entry.clone(),
+                event: name.clone(),
+            });
+        }
+    }
+
+    sounds.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.event.cmp(&b.event)));
     Ok(sounds)
 }
 

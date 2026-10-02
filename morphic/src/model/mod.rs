@@ -69,7 +69,8 @@ pub use topology::{
     DrawCallInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart,
 };
 pub use uvmask::{
-    atlas_png, mask_png, segment_color, segment_coverage, segments, Segment, SegmentBy,
+    atlas_png, mask_png, segment_color, segment_coverage, segments, segments_where, Segment,
+    SegmentBy,
 };
 
 use crate::error::DecodeError;

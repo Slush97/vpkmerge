@@ -22,7 +22,7 @@ use anyhow::{bail, Context, Result};
 
 /// One step of MP3 `global_gain` scales the requantized values by `2^0.25`, i.e.
 /// `20 * log10(2^0.25) ~= 1.505 dB`. The mp3gain step size.
-const GAIN_STEP_DB: f64 = 1.505_149_978_319_906;
+pub const GAIN_STEP_DB: f64 = 1.505_149_978_319_906;
 
 // MPEG audio sample-rate tables, indexed by the header's rate index, per version.
 const RATES_V1: [u32; 3] = [44100, 48000, 32000];
@@ -114,6 +114,29 @@ pub fn trim_mp3(data: &[u8], start_ms: u32, end_ms: u32) -> Result<Vec<u8>> {
         bail!("trim window {start_ms}..{end_ms} ms selects no audio");
     }
     Ok(data[s..out_end].to_vec())
+}
+
+/// The pre-mint edits of a sound swap, in the order a user authors them: cut the
+/// clip to `trim` (`(start_ms, end_ms)`), then shift its loudness by `gain_db`.
+/// Either absent is a passthrough.
+///
+/// # Errors
+/// Propagates [`trim_mp3`] and [`apply_mp3_gain`] failures.
+pub fn prepare_swap_audio(
+    raw: &[u8],
+    trim: Option<(u32, u32)>,
+    gain_db: Option<f64>,
+) -> Result<Vec<u8>> {
+    let mut audio = match trim {
+        Some((start, end)) => trim_mp3(raw, start, end)
+            .with_context(|| format!("trimming audio to {start}..{end} ms"))?,
+        None => raw.to_vec(),
+    };
+    if let Some(db) = gain_db {
+        audio = apply_mp3_gain(&audio, db)
+            .with_context(|| format!("applying {db:+.1} dB gain to audio"))?;
+    }
+    Ok(audio)
 }
 
 /// Apply a constant `gain_db` to an MP3 losslessly by shifting every Layer III

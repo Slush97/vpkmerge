@@ -107,6 +107,13 @@ shallowest first so a whole missing hero comes before its fields), `extra` (path
 game dropped), and `changed` (leaf values that differ). Status: `outdated` (any missing
 or extra), `modified` (values only), `current` (identical), `not-in-game`, `undecodable`.
 
+Arrays count as structure too. Equal-length arrays diff by index. When lengths differ,
+arrays of plain values are matched by value (Valve inserts mid-array: the 2026 hero
+batch added `EHeroSpiritLifestealEffectiveness` inside every hero's
+`m_vecDisplayStats`), reported as `path[=value]`; arrays of objects report the tail
+as `path[i]`. `VdataChecker` checks many mods against one pak: it opens the pak only
+once a mod actually ships a `.vdata_c`, and reads and decodes each game file once.
+
 `changed` cannot separate the mod's intended edits from values Valve rebalanced since:
 that needs the build the mod was made against (GameTracking-Deadlock history), which
 is also what a future auto-rebase would need. So `modified` is not proof the mod is
@@ -114,7 +121,10 @@ current. Most mods with vdata only ship `panorama/image_compiler.vdata_c`, a com
 leftover the game does not have (`not-in-game`, harmless).
 
 CLI: `vpkmerge vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`.
-Live test: `tests/vdata_check_live.rs`, gated on `DEADLOCK_PAK`.
+With `--json`, a mod that fails to open gets an `error` field and the exit code stays 0,
+so one bad file never hides the rest of a batch (Grimoire relies on this). Text mode
+exits non-zero if any mod failed to open. Live test: `tests/vdata_check_live.rs`, gated
+on `DEADLOCK_PAK`.
 
 ## CI
 

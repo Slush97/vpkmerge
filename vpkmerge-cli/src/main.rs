@@ -1202,7 +1202,8 @@ struct VdataCheckCmd {
     #[arg(long, value_name = "N", default_value_t = 10)]
     limit: usize,
 
-    /// Emit a machine-readable JSON array (untruncated) instead of text.
+    /// Emit a machine-readable JSON array (untruncated) instead of text. A mod
+    /// that fails to open gets an `error` field and does not fail the run.
     #[arg(long)]
     json: bool,
 }
@@ -4939,8 +4940,9 @@ fn run_vmat(args: &VmatCmd) -> Result<()> {
 }
 
 fn run_vdata_check(args: &VdataCheckCmd) -> Result<()> {
-    use vpkmerge_core::{check_vdata, VdataStatus};
+    use vpkmerge_core::{VdataChecker, VdataStatus};
 
+    let mut checker = VdataChecker::new(&args.base);
     let mut json_out = Vec::new();
     let mut failed = 0usize;
     let mut outdated_mods = 0usize;
@@ -4949,7 +4951,7 @@ fn run_vdata_check(args: &VdataCheckCmd) -> Result<()> {
         if !args.json {
             println!("{name}");
         }
-        let reports = match check_vdata(path, &args.base) {
+        let reports = match checker.check(path) {
             Ok(r) => r,
             Err(e) => {
                 failed += 1;
@@ -5015,7 +5017,11 @@ fn run_vdata_check(args: &VdataCheckCmd) -> Result<()> {
         args.mods.len()
     );
     if failed > 0 {
-        anyhow::bail!("{failed} mod(s) failed to open");
+        if args.json {
+            eprintln!("{failed} mod(s) failed to open; see their \"error\" fields");
+        } else {
+            anyhow::bail!("{failed} mod(s) failed to open");
+        }
     }
     Ok(())
 }

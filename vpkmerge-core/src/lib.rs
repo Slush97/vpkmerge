@@ -24,11 +24,12 @@ pub use model::{
     live_hero_materials, model_clips, model_draw_call_targets, model_uv_segments,
     model_vertex_targets, recolor_models_to_addon, reencode_model_mdat, remove_model_material,
     replace_model_group, replace_model_part, AnimOptions, ClipSummary, DrawCallInfo,
-    DrawCallSkinInfo, GeometryEdit, GeometryEditReport, LiveHeroEntry, LiveHeroMaterial,
-    MaterialRemovalReport, ModelDrawCallInspection, ModelEntry, ModelInfo, ModelPartInspection,
-    ModelPartSelector, ModelRecolorEntry, PartReplacementReport, PoseSelection, RemovedDrawCall,
-    ReplacedMeshGroup, ReplacedMeshPart, ResolvedResource, ResolvedTextureParam, SegmentBy,
-    SuggestedPartGroup, UvSegmentInfo, VertexTarget, DEFAULT_POSE_CLIPS,
+    DrawCallSkinInfo, GeometryEdit, GeometryEditReport, GlbOptions, LiveHeroEntry,
+    LiveHeroMaterial, MaterialRemovalReport, ModelDrawCallInspection, ModelEntry, ModelInfo,
+    ModelPartInspection, ModelPartSelector, ModelRecolorEntry, PartReplacementReport,
+    PoseSelection, RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart, ResolvedResource,
+    ResolvedTextureParam, SegmentBy, SuggestedPartGroup, UvSegmentInfo, VertexTarget,
+    DEFAULT_POSE_CLIPS,
 };
 pub use portrait::{extract_portraits, PortraitInfo, PortraitVariant};
 

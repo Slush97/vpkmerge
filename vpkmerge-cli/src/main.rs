@@ -6,10 +6,10 @@ use vpkmerge_core::{
     export_hero_model, export_model, extract_portraits, hero_model_entry, import_clone,
     import_soul_container_clone, inspect_models, live_hero_entries, live_hero_materials, merge,
     model_draw_call_targets, model_uv_segments, model_vertex_targets, split, urn_target,
-    AddonMetadata, AnimOptions, CollisionPolicy, EmbedReport, GeometryEdit, MergeOptions,
-    ModelPartSelector, NormalSynthesis, OverlapPolicy, PanoramaBuildOptions, PanoramaDumpOptions,
-    PathPredicate, PortraitInfo, PoseSelection, SegmentBy, SoulGlow, SoulImportCloneOptions,
-    SoulOrient, SoundEvents, SplitOptions, SplitOutput,
+    AddonMetadata, AnimOptions, CollisionPolicy, EmbedReport, GeometryEdit, GlbOptions,
+    MergeOptions, ModelPartSelector, NormalSynthesis, OverlapPolicy, PanoramaBuildOptions,
+    PanoramaDumpOptions, PathPredicate, PortraitInfo, PoseSelection, SegmentBy, SoulGlow,
+    SoulImportCloneOptions, SoulOrient, SoundEvents, SplitOptions, SplitOutput,
 };
 
 #[derive(Parser)]
@@ -1642,6 +1642,12 @@ struct ModelExportArgs {
     #[arg(long, requires = "pose")]
     require_pose: bool,
 
+    /// Embed each texture at its largest mip that fits within N pixels on its
+    /// longer edge instead of full size (e.g. `--max-texture 1024` for a small
+    /// preview: smaller `.glb`, faster export and load).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(16..))]
+    max_texture: Option<u32>,
+
     /// Output `.glb` path.
     #[arg(long, value_name = "FILE")]
     out: PathBuf,
@@ -2343,11 +2349,16 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
         clips: e.clip.clone(),
         pose,
     };
+    let glb = GlbOptions {
+        max_texture_edge: e.max_texture,
+    };
     match (&e.entry, &e.hero) {
-        (Some(entry), _) => export_model(&e.vpk, entry, e.base.as_deref(), &anim, &e.out)
+        (Some(entry), _) => export_model(&e.vpk, entry, e.base.as_deref(), &anim, glb, &e.out)
             .with_context(|| format!("exporting {entry} from {}", e.vpk.display()))?,
-        (None, Some(hero)) => export_hero_model(&e.vpk, hero, e.base.as_deref(), &anim, &e.out)
-            .with_context(|| format!("exporting hero {hero} from {}", e.vpk.display()))?,
+        (None, Some(hero)) => {
+            export_hero_model(&e.vpk, hero, e.base.as_deref(), &anim, glb, &e.out)
+                .with_context(|| format!("exporting hero {hero} from {}", e.vpk.display()))?;
+        }
         (None, None) => anyhow::bail!("model export: provide --entry or --hero"),
     }
     println!("wrote {}", e.out.display());

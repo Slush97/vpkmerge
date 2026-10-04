@@ -48,7 +48,7 @@ Look things up (read-only):
 - `browse_textures`: search icons, hero cards, skin and effect textures. Gives the exact entry path, optionally PNG thumbnails.
 - `list_hero_textures`: every texture the hero's in-game body model samples, per material: slot, size, format, alpha range, uniform placeholders (1x1 constants), vertex-color materials, textures shared between materials, and what each pbr.vfx slot's channels hold.
 - `map_texture_regions`: split one of those textures into regions by bone (body areas), UV island or mesh part. Returns the largest regions with coverage, texel bounds, patch count, skin bones, and how much of each is shared with another region (mirrored left/right halves). Writes `texture.png` (RGB), `texture-alpha.png` when alpha is not opaque, and an overlay with region ids drawn on; `select` bakes a full-size white-on-black mask. Files land in `<staging>/textures/<codename>/<texture>/`.
-- `inspect_mod`: what is in a VPK, and what it collides with.
+- `inspect_mod`: what is in a VPK, what it collides with, and whether each `.vdata_c` it ships is outdated versus the game.
 - `preview_hero`: the hero as a `.glb` with a mod VPK applied, opening in the menu pose, for the host app to show.
 - `list_hero_animations` / `preview_hero_animation`: the hero's in-game animations (idles, movement, abilities, emotes), each exported as a small skeleton-only `.glb` to play on the preview.
 - `search_docs` / `read_doc`: the modding knowledge base.

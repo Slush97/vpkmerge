@@ -462,12 +462,13 @@ fn vfx_recolor_builds_previews_and_merges() {
     assert!(format!("{err:#}").contains("hue"));
 
     // Both recolor the same files, so they collide entry for entry.
-    let inspection = Engine::inspect_mod(&InspectModParams {
-        vpk: solid_vpk.clone(),
-        against: vec![prism_vpk.clone()],
-        limit: Some(5),
-    })
-    .unwrap();
+    let inspection = engine
+        .inspect_mod(&InspectModParams {
+            vpk: solid_vpk.clone(),
+            against: vec![prism_vpk.clone()],
+            limit: Some(5),
+        })
+        .unwrap();
     assert_eq!(inspection.entry_count, solid.entries);
     assert!(inspection.conflict_count.unwrap() > 0);
     assert_eq!(inspection.entries.len(), 5);

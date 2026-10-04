@@ -279,15 +279,16 @@ impl Server {
 
     #[tool(
         description = "List what a mod VPK contains and, with `against`, which of its files \
-            collide with other mods. Read-only. This inspects the file list only; it does not \
-            prove the mod works in game.",
+            collide with other mods. Also compares each .vdata_c the mod ships against the game \
+            and flags outdated copies (they delete fields the game added). Read-only. Apart from \
+            that it inspects the file list only; it does not prove the mod works in game.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn inspect_mod(
         &self,
         Parameters(p): Parameters<InspectModParams>,
     ) -> Result<Json<ModInspection>, String> {
-        self.run(move |_| Engine::inspect_mod(&p)).await.map(Json)
+        self.run(move |e| e.inspect_mod(&p)).await.map(Json)
     }
 
     #[tool(

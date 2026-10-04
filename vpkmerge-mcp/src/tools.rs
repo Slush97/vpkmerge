@@ -21,7 +21,7 @@ use vpkmerge_core::{
     build_hero_sound_index, build_shared_sound_index, compiled_clip_entry, pinned_hero_codenames,
     BuildFingerprint, CatalogCache, CollisionPolicy, HeroSound, HeroSoundCategory, MergeOptions,
     PoolPolicy, PrismTuning, Recolor, SharedSound, TextureCategory, TextureEntry, ThumbnailOutcome,
-    VoiceLine,
+    VdataStatus, VoiceLine,
 };
 
 use crate::config::Config;
@@ -1800,8 +1800,67 @@ pub struct ModInspection {
     pub conflict_count: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<ModConflict>,
+    /// One row per `.vdata_c` the mod ships, compared against the game's copy.
+    /// Absent when the mod ships none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vdata: Vec<VdataFinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VdataFinding {
+    /// VPK entry path, e.g. `scripts/heroes.vdata_c`.
+    pub entry: String,
+    pub status: VdataVerdict,
+    /// How many key paths the game's copy has that the mod's lacks. A mod's
+    /// `.vdata_c` replaces the whole file, so these are deleted in game.
+    pub missing_count: usize,
+    /// How many key paths only the mod's copy has (fields the game dropped).
+    pub extra_count: usize,
+    /// How many values differ from the game's copy. Mixes the mod's intended
+    /// edits with later Valve rebalances, so it is a count only.
+    pub changed_count: usize,
+    /// The first `limit` missing paths, shallowest first (a whole missing hero
+    /// or ability comes before its fields).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// The first `limit` paths only the mod has.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<String>,
+    /// Decode error text when status is `undecodable`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VdataVerdict {
+    /// The mod's copy lacks fields the current game has, so it deletes them in
+    /// game. The mod was built against an older game and needs an update or rebuild.
+    Outdated,
+    /// Same structure as the game's copy with different values: the mod's
+    /// intended edits, possibly mixed with later Valve rebalances.
+    Modified,
+    /// Identical to the game's copy: redundant, harmless.
+    Current,
+    /// The game has no file at this path (compiler leftover or custom file). Nothing to compare.
+    NotInGame,
+    /// Either copy failed to decode as KV3.
+    Undecodable,
+}
+
+impl From<VdataStatus> for VdataVerdict {
+    fn from(s: VdataStatus) -> Self {
+        match s {
+            VdataStatus::Outdated => Self::Outdated,
+            VdataStatus::Modified => Self::Modified,
+            VdataStatus::Current => Self::Current,
+            VdataStatus::NotInGame => Self::NotInGame,
+            VdataStatus::Undecodable => Self::Undecodable,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1813,14 +1872,37 @@ pub struct ModConflict {
 }
 
 impl Engine {
-    pub fn inspect_mod(p: &InspectModParams) -> Result<ModInspection> {
+    pub fn inspect_mod(&self, p: &InspectModParams) -> Result<ModInspection> {
         let limit = limit(p.limit);
         let vpk = user_path(&p.vpk);
         let info = vpkmerge_core::inspect(&vpk)?;
         let mut entries = info.file_paths;
         entries.sort();
+        let has_vdata = entries.iter().any(|e| e.ends_with(".vdata_c"));
         let entry_count = entries.len();
         entries.truncate(limit);
+
+        let mut notes = Vec::new();
+        let mut vdata = Vec::new();
+        if has_vdata {
+            match self.config.pak() {
+                Ok(pak) => {
+                    for r in vpkmerge_core::check_vdata(&vpk, pak)? {
+                        vdata.push(VdataFinding {
+                            entry: r.entry,
+                            status: r.status.into(),
+                            missing_count: r.missing.len(),
+                            extra_count: r.extra.len(),
+                            changed_count: r.changed.len(),
+                            missing: r.missing.into_iter().take(limit).collect(),
+                            extra: r.extra.into_iter().take(limit).collect(),
+                            error: r.error,
+                        });
+                    }
+                }
+                Err(e) => notes.push(format!("vdata was not checked against the game: {e:#}")),
+            }
+        }
 
         let mut conflict_count = None;
         let mut conflicts = Vec::new();
@@ -1843,16 +1925,24 @@ impl Engine {
                 })
                 .collect();
         }
-        let truncated =
-            entries.len() < entry_count || conflict_count.is_some_and(|n| conflicts.len() < n);
+        let truncated = entries.len() < entry_count
+            || conflict_count.is_some_and(|n| conflicts.len() < n)
+            || vdata
+                .iter()
+                .any(|v| v.missing.len() < v.missing_count || v.extra.len() < v.extra_count);
+        if truncated {
+            notes.push(format!(
+                "Lists are cut to {limit} rows. Raise limit for more."
+            ));
+        }
         Ok(ModInspection {
             entry_count,
             size_bytes: info.size_bytes,
             entries,
             conflict_count,
             conflicts,
-            note: truncated
-                .then(|| format!("Lists are cut to {limit} rows. Raise limit for more.")),
+            vdata,
+            note: (!notes.is_empty()).then(|| notes.join(" ")),
         })
     }
 }

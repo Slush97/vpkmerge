@@ -159,6 +159,28 @@ the rest after the user confirms.
   breaks that script. `workbench/src-tauri` won't compile until the binary exists, so
   run `pnpm sidecar` in `workbench/` first (CI touches an empty placeholder instead).
 
+## Outdated vdata check (`vdata-check`)
+
+A mod that ships a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`)
+overrides the whole file, so anything Valve added after the mod was built is deleted
+in game. `vpkmerge_core::check_vdata(mod, pak01)` decodes each `.vdata_c` the mod
+ships and the game's copy as KV3 and diffs the trees. It returns one `VdataReport`
+per entry: `missing` (paths the game has and the mod lacks: what the mod deletes,
+shallowest first so a whole missing hero comes before its fields), `extra` (paths the
+game dropped), and `changed` (leaf values that differ). Status: `outdated` (any missing
+or extra), `modified` (values only), `current` (identical), `not-in-game`, `undecodable`.
+
+`changed` cannot separate the mod's intended edits from values Valve rebalanced since:
+that needs the build the mod was made against (GameTracking-Deadlock history), which
+is also what a future auto-rebase would need. So `modified` is not proof the mod is
+current. Most mods with vdata only ship `panorama/image_compiler.vdata_c`, a compiler
+leftover the game does not have (`not-in-game`, harmless).
+
+CLI: `vpkmerge vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`.
+MCP: `inspect_mod` runs the check whenever the mod ships a `.vdata_c` (path lists cut
+at `limit`, `changed` as a count only). Live test: `tests/vdata_check_live.rs`, gated on
+`DEADLOCK_PAK`.
+
 ## CI
 
 GitHub Actions on push to `main` and PRs:

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.20.0
+
+Outdated vdata check: find mods that ship an old copy of a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`, ...). The shipped copy replaces the whole file in game, so anything Valve added after the mod was built is gone, e.g. a new hero's abilities. Built for Grimoire's "Outdated data" warning (#47). All pre-existing commands are unchanged.
+
+### CLI (`vpkmerge` 0.20)
+
+- New `vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`. Each `.vdata_c` a mod ships is decoded as KV3 and diffed against the game's copy: `missing` (what the mod deletes in game, shallowest first), `extra` (fields the game dropped) and `changed` (values that differ). Status is `outdated`, `modified`, `current`, `not-in-game` (compiler leftovers like `panorama/image_compiler.vdata_c`) or `undecodable`.
+- Arrays count as structure. When lengths differ, arrays of plain values are matched by value and reported as `path[=value]`, since Valve inserts mid-array. Arrays of objects report the tail as `path[i]`.
+- `--json` prints full, untruncated reports. A mod that fails to open gets an `error` field and the exit code stays 0, so one bad file never hides the rest of a batch. Text mode exits non-zero if any mod failed to open.
+
+### Library (`vpkmerge-core` 0.20)
+
+- `check_vdata(mod_vpk, base_vpk) -> Result<Vec<VdataReport>>` and `VdataChecker` for batches: the base pak is opened only once a mod actually ships a `.vdata_c`, and each game file is read and decoded once (68 mods in 0.1 s).
+
 ## v0.19.1
 
 Fix: VPKs that leave out the optional v2 MD5 checksum section now open. Some GameBanana mods ship valid v2 VPKs whose header declares a 0-byte checksum section, and every command that read them failed with "failed to fill whole buffer" (seen as merges in Grimoire failing on specific mods). The VPK reader (`valve_pak` 0.1.0) is now vendored with one change: it reads the checksum section only when the header says it is there (#45). Output for every other VPK is byte-identical to v0.19.0.

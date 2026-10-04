@@ -63,6 +63,9 @@ pub use localization::{
     DEFAULT_LANG,
 };
 
+pub mod vdata_check;
+pub use vdata_check::{check_vdata, VdataChecker, VdataReport, VdataStatus};
+
 pub mod cubemap;
 pub use cubemap::{export_cubemap_hdr, CubemapFaceReport, CUBEMAP_FACE_NAMES};
 

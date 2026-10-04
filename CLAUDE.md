@@ -96,6 +96,36 @@ Frontend stack:
 
 **Visual identity is ferry's paper/sepia palette**, not Grimoire's dark-orange. Tokens copied from `/home/esoc/ferry/app/main/src/vue_lib/`. Intentional aesthetic split.
 
+## Outdated vdata check (`vdata-check`)
+
+A mod that ships a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`)
+overrides the whole file, so anything Valve added after the mod was built is deleted
+in game. `vpkmerge_core::check_vdata(mod, pak01)` decodes each `.vdata_c` the mod
+ships and the game's copy as KV3 and diffs the trees. It returns one `VdataReport`
+per entry: `missing` (paths the game has and the mod lacks: what the mod deletes,
+shallowest first so a whole missing hero comes before its fields), `extra` (paths the
+game dropped), and `changed` (leaf values that differ). Status: `outdated` (any missing
+or extra), `modified` (values only), `current` (identical), `not-in-game`, `undecodable`.
+
+Arrays count as structure too. Equal-length arrays diff by index. When lengths differ,
+arrays of plain values are matched by value (Valve inserts mid-array: the 2026 hero
+batch added `EHeroSpiritLifestealEffectiveness` inside every hero's
+`m_vecDisplayStats`), reported as `path[=value]`; arrays of objects report the tail
+as `path[i]`. `VdataChecker` checks many mods against one pak: it opens the pak only
+once a mod actually ships a `.vdata_c`, and reads and decodes each game file once.
+
+`changed` cannot separate the mod's intended edits from values Valve rebalanced since:
+that needs the build the mod was made against (GameTracking-Deadlock history), which
+is also what a future auto-rebase would need. So `modified` is not proof the mod is
+current. Most mods with vdata only ship `panorama/image_compiler.vdata_c`, a compiler
+leftover the game does not have (`not-in-game`, harmless).
+
+CLI: `vpkmerge vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`.
+With `--json`, a mod that fails to open gets an `error` field and the exit code stays 0,
+so one bad file never hides the rest of a batch (Grimoire relies on this). Text mode
+exits non-zero if any mod failed to open. Live test: `tests/vdata_check_live.rs`, gated
+on `DEADLOCK_PAK`.
+
 ## CI
 
 GitHub Actions on push to `main` and PRs:

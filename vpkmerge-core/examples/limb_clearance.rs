@@ -24,12 +24,20 @@ fn main() -> anyhow::Result<()> {
     for mesh in model.meshes.iter().filter(|m| m.name == a[4]) {
         for vb in &mesh.vertex_buffers {
             for p in &vb.positions {
-                let l = bone.inverse_bind.transform_point(Vec3 { x: p[0], y: p[1], z: p[2] });
+                let l = bone.inverse_bind.transform_point(Vec3 {
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
+                });
                 if l.x < x_min || l.x >= x_max {
                     continue;
                 }
                 let r = (l.y * l.y + l.z * l.z).sqrt();
-                if r > std::env::var("RMAX").ok().and_then(|s| s.parse().ok()).unwrap_or(15.0) {
+                if r > std::env::var("RMAX")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(15.0)
+                {
                     continue;
                 }
                 radii[((l.x - x_min) / slice) as usize].push(r);

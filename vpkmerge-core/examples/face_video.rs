@@ -53,10 +53,7 @@ fn main() -> Result<()> {
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
-        let mut val = |name: &str| {
-            args.next()
-                .with_context(|| format!("{name} needs a value"))
-        };
+        let mut val = |name: &str| args.next().with_context(|| format!("{name} needs a value"));
         match a.as_str() {
             "--mod" => mod_vpk = Some(PathBuf::from(val("--mod")?)),
             "--frames" => frames_dir = Some(PathBuf::from(val("--frames")?)),
@@ -88,10 +85,7 @@ fn main() -> Result<()> {
     let mut frame_paths: Vec<PathBuf> = std::fs::read_dir(&frames_dir)
         .with_context(|| format!("reading {}", frames_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-        })
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
         .collect();
     frame_paths.sort();
     let n_frames = frame_paths.len();
@@ -106,8 +100,8 @@ fn main() -> Result<()> {
     // Donor sheet: decode, stamp frames over RGB (donor alpha plane kept),
     // black out the unused tail cells so no stale frames ship.
     let sheet_bytes = vpkmerge_core::read_vpk_entry(&mod_vpk, &sheet_entry)?;
-    let mut img = morphic::decode(&sheet_bytes)
-        .with_context(|| format!("decoding {sheet_entry}"))?;
+    let mut img =
+        morphic::decode(&sheet_bytes).with_context(|| format!("decoding {sheet_entry}"))?;
     let (sw, sh) = (img.width, img.height);
     ensure!(
         sw % grid == 0 && sh == sw,
@@ -185,8 +179,8 @@ fn main() -> Result<()> {
         });
         println!("whole-material mode: g_vAlbedoTexcoordScale1 = [{s}, {s}]");
     }
-    let (new_vmat, stats) = patch_vmat_params(&vmat_bytes, &edits)
-        .with_context(|| format!("patching {vmat_entry}"))?;
+    let (new_vmat, stats) =
+        patch_vmat_params(&vmat_bytes, &edits).with_context(|| format!("patching {vmat_entry}"))?;
     println!("expression: {expr_src}");
     println!("  vmat patch: {stats:?}");
 

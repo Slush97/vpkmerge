@@ -46,7 +46,11 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .count();
-    anyhow::ensure!(n == edits.len(), "verify: {n}/{} slots patched", edits.len());
+    anyhow::ensure!(
+        n == edits.len(),
+        "verify: {n}/{} slots patched",
+        edits.len()
+    );
 
     vpkmerge_core::pack(&[(ENTRY, patched.as_slice())], &a[2])?;
     println!(

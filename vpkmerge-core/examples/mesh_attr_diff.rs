@@ -31,14 +31,22 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        let idx_same = x.primitives.iter().zip(&y.primitives).all(|(p, q)| p.indices == q.indices);
+        let idx_same = x
+            .primitives
+            .iter()
+            .zip(&y.primitives)
+            .all(|(p, q)| p.indices == q.indices);
         if !idx_same {
             changed.push("indices".into());
         }
         println!(
             "{:34} {}",
             x.name,
-            if changed.is_empty() { "identical".to_string() } else { changed.join(", ") }
+            if changed.is_empty() {
+                "identical".to_string()
+            } else {
+                changed.join(", ")
+            }
         );
     }
     Ok(())

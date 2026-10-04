@@ -21,7 +21,11 @@ fn fe_path(root: &Value) -> Option<(Vec<Seg>, &Value)> {
         for key in ["m_pFeModel", "m_feModel"] {
             if let Some(fe) = p.get(key) {
                 return Some((
-                    vec![Seg::Key("m_parts".into()), Seg::Index(i), Seg::Key(key.into())],
+                    vec![
+                        Seg::Key("m_parts".into()),
+                        Seg::Index(i),
+                        Seg::Key(key.into()),
+                    ],
                     fe,
                 ));
             }
@@ -53,17 +57,31 @@ fn main() -> anyhow::Result<()> {
     let phys = &bytes[b.offset as usize..(b.offset + b.size) as usize];
     let tree = morphic::kv3::decode(phys)?;
     let (base, fe) = fe_path(&tree).expect("no FeModel");
-    let names = fe.get("m_CtrlName").and_then(Value::as_array).expect("m_CtrlName");
+    let names = fe
+        .get("m_CtrlName")
+        .and_then(Value::as_array)
+        .expect("m_CtrlName");
 
     let mut edits = Vec::new();
     for (i, n) in names.iter().enumerate() {
         let Value::String(name) = n else { continue };
-        let Some((_, f, v)) = rules.iter().rev().find(|(k, _, _)| name.contains(k.as_str())) else {
+        let Some((_, f, v)) = rules
+            .iter()
+            .rev()
+            .find(|(k, _, _)| name.contains(k.as_str()))
+        else {
             continue;
         };
-        for (field, val) in [("flAnimationForceAttraction", *f), ("flAnimationVertexAttraction", *v)] {
+        for (field, val) in [
+            ("flAnimationForceAttraction", *f),
+            ("flAnimationVertexAttraction", *v),
+        ] {
             let mut p = base.clone();
-            p.extend([Seg::Key("m_NodeIntegrator".into()), Seg::Index(i), Seg::Key(field.into())]);
+            p.extend([
+                Seg::Key("m_NodeIntegrator".into()),
+                Seg::Index(i),
+                Seg::Key(field.into()),
+            ]);
             edits.push((p, f64::from(val)));
         }
         eprintln!("{name}: force {f} vertex {v}");

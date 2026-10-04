@@ -19,12 +19,30 @@ use morphic::kv3::{Seg, Value};
 use morphic::resource::Resource;
 
 const POOLS: &[(&str, &[&str])] = &[
-    ("inferno", &["models/heroes_wip/inferno/clips/hero_emote_idle_01.vnmclip"]),
-    ("punkgoat", &["models/heroes_wip/punkgoat/clips/hero_emote_idle_01.vnmclip"]),
-    ("fencer", &["models/heroes_wip/fencer/clips/ui_hero_emote.vnmclip"]),
-    ("frank", &["models/heroes_wip/frank/clips/ui_hero_emote.vnmclip"]),
-    ("drifter", &["models/heroes_wip/drifter/clips/ui_hero_emote_01.vnmclip"]),
-    ("pocket", &["models/heroes_staging/synth/clips/ui_hero_emote.vnmclip"]),
+    (
+        "inferno",
+        &["models/heroes_wip/inferno/clips/hero_emote_idle_01.vnmclip"],
+    ),
+    (
+        "punkgoat",
+        &["models/heroes_wip/punkgoat/clips/hero_emote_idle_01.vnmclip"],
+    ),
+    (
+        "fencer",
+        &["models/heroes_wip/fencer/clips/ui_hero_emote.vnmclip"],
+    ),
+    (
+        "frank",
+        &["models/heroes_wip/frank/clips/ui_hero_emote.vnmclip"],
+    ),
+    (
+        "drifter",
+        &["models/heroes_wip/drifter/clips/ui_hero_emote_01.vnmclip"],
+    ),
+    (
+        "pocket",
+        &["models/heroes_staging/synth/clips/ui_hero_emote.vnmclip"],
+    ),
     (
         "lash",
         &[
@@ -150,7 +168,10 @@ fn with(mut node: Value, key: &str, v: Value) -> Result<Value> {
     let Value::Object(fields) = &mut node else {
         bail!("node is not an object")
     };
-    let slot = fields.iter_mut().find(|(k, _)| k == key).with_context(|| format!("no field {key}"))?;
+    let slot = fields
+        .iter_mut()
+        .find(|(k, _)| k == key)
+        .with_context(|| format!("no field {key}"))?;
     slot.1 = v;
     Ok(node)
 }
@@ -193,13 +214,22 @@ fn node_path(doc: &Value, name: &str) -> Result<i64> {
     Ok(i64::try_from(i)?)
 }
 
-fn rewire(pak: &str, variant: &str, pool: &[&str], remap_t: &Value, selector_t: &Value) -> Result<Vec<u8>> {
+fn rewire(
+    pak: &str,
+    variant: &str,
+    pool: &[&str],
+    remap_t: &Value,
+    selector_t: &Value,
+) -> Result<Vec<u8>> {
     let entry = format!("animgraphs/animgraph2/hero/hero_cosmetic.vnmgraph+{variant}.vnmgraph_c");
     let mut bytes = vpkmerge_core::read_vpk_entry(pak, &entry)?;
     let doc = morphic::decode_kv3_resource(&bytes)?;
     let (sel, opt, clip_node) = emote_option(&doc)?;
     let slot = slot_of(&doc, clip_node)?;
-    let old = arr(&doc, "m_resources")?[slot].as_str().context("resource")?.to_string();
+    let old = arr(&doc, "m_resources")?[slot]
+        .as_str()
+        .context("resource")?
+        .to_string();
     let mut rerl_edit: Vec<(Option<String>, String)> = Vec::new();
 
     if old != pool[0] {
@@ -211,42 +241,92 @@ fn rewire(pak: &str, variant: &str, pool: &[&str], remap_t: &Value, selector_t: 
     if pool.len() > 1 {
         let res_base = arr(&doc, "m_resources")?.len();
         let node_base = arr(&doc, "m_nodes")?.len();
-        let base_path = arr(&doc, "m_nodePaths")?[clip_node].as_str().context("path")?.to_string();
+        let base_path = arr(&doc, "m_nodePaths")?[clip_node]
+            .as_str()
+            .context("path")?
+            .to_string();
         let n = pool.len() - 1;
         let (order, weights) = pitch_layout(pool.len())?;
         let clip_node_for = |p: usize| if p == 0 { clip_node } else { node_base + 1 + p };
         let range = |a: f64, b: f64| {
-            Value::Object(vec![("m_flBegin".into(), Value::Double(a)), ("m_flEnd".into(), Value::Double(b))])
+            Value::Object(vec![
+                ("m_flBegin".into(), Value::Double(a)),
+                ("m_flEnd".into(), Value::Double(b)),
+            ])
         };
 
-        let remap = with(remap_t.clone(), "m_nInputValueNodeIdx", Value::Int(node_path(&doc, "look_pitch")?))?;
-        let remap = with(with(remap, "m_inputRange", range(-90.0, 90.0))?, "m_outputRange", range(0.0, 180.0))?;
-        let options = order.iter().map(|&p| Value::Int(i64::try_from(clip_node_for(p)).unwrap())).collect();
-        let selector = with(selector_t.clone(), "m_optionNodeIndices", Value::Array(options))?;
-        let selector = with(selector, "m_optionWeights", Value::Array(weights.into_iter().map(Value::UInt).collect()))?;
-        let selector = with(selector, "m_parameterNodeIdx", Value::Int(i64::try_from(node_base)?))?;
+        let remap = with(
+            remap_t.clone(),
+            "m_nInputValueNodeIdx",
+            Value::Int(node_path(&doc, "look_pitch")?),
+        )?;
+        let remap = with(
+            with(remap, "m_inputRange", range(-90.0, 90.0))?,
+            "m_outputRange",
+            range(0.0, 180.0),
+        )?;
+        let options = order
+            .iter()
+            .map(|&p| Value::Int(i64::try_from(clip_node_for(p)).unwrap()))
+            .collect();
+        let selector = with(
+            selector_t.clone(),
+            "m_optionNodeIndices",
+            Value::Array(options),
+        )?;
+        let selector = with(
+            selector,
+            "m_optionWeights",
+            Value::Array(weights.into_iter().map(Value::UInt).collect()),
+        )?;
+        let selector = with(
+            selector,
+            "m_parameterNodeIdx",
+            Value::Int(i64::try_from(node_base)?),
+        )?;
         let mut new_nodes = vec![
             (format!("{base_path}/By Pitch/Float Remap"), remap),
-            (format!("{base_path}/By Pitch/Parameterized Clip Selector"), selector),
+            (
+                format!("{base_path}/By Pitch/Parameterized Clip Selector"),
+                selector,
+            ),
         ];
         let clip_t = arr(&doc, "m_nodes")?[clip_node].clone();
         for k in 0..n {
             new_nodes.push((
                 format!("{base_path}/By Pitch/Clip {}", k + 2),
-                with(clip_t.clone(), "m_nDataSlotIdx", Value::Int(i64::try_from(res_base + k)?))?,
+                with(
+                    clip_t.clone(),
+                    "m_nDataSlotIdx",
+                    Value::Int(i64::try_from(res_base + k)?),
+                )?,
             ));
         }
 
         for (k, clip) in pool[1..].iter().enumerate() {
             let at = [Seg::Key("m_resources".into())];
-            bytes = morphic::patch_kv3_resource_array_insert(&bytes, &at, res_base + k, &Value::String((*clip).into()))?;
+            bytes = morphic::patch_kv3_resource_array_insert(
+                &bytes,
+                &at,
+                res_base + k,
+                &Value::String((*clip).into()),
+            )?;
             rerl_edit.push((None, (*clip).to_string()));
         }
         for (k, (path, node)) in new_nodes.into_iter().enumerate() {
             // Cloned templates keep their source index; the runtime places each
             // node instance by m_nNodeIdx, so a stale one crashes on graph load.
-            let node = with(node, "m_nNodeIdx", Value::Int(i64::try_from(node_base + k)?))?;
-            bytes = morphic::patch_kv3_resource_array_insert(&bytes, &[Seg::Key("m_nodes".into())], node_base + k, &node)?;
+            let node = with(
+                node,
+                "m_nNodeIdx",
+                Value::Int(i64::try_from(node_base + k)?),
+            )?;
+            bytes = morphic::patch_kv3_resource_array_insert(
+                &bytes,
+                &[Seg::Key("m_nodes".into())],
+                node_base + k,
+                &node,
+            )?;
             bytes = morphic::patch_kv3_resource_array_insert(
                 &bytes,
                 &[Seg::Key("m_nodePaths".into())],
@@ -260,18 +340,31 @@ fn rewire(pak: &str, variant: &str, pool: &[&str], remap_t: &Value, selector_t: 
             Seg::Key("m_optionNodeIndices".into()),
             Seg::Index(opt),
         ];
-        bytes = morphic::patch_kv3_resource_scalars(&bytes, &[(redirect, i64::try_from(node_base + 1)?)])?;
+        bytes = morphic::patch_kv3_resource_scalars(
+            &bytes,
+            &[(redirect, i64::try_from(node_base + 1)?)],
+        )?;
     }
 
     let r = Resource::parse(&bytes)?;
-    let rerl_idx = r.blocks().iter().position(|b| &b.kind == b"RERL").context("no RERL")?;
+    let rerl_idx = r
+        .blocks()
+        .iter()
+        .position(|b| &b.kind == b"RERL")
+        .context("no RERL")?;
     let mut refs = read_rerl(r.get_block_by_index(rerl_idx).context("RERL bytes")?);
     for (old, new) in &rerl_edit {
         let entry = (resource_id(new), new.clone());
         match old {
             Some(old) => {
-                let hit = refs.iter_mut().find(|(_, n)| n == old).context("old clip not in RERL")?;
-                anyhow::ensure!(hit.0 == resource_id(old), "{variant}: RERL hash check failed");
+                let hit = refs
+                    .iter_mut()
+                    .find(|(_, n)| n == old)
+                    .context("old clip not in RERL")?;
+                anyhow::ensure!(
+                    hit.0 == resource_id(old),
+                    "{variant}: RERL hash check failed"
+                );
                 *hit = entry;
             }
             None => refs.push(entry),
@@ -289,14 +382,19 @@ fn verify(out: &[u8], variant: &str, pool: &[&str], before: &Value) -> Result<()
     let nodes = arr(&doc, "m_nodes")?;
     let res = arr(&doc, "m_resources")?;
     let (_, _, target) = emote_option(&doc)?;
-    let (clip_nodes, expected): (Vec<usize>, Vec<&str>) = match nodes[target].get("m_optionNodeIndices") {
+    let (clip_nodes, expected): (Vec<usize>, Vec<&str>) = match nodes[target]
+        .get("m_optionNodeIndices")
+    {
         Some(Value::Array(o)) if pool.len() > 1 => {
-            let remap = usize::try_from(int(nodes[target].get("m_parameterNodeIdx")).context("param")?)?;
+            let remap =
+                usize::try_from(int(nodes[target].get("m_parameterNodeIdx")).context("param")?)?;
             let input = int(nodes[remap].get("m_nInputValueNodeIdx")).context("remap input")?;
-            anyhow::ensure!(before.get("m_nodePaths").and_then(|p| match p {
-                Value::Array(a) => a.get(usize::try_from(input).ok()?)?.as_str(),
-                _ => None,
-            }) == Some("look_pitch"));
+            anyhow::ensure!(
+                before.get("m_nodePaths").and_then(|p| match p {
+                    Value::Array(a) => a.get(usize::try_from(input).ok()?)?.as_str(),
+                    _ => None,
+                }) == Some("look_pitch")
+            );
             let Some(Value::Array(w)) = nodes[target].get("m_optionWeights") else {
                 bail!("{variant}: no weights")
             };
@@ -304,7 +402,9 @@ fn verify(out: &[u8], variant: &str, pool: &[&str], before: &Value) -> Result<()
             anyhow::ensure!(total == 180, "{variant}: weights sum {total}, want 180");
             let (order, _) = pitch_layout(pool.len())?;
             (
-                o.iter().map(|v| usize::try_from(int(Some(v)).unwrap()).unwrap()).collect(),
+                o.iter()
+                    .map(|v| usize::try_from(int(Some(v)).unwrap()).unwrap())
+                    .collect(),
                 order.iter().map(|&p| pool[p]).collect(),
             )
         }
@@ -315,7 +415,10 @@ fn verify(out: &[u8], variant: &str, pool: &[&str], before: &Value) -> Result<()
         .map(|&c| res[slot_of(&doc, c).unwrap()].as_str().unwrap())
         .collect();
     anyhow::ensure!(got == expected, "{variant}: option mismatch {got:?}");
-    anyhow::ensure!(nodes.len() == arr(&doc, "m_nodePaths")?.len(), "node/path count mismatch");
+    anyhow::ensure!(
+        nodes.len() == arr(&doc, "m_nodePaths")?.len(),
+        "node/path count mismatch"
+    );
     for (i, n) in nodes.iter().enumerate() {
         anyhow::ensure!(
             int(n.get("m_nNodeIdx")) == Some(i64::try_from(i)?),
@@ -330,19 +433,29 @@ fn verify(out: &[u8], variant: &str, pool: &[&str], before: &Value) -> Result<()
             "{variant}: node {i} changed unexpectedly"
         );
     }
-    let refs = read_rerl(Resource::parse(out)?.blocks().iter().position(|b| &b.kind == b"RERL")
-        .and_then(|i| Resource::parse(out).ok()?.get_block_by_index(i))
-        .context("RERL")?);
+    let refs = read_rerl(
+        Resource::parse(out)?
+            .blocks()
+            .iter()
+            .position(|b| &b.kind == b"RERL")
+            .and_then(|i| Resource::parse(out).ok()?.get_block_by_index(i))
+            .context("RERL")?,
+    );
     for r in res {
         let name = r.as_str().context("res")?;
-        anyhow::ensure!(refs.iter().any(|(id, n)| n == name && *id == resource_id(name)), "{variant}: {name} not precached");
+        anyhow::ensure!(
+            refs.iter()
+                .any(|(id, n)| n == name && *id == resource_id(name)),
+            "{variant}: {name} not precached"
+        );
     }
     Ok(())
 }
 
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
-    let template = morphic::decode_kv3_resource(&vpkmerge_core::read_vpk_entry(&a[1], TEMPLATE_GRAPH)?)?;
+    let template =
+        morphic::decode_kv3_resource(&vpkmerge_core::read_vpk_entry(&a[1], TEMPLATE_GRAPH)?)?;
     let remap_t = class_template(&template, "CNmFloatRemapNode::CDefinition")?;
     let selector_t = class_template(&template, "CNmParameterizedClipSelectorNode::CDefinition")?;
 
@@ -350,9 +463,15 @@ fn main() -> Result<()> {
     for (variant, pool) in POOLS {
         let out = rewire(&a[1], variant, pool, &remap_t, &selector_t)?;
         println!("{variant}: {} clip(s) -> {}", pool.len(), pool.join(", "));
-        files.push((format!("animgraphs/animgraph2/hero/hero_cosmetic.vnmgraph+{variant}.vnmgraph_c"), out));
+        files.push((
+            format!("animgraphs/animgraph2/hero/hero_cosmetic.vnmgraph+{variant}.vnmgraph_c"),
+            out,
+        ));
     }
-    let packed: Vec<(&str, &[u8])> = files.iter().map(|(e, b)| (e.as_str(), b.as_slice())).collect();
+    let packed: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(e, b)| (e.as_str(), b.as_slice()))
+        .collect();
     vpkmerge_core::pack(&packed, &a[2])?;
     println!("wrote {}", a[2]);
     Ok(())

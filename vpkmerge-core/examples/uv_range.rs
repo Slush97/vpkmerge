@@ -27,9 +27,13 @@ fn main() -> anyhow::Result<()> {
             let Some(uvs) = vb.texcoords.first() else {
                 continue;
             };
-            let r = ranges
-                .entry(prim.material.clone())
-                .or_insert((f32::MAX, f32::MAX, f32::MIN, f32::MIN, 0));
+            let r = ranges.entry(prim.material.clone()).or_insert((
+                f32::MAX,
+                f32::MAX,
+                f32::MIN,
+                f32::MIN,
+                0,
+            ));
             for &i in &prim.indices {
                 let Some(&[u, v]) = uvs.get(i as usize) else {
                     continue;
@@ -50,7 +54,11 @@ fn main() -> anyhow::Result<()> {
             "  {:<60} u [{u0:>7.3}, {u1:>7.3}]  v [{v0:>7.3}, {v1:>7.3}]  {} verts  {}",
             mat,
             n,
-            if clean { "FLIPBOOK-CLEAN" } else { "OUT OF [0,1]" }
+            if clean {
+                "FLIPBOOK-CLEAN"
+            } else {
+                "OUT OF [0,1]"
+            }
         );
     }
     Ok(())

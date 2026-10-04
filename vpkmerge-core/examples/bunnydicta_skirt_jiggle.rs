@@ -139,7 +139,13 @@ impl Frame {
 
     /// `child` expressed in this frame.
     fn relative(&self, child: &Frame) -> Frame {
-        let to_local = |v: V3| [dot(v, self.axes[0]), dot(v, self.axes[1]), dot(v, self.axes[2])];
+        let to_local = |v: V3| {
+            [
+                dot(v, self.axes[0]),
+                dot(v, self.axes[1]),
+                dot(v, self.axes[2]),
+            ]
+        };
         Frame {
             origin: to_local(sub(child.origin, self.origin)),
             axes: child.axes.map(to_local),
@@ -173,16 +179,36 @@ impl Frame {
         let tr = r(0, 0) + r(1, 1) + r(2, 2);
         let q = if tr > 0.0 {
             let s = (tr + 1.0).sqrt() * 2.0;
-            [(r(1, 2) - r(2, 1)) / s, (r(2, 0) - r(0, 2)) / s, (r(0, 1) - r(1, 0)) / s, 0.25 * s]
+            [
+                (r(1, 2) - r(2, 1)) / s,
+                (r(2, 0) - r(0, 2)) / s,
+                (r(0, 1) - r(1, 0)) / s,
+                0.25 * s,
+            ]
         } else if r(0, 0) > r(1, 1) && r(0, 0) > r(2, 2) {
             let s = (1.0 + r(0, 0) - r(1, 1) - r(2, 2)).sqrt() * 2.0;
-            [0.25 * s, (r(1, 0) + r(0, 1)) / s, (r(2, 0) + r(0, 2)) / s, (r(1, 2) - r(2, 1)) / s]
+            [
+                0.25 * s,
+                (r(1, 0) + r(0, 1)) / s,
+                (r(2, 0) + r(0, 2)) / s,
+                (r(1, 2) - r(2, 1)) / s,
+            ]
         } else if r(1, 1) > r(2, 2) {
             let s = (1.0 + r(1, 1) - r(0, 0) - r(2, 2)).sqrt() * 2.0;
-            [(r(1, 0) + r(0, 1)) / s, 0.25 * s, (r(2, 1) + r(1, 2)) / s, (r(2, 0) - r(0, 2)) / s]
+            [
+                (r(1, 0) + r(0, 1)) / s,
+                0.25 * s,
+                (r(2, 1) + r(1, 2)) / s,
+                (r(2, 0) - r(0, 2)) / s,
+            ]
         } else {
             let s = (1.0 + r(2, 2) - r(0, 0) - r(1, 1)).sqrt() * 2.0;
-            [(r(2, 0) + r(0, 2)) / s, (r(2, 1) + r(1, 2)) / s, 0.25 * s, (r(0, 1) - r(1, 0)) / s]
+            [
+                (r(2, 0) + r(0, 2)) / s,
+                (r(2, 1) + r(1, 2)) / s,
+                0.25 * s,
+                (r(0, 1) - r(1, 0)) / s,
+            ]
         };
         if q[3] < 0.0 {
             q.map(|c| -c)
@@ -237,7 +263,10 @@ fn fit(model: &Model) -> Result<Fit> {
     }
     for t in indices.chunks(3) {
         for k in 1..3 {
-            let (a, b) = (find(&mut parent, t[0] as usize), find(&mut parent, t[k] as usize));
+            let (a, b) = (
+                find(&mut parent, t[0] as usize),
+                find(&mut parent, t[k] as usize),
+            );
             parent[a] = b;
         }
     }
@@ -252,7 +281,11 @@ fn fit(model: &Model) -> Result<Fit> {
         .filter(|vs| vs.iter().any(|&i| pos(i)[2] < 55.0))
         .max_by_key(Vec::len)
         .context("no skirt component below the hips")?;
-    let top: Vec<V3> = skirt.iter().map(|&i| pos(i)).filter(|p| p[2] > Z_BASE - 1.0).collect();
+    let top: Vec<V3> = skirt
+        .iter()
+        .map(|&i| pos(i))
+        .filter(|p| p[2] > Z_BASE - 1.0)
+        .collect();
     let n = top.len() as f64;
     let c = [
         top.iter().map(|p| p[0]).sum::<f64>() / n,
@@ -309,7 +342,10 @@ fn pelvis_frame(model: &Model) -> Result<(usize, Frame)> {
         .iter()
         .position(|b| b.name == "pelvis")
         .context("no pelvis")?;
-    Ok((i, Frame::from_global(&model.skeleton.bones[i].global_bind.m)))
+    Ok((
+        i,
+        Frame::from_global(&model.skeleton.bones[i].global_bind.m),
+    ))
 }
 
 fn rig(vpk: &str, out: &str) -> Result<()> {
@@ -385,7 +421,13 @@ fn ease_out(p: V3, f: &Fit) -> V3 {
 
 /// New skin for one skirt vertex: body weights fade to `BODY_HEM` over the top
 /// third, the remainder goes to the two panels either side of it.
-fn skirt_weights(p: V3, joints: [u16; 4], weights: [f32; 4], f: &Fit, panel_bone: &[u16]) -> ([u16; 4], [f32; 4]) {
+fn skirt_weights(
+    p: V3,
+    joints: [u16; 4],
+    weights: [f32; 4],
+    f: &Fit,
+    panel_bone: &[u16],
+) -> ([u16; 4], [f32; 4]) {
     let t = ((Z_BASE - p[2]) / (Z_BASE - f.z_hem)).clamp(0.0, 1.0);
     let body = 1.0 - (1.0 - BODY_HEM) * smoothstep(0.0, 0.35, t);
     let mut acc: Vec<(u16, f64)> = Vec::new();
@@ -401,7 +443,10 @@ fn skirt_weights(p: V3, joints: [u16; 4], weights: [f32; 4], f: &Fit, panel_bone
     for k in 0..4 {
         add(joints[k], f64::from(weights[k]) * body);
     }
-    let u = ((p[1] - f.centre[1]).atan2(p[0] - f.centre[0]).rem_euclid(2.0 * PI)) / (2.0 * PI / STRIPS as f64);
+    let u = ((p[1] - f.centre[1])
+        .atan2(p[0] - f.centre[0])
+        .rem_euclid(2.0 * PI))
+        / (2.0 * PI / STRIPS as f64);
     let s0 = u.floor() as usize % STRIPS;
     let frac = u - u.floor();
     add(panel_bone[s0], (1.0 - body) * (1.0 - frac));
@@ -421,7 +466,15 @@ fn skirt_weights(p: V3, joints: [u16; 4], weights: [f32; 4], f: &Fit, panel_bone
 
 /// Every FeModel field that holds a node index.
 const NODE_REF_KEYS: [&str; 9] = [
-    "nNode", "nNodeX0", "nNodeX1", "nNodeY0", "nNodeY1", "nBoneCtrl", "nTargetNode", "nCtrlParent", "nCtrlChild",
+    "nNode",
+    "nNodeX0",
+    "nNodeX1",
+    "nNodeY0",
+    "nNodeY1",
+    "nBoneCtrl",
+    "nTargetNode",
+    "nCtrlParent",
+    "nCtrlChild",
 ];
 
 fn shift(v: &mut Value, from: u64, by: u64) {
@@ -457,7 +510,10 @@ fn arr<'a>(v: &'a mut Value, k: &str) -> Result<&'a mut Vec<Value>> {
 }
 fn uint(v: &Value, k: &str) -> Result<u64> {
     v.get(k)
-        .and_then(|x| x.as_uint().or_else(|| x.as_int().and_then(|i| u64::try_from(i).ok())))
+        .and_then(|x| {
+            x.as_uint()
+                .or_else(|| x.as_int().and_then(|i| u64::try_from(i).ok()))
+        })
         .with_context(|| format!("FeModel has no {k}"))
 }
 fn f64s(v: &Value) -> Vec<f64> {
@@ -480,7 +536,10 @@ fn rebuild_tree(fe: &mut Value, leaf_masks: &[u64]) -> Result<()> {
         })
         .collect();
     let leaves = poses.len();
-    ensure!(leaves == leaf_masks.len() && leaves > 1, "tree leaf count mismatch");
+    ensure!(
+        leaves == leaf_masks.len() && leaves > 1,
+        "tree leaf count mismatch"
+    );
     let mut parents = vec![0u64; 2 * leaves - 1];
     let mut masks = vec![0u64; 2 * leaves - 1];
     let mut children = vec![[0u64; 2]; leaves - 1];
@@ -502,9 +561,9 @@ fn rebuild_tree(fe: &mut Value, leaf_masks: &[u64]) -> Result<()> {
             return ids[0];
         }
         let ext = |k: usize| {
-            let (lo, hi) = ids
-                .iter()
-                .fold((f64::MAX, f64::MIN), |(lo, hi), &i| (lo.min(poses[i][k]), hi.max(poses[i][k])));
+            let (lo, hi) = ids.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &i| {
+                (lo.min(poses[i][k]), hi.max(poses[i][k]))
+            });
             hi - lo
         };
         let axis = (0..3).max_by(|&a, &b| ext(a).total_cmp(&ext(b))).unwrap();
@@ -522,14 +581,28 @@ fn rebuild_tree(fe: &mut Value, leaf_masks: &[u64]) -> Result<()> {
         me
     }
     let mut ids: Vec<usize> = (0..leaves).collect();
-    let root = build(&mut ids, 0, &poses, &mut next, &mut parents, &mut masks, &mut children, &mut depth);
+    let root = build(
+        &mut ids,
+        0,
+        &poses,
+        &mut next,
+        &mut parents,
+        &mut masks,
+        &mut children,
+        &mut depth,
+    );
     ensure!(root == 2 * leaves - 2, "BVH root is not last");
     parents[root] = 65535;
     *arr(fe, "m_TreeParents")? = parents.into_iter().map(Value::UInt).collect();
     *arr(fe, "m_TreeCollisionMasks")? = masks.into_iter().map(Value::UInt).collect();
     *arr(fe, "m_TreeChildren")? = children
         .into_iter()
-        .map(|c| Value::Object(vec![("nChild".into(), Value::Array(c.map(Value::UInt).to_vec()))]))
+        .map(|c| {
+            Value::Object(vec![(
+                "nChild".into(),
+                Value::Array(c.map(Value::UInt).to_vec()),
+            )])
+        })
         .collect();
     *fe.get_mut("m_nTreeDepth").context("no m_nTreeDepth")? = Value::UInt(depth as u64);
     Ok(())
@@ -544,9 +617,15 @@ fn merge_jiggles(fe: &mut Value, probe: &Value) -> Result<()> {
     let n_static = uint(fe, "m_nStaticNodes")?;
     let ins = uint(fe, "m_nFirstPositionDrivenNode")?;
     let count = uint(fe, "m_nNodeCount")?;
-    ensure!(uint(probe, "m_nStaticNodes")? == 0, "probe has static nodes");
+    ensure!(
+        uint(probe, "m_nStaticNodes")? == 0,
+        "probe has static nodes"
+    );
     let k = uint(probe, "m_nNodeCount")?;
-    ensure!(uint(probe, "m_nFirstPositionDrivenNode")? == k, "probe has driven nodes");
+    ensure!(
+        uint(probe, "m_nFirstPositionDrivenNode")? == k,
+        "probe has driven nodes"
+    );
     let old_dynamic = (count - n_static) as usize;
 
     for (name, x) in match fe {
@@ -556,7 +635,14 @@ fn merge_jiggles(fe: &mut Value, probe: &Value) -> Result<()> {
         if name.starts_with("m_Tree") {
             continue;
         }
-        if ["m_FreeNodes", "m_SourceElems", "m_LockToGoal", "m_SkelParents"].contains(&name.as_str()) {
+        if [
+            "m_FreeNodes",
+            "m_SourceElems",
+            "m_LockToGoal",
+            "m_SkelParents",
+        ]
+        .contains(&name.as_str())
+        {
             shift(x, ins, k);
         } else {
             shift_node_refs(x, ins, k);
@@ -572,7 +658,13 @@ fn merge_jiggles(fe: &mut Value, probe: &Value) -> Result<()> {
         Ok(a.to_vec())
     };
     let at = ins as usize;
-    for key in ["m_CtrlName", "m_CtrlHash", "m_InitPose", "m_NodeInvMasses", "m_NodeIntegrator"] {
+    for key in [
+        "m_CtrlName",
+        "m_CtrlHash",
+        "m_InitPose",
+        "m_NodeInvMasses",
+        "m_NodeIntegrator",
+    ] {
         let add = probe_arr(key)?;
         arr(fe, key)?.splice(at..at, add);
     }
@@ -620,12 +712,27 @@ fn merge_jiggles(fe: &mut Value, probe: &Value) -> Result<()> {
 fn validate_fe(fe: &Value) -> Result<()> {
     let n = uint(fe, "m_nNodeCount")? as usize;
     let dynamic = n - uint(fe, "m_nStaticNodes")? as usize;
-    let len = |k: &str| fe.get(k).and_then(Value::as_array).map_or(0, <[Value]>::len);
-    for k in ["m_CtrlName", "m_CtrlHash", "m_InitPose", "m_NodeInvMasses", "m_NodeIntegrator", "m_SkelParents"] {
+    let len = |k: &str| {
+        fe.get(k)
+            .and_then(Value::as_array)
+            .map_or(0, <[Value]>::len)
+    };
+    for k in [
+        "m_CtrlName",
+        "m_CtrlHash",
+        "m_InitPose",
+        "m_NodeInvMasses",
+        "m_NodeIntegrator",
+        "m_SkelParents",
+    ] {
         ensure!(len(k) == n, "{k} has {} entries for {n} nodes", len(k));
     }
     for k in ["m_DynNodeWindBases", "m_NodeCollisionRadii"] {
-        ensure!(len(k) == dynamic, "{k} has {} entries for {dynamic} dynamic nodes", len(k));
+        ensure!(
+            len(k) == dynamic,
+            "{k} has {} entries for {dynamic} dynamic nodes",
+            len(k)
+        );
     }
     ensure!(len("m_TreeParents") == 2 * dynamic - 1, "tree size");
     fn max_ref(v: &Value, m: &mut u64) {
@@ -655,7 +762,10 @@ fn validate_fe(fe: &Value) -> Result<()> {
     }
     let mut m = 0;
     max_ref(fe, &mut m);
-    ensure!((m as usize) < n, "node reference {m} out of range ({n} nodes)");
+    ensure!(
+        (m as usize) < n,
+        "node reference {m} out of range ({n} nodes)"
+    );
     Ok(())
 }
 
@@ -670,20 +780,39 @@ fn block_index(res: &Resource, kind: &[u8; 4]) -> Result<usize> {
 fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
     let original = vpkmerge_core::read_vpk_entry(vpk, ENTRY)?;
     let model = morphic::model::decode(&original)?;
-    let names: Vec<&str> = model.skeleton.bones.iter().map(|b| b.name.as_str()).collect();
-    ensure!(!names.contains(&"skirt_00"), "model already has skirt bones");
+    let names: Vec<&str> = model
+        .skeleton
+        .bones
+        .iter()
+        .map(|b| b.name.as_str())
+        .collect();
+    ensure!(
+        !names.contains(&"skirt_00"),
+        "model already has skirt bones"
+    );
     let spare_ix: Vec<usize> = SPARE
         .iter()
-        .map(|s| names.iter().position(|n| n == s).with_context(|| format!("no spare bone {s}")))
+        .map(|s| {
+            names
+                .iter()
+                .position(|n| n == s)
+                .with_context(|| format!("no spare bone {s}"))
+        })
         .collect::<Result<_>>()?;
     let f = fit(&model)?;
     let (pelvis_ix, pelvis) = pelvis_frame(&model)?;
-    ensure!(spare_ix.iter().all(|&i| i > pelvis_ix), "spare bone precedes the pelvis");
+    ensure!(
+        spare_ix.iter().all(|&i| i > pelvis_ix),
+        "spare bone precedes the pelvis"
+    );
 
     // Skin first: the bone spheres are measured from it.
     let (vb, indices) = clothes_dc0(&model)?;
     let mut vb = vb.clone();
-    let panel_bone: Vec<u16> = spare_ix.iter().map(|&i| u16::try_from(i).unwrap()).collect();
+    let panel_bone: Vec<u16> = spare_ix
+        .iter()
+        .map(|&i| u16::try_from(i).unwrap())
+        .collect();
     let mut sphere = vec![0.0f64; STRIPS];
     for &i in &f.skirt {
         let p = ease_out(vb.positions[i].map(f64::from), &f);
@@ -717,17 +846,36 @@ fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
         ints.push((sk("m_nFlag", i), CLOTH_BONE_FLAGS));
         let rel = pelvis.relative(&f.panels[s].0);
         for (c, x) in rel.origin.iter().enumerate() {
-            reals.push((vec![key("m_modelSkeleton"), key("m_bonePosParent"), Seg::Index(i), Seg::Index(c)], *x));
+            reals.push((
+                vec![
+                    key("m_modelSkeleton"),
+                    key("m_bonePosParent"),
+                    Seg::Index(i),
+                    Seg::Index(c),
+                ],
+                *x,
+            ));
         }
         for (c, x) in rel.quat().iter().enumerate() {
-            reals.push((vec![key("m_modelSkeleton"), key("m_boneRotParent"), Seg::Index(i), Seg::Index(c)], *x));
+            reals.push((
+                vec![
+                    key("m_modelSkeleton"),
+                    key("m_boneRotParent"),
+                    Seg::Index(i),
+                    Seg::Index(c),
+                ],
+                *x,
+            ));
         }
         reals.push((sk("m_boneSphere", i), sphere[s]));
     }
     bytes = morphic::patch_kv3_resource_scalars(&bytes, &ints)?;
     bytes = morphic::patch_kv3_resource_floats(
         &bytes,
-        &reals.iter().map(|(p, x)| (p.clone(), *x as f32)).collect::<Vec<_>>(),
+        &reals
+            .iter()
+            .map(|(p, x)| (p.clone(), *x as f32))
+            .collect::<Vec<_>>(),
     )
     .or_else(|_| morphic::patch_kv3_resource_doubles(&bytes, &reals))
     .context("patch bone binds")?;
@@ -737,31 +885,53 @@ fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
     // instance's bone range, which read the NEXT hero's bone matrices in game
     // (a panel stretched across to another Vindicta).
     let data = kv3::decode(Resource::parse(&bytes)?.data_block()?)?;
-    let clothes_mesh = model.meshes.iter().find(|m| m.name == "clothes").unwrap().mesh_index;
+    let clothes_mesh = model
+        .meshes
+        .iter()
+        .find(|m| m.name == "clothes")
+        .unwrap()
+        .mesh_index;
     let slice = morphic::model::remap_table(&data, clothes_mesh).context("no clothes remap")?;
     for (s, &b) in spare_ix.iter().enumerate() {
-        ensure!(slice.contains(&b), "{} is not in the clothes palette", SPARE[s]);
+        ensure!(
+            slice.contains(&b),
+            "{} is not in the clothes palette",
+            SPARE[s]
+        );
     }
 
     // Skinning.
-    let (edited, rep) = morphic::model::replace_draw_call_uncompressed(&bytes, "clothes", 0, &vb, indices)?;
+    let (edited, rep) =
+        morphic::model::replace_draw_call_uncompressed(&bytes, "clothes", 0, &vb, indices)?;
     bytes = edited;
 
     // MDAT mesh skeletons: mirror the rename + inverse bind where listed.
-    for (bi, blk) in Resource::parse(&bytes)?.blocks().to_vec().iter().enumerate() {
+    for (bi, blk) in Resource::parse(&bytes)?
+        .blocks()
+        .to_vec()
+        .iter()
+        .enumerate()
+    {
         if &blk.kind != b"MDAT" {
             continue;
         }
         let res = Resource::parse(&bytes)?;
         let raw = res.get_block_by_index(bi).context("MDAT")?;
         let mdat = kv3::decode(raw)?;
-        let Some(list) = mdat.get("m_skeleton").and_then(|s| s.get("m_bones")).and_then(Value::as_array) else {
+        let Some(list) = mdat
+            .get("m_skeleton")
+            .and_then(|s| s.get("m_bones"))
+            .and_then(Value::as_array)
+        else {
             continue;
         };
         let mut strs = Vec::new();
         let mut inv = Vec::new();
         for (j, b) in list.iter().enumerate() {
-            let Some(s) = b.get("m_boneName").and_then(Value::as_str).and_then(|n| SPARE.iter().position(|x| *x == n))
+            let Some(s) = b
+                .get("m_boneName")
+                .and_then(Value::as_str)
+                .and_then(|n| SPARE.iter().position(|x| *x == n))
             else {
                 continue;
             };
@@ -778,17 +948,28 @@ fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
             continue;
         }
         let mut payload = kv3::set_strings_adding(raw, &strs)?;
-        payload = kv3::set_floats(&payload, &inv.iter().map(|(p, x)| (p.clone(), *x as f32)).collect::<Vec<_>>())
-            .or_else(|_| kv3::set_doubles(&payload, &inv))
-            .context("patch MDAT inverse binds")?;
+        payload = kv3::set_floats(
+            &payload,
+            &inv.iter()
+                .map(|(p, x)| (p.clone(), *x as f32))
+                .collect::<Vec<_>>(),
+        )
+        .or_else(|_| kv3::set_doubles(&payload, &inv))
+        .context("patch MDAT inverse binds")?;
         bytes = res.rebuild_with_block(bi, &payload)?;
     }
 
     // PHYS: merge the compiled jiggles.
     let probe_bytes = std::fs::read(probe_path).with_context(|| format!("read {probe_path}"))?;
     let probe_res = Resource::parse(&probe_bytes)?;
-    let probe_phys = kv3::decode(probe_res.find_block(*b"PHYS").context("probe has no PHYS")?)?;
-    let probe_fe = probe_phys.get("m_pFeModel").context("probe has no FeModel")?;
+    let probe_phys = kv3::decode(
+        probe_res
+            .find_block(*b"PHYS")
+            .context("probe has no PHYS")?,
+    )?;
+    let probe_fe = probe_phys
+        .get("m_pFeModel")
+        .context("probe has no FeModel")?;
     let probe_names: Vec<&str> = probe_fe
         .get("m_CtrlName")
         .and_then(Value::as_array)
@@ -797,7 +978,10 @@ fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
         .filter_map(Value::as_str)
         .collect();
     let want: Vec<String> = (0..STRIPS).map(panel_name).collect();
-    ensure!(probe_names == want, "probe was compiled from a different rig: {probe_names:?}");
+    ensure!(
+        probe_names == want,
+        "probe was compiled from a different rig: {probe_names:?}"
+    );
 
     let res = Resource::parse(&bytes)?;
     let phys_ix = block_index(&res, b"PHYS")?;
@@ -820,7 +1004,11 @@ fn build(vpk: &str, probe_path: &str, out: &str) -> Result<()> {
     let overlay = format!("{out}.overlay_dir.vpk");
     vpkmerge_core::pack(&[(ENTRY, bytes.as_slice())], &overlay)?;
     let _ = std::fs::remove_file(out);
-    vpkmerge_core::merge(&[vpk, overlay.as_str()], out, &vpkmerge_core::MergeOptions::default())?;
+    vpkmerge_core::merge(
+        &[vpk, overlay.as_str()],
+        out,
+        &vpkmerge_core::MergeOptions::default(),
+    )?;
     std::fs::remove_file(&overlay)?;
     println!("wrote {out}");
     Ok(())
@@ -841,7 +1029,10 @@ fn verify(bytes: &[u8], f: &Fit) -> Result<()> {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    let poses = fe.get("m_InitPose").and_then(Value::as_array).context("init pose")?;
+    let poses = fe
+        .get("m_InitPose")
+        .and_then(Value::as_array)
+        .context("init pose")?;
     let mut worst = (0.0f64, 0.0f64);
     for s in 0..STRIPS {
         let name = panel_name(s);
@@ -852,11 +1043,16 @@ fn verify(bytes: &[u8], f: &Fit) -> Result<()> {
             .find(|b| b.name == name)
             .with_context(|| format!("{name} missing after graft"))?;
         let got = Frame::from_global(&bone.global_bind.m);
-        let node = ctrl.iter().position(|n| *n == name).with_context(|| format!("no node {name}"))?;
+        let node = ctrl
+            .iter()
+            .position(|n| *n == name)
+            .with_context(|| format!("no node {name}"))?;
         let p = f64s(&poses[node]);
         let dp = sub(got.origin, [p[0], p[1], p[2]]);
         let q = got.quat();
-        let qd = (q[0] * p[4] + q[1] * p[5] + q[2] * p[6] + q[3] * p[7]).abs().min(1.0);
+        let qd = (q[0] * p[4] + q[1] * p[5] + q[2] * p[6] + q[3] * p[7])
+            .abs()
+            .min(1.0);
         worst.0 = worst.0.max(dot(dp, dp).sqrt());
         worst.1 = worst.1.max(2.0 * qd.acos().to_degrees());
         let want = f.panels[s].0;
@@ -869,7 +1065,10 @@ fn verify(bytes: &[u8], f: &Fit) -> Result<()> {
         "verify: DATA binds vs compiled InitPose: max {:.4} units, {:.3} deg",
         worst.0, worst.1
     );
-    ensure!(worst.0 < 0.01 && worst.1 < 0.1, "grafted binds disagree with the compiled jiggle poses");
+    ensure!(
+        worst.0 < 0.01 && worst.1 < 0.1,
+        "grafted binds disagree with the compiled jiggle poses"
+    );
 
     let (vb, _) = clothes_dc0(&model)?;
     let rest: Vec<morphic::model::Mat4> = model
@@ -881,7 +1080,11 @@ fn verify(bytes: &[u8], f: &Fit) -> Result<()> {
     let mut max_err = 0.0f64;
     for &i in &f.skirt {
         let p = vb.positions[i];
-        let v = morphic::model::Vec3 { x: p[0], y: p[1], z: p[2] };
+        let v = morphic::model::Vec3 {
+            x: p[0],
+            y: p[1],
+            z: p[2],
+        };
         let mut acc = [0.0f64; 3];
         for k in 0..4 {
             let w = f64::from(vb.weights[i][k]);

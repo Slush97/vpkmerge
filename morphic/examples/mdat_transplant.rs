@@ -84,7 +84,12 @@ fn parse(raw: &[u8]) -> Doc {
     let buf1 = &u[HEADER..HEADER + unc1];
     let buf2 = &u[HEADER + unc1..];
 
-    let (c1, c4, c8, c2) = (i32_at(&u, 28), i32_at(&u, 32), i32_at(&u, 36), i32_at(&u, 64));
+    let (c1, c4, c8, c2) = (
+        i32_at(&u, 28),
+        i32_at(&u, 32),
+        i32_at(&u, 36),
+        i32_at(&u, 64),
+    );
     let mut off = c1;
     let take = |off: &mut usize, n: usize, a: usize| -> (usize, usize) {
         if n == 0 {
@@ -377,8 +382,16 @@ impl<'a> Walker<'a> {
         assert_eq!(self.s.types, self.d.types.len(), "types not fully consumed");
         assert_eq!(self.s.obj, self.d.obj.len(), "objects not fully consumed");
         for k in 0..4 {
-            assert_eq!(self.s.main[k], self.d.main[k].len(), "main lane {k} not consumed");
-            assert_eq!(self.s.aux[k], self.d.aux[k].len(), "aux lane {k} not consumed");
+            assert_eq!(
+                self.s.main[k],
+                self.d.main[k].len(),
+                "main lane {k} not consumed"
+            );
+            assert_eq!(
+                self.s.aux[k],
+                self.d.aux[k].len(),
+                "aux lane {k} not consumed"
+            );
         }
         self
     }
@@ -394,7 +407,10 @@ fn splice(t: &[u8], ts: usize, te: usize, ins: &[u8]) -> Vec<u8> {
 fn transplant(target: &Doc, donor: &Doc, key: &str) -> Doc {
     let tw = Walker::new(target, &[key]).run();
     let dw = Walker::new(donor, &[key]).run();
-    assert!(!tw.cap_swapped && !dw.cap_swapped, "subtree inside an aux array");
+    assert!(
+        !tw.cap_swapped && !dw.cap_swapped,
+        "subtree inside an aux array"
+    );
     let (ts, te, tt) = tw.cap.expect("key not found in target");
     let (ds, de, dt) = dw.cap.expect("key not found in donor");
     assert_eq!(tt, dt, "subtree root types differ");
@@ -445,7 +461,12 @@ fn transplant(target: &Doc, donor: &Doc, key: &str) -> Doc {
         out.aux[k] = splice(&target.aux[k], ts.aux[k], te.aux[k], &da);
     }
     out.obj = splice(&target.obj, ts.obj, te.obj, &donor.obj[ds.obj..de.obj]);
-    out.types = splice(&target.types, ts.types, te.types, &donor.types[ds.types..de.types]);
+    out.types = splice(
+        &target.types,
+        ts.types,
+        te.types,
+        &donor.types[ds.types..de.types],
+    );
     out
 }
 
@@ -726,13 +747,21 @@ fn graft_block(target_raw: &[u8], donor_raw: &[u8], key: &str) -> Vec<u8> {
     adj16(&mut bytes, 44, d(|s| s.objects));
     adj16(&mut bytes, 46, d(|s| s.arrays.iter().sum()));
     adj32(&mut bytes, 104, d(|s| s.members));
-    adj32(&mut bytes, 112, d(|s| s.arrays[0] + s.arrays[1] + s.arrays[2]));
+    adj32(
+        &mut bytes,
+        112,
+        d(|s| s.arrays[0] + s.arrays[1] + s.arrays[2]),
+    );
     adj32(&mut bytes, 116, d(|s| s.elems[1] + s.elems[2]));
     let donor_stats = Walker::new(&donor, &[]).run().stats;
     let donor_u = morphic::kv3::rewrap_uncompressed(donor_raw).unwrap();
     let target_u = morphic::kv3::rewrap_uncompressed(target_raw).unwrap();
     if fit(&donor_stats) == header_fields(&donor_u) && fit(&before) == header_fields(&target_u) {
-        assert_eq!(fit(&after), header_fields(&bytes), "header fit fails on output");
+        assert_eq!(
+            fit(&after),
+            header_fields(&bytes),
+            "header fit fails on output"
+        );
     } else {
         println!(
             "  note: header fit not exact on this block kind (donor {} vs {}, target {} vs {}); tallies shifted by delta",
@@ -745,6 +774,10 @@ fn graft_block(target_raw: &[u8], donor_raw: &[u8], key: &str) -> Vec<u8> {
     // The transplanted subtree must decode exactly like the donor's.
     let dv = morphic::kv3::decode(donor_raw).unwrap();
     let nv = morphic::kv3::decode(&bytes).unwrap();
-    assert_eq!(dv.get(key), nv.get(key), "transplanted subtree decodes differently");
+    assert_eq!(
+        dv.get(key),
+        nv.get(key),
+        "transplanted subtree decodes differently"
+    );
     bytes
 }

@@ -228,9 +228,17 @@ fn build(
         for p in pieces.iter().filter(|_| no >= 6) {
             for (j, w) in p.vb.joints.iter().zip(&p.vb.weights) {
                 if let Some(k) = (0..4).find(|&k| {
-                    w[k] > 1e-4 && skel.bones[usize::from(j[k])].name.to_ascii_lowercase().contains("hair")
+                    w[k] > 1e-4
+                        && skel.bones[usize::from(j[k])]
+                            .name
+                            .to_ascii_lowercase()
+                            .contains("hair")
                 }) {
-                    bail!("{}: weighted to hair bone {}", p.material, skel.bones[usize::from(j[k])].name);
+                    bail!(
+                        "{}: weighted to hair bone {}",
+                        p.material,
+                        skel.bones[usize::from(j[k])].name
+                    );
                 }
             }
         }
@@ -288,7 +296,9 @@ fn patch_body_skin(bytes: &[u8], delta: &str) -> Result<Vec<u8>> {
     let raw = std::fs::read(delta).with_context(|| format!("read {delta}"))?;
     let rows: Vec<[f32; 10]> = raw
         .chunks_exact(40)
-        .map(|c| std::array::from_fn(|k| f32::from_le_bytes(c[k * 4..k * 4 + 4].try_into().unwrap())))
+        .map(|c| {
+            std::array::from_fn(|k| f32::from_le_bytes(c[k * 4..k * 4 + 4].try_into().unwrap()))
+        })
         .filter(|r: &[f32; 10]| r[9] == 2.0)
         .collect();
     let cell = |p: [f32; 3]| p.map(|x| (x / 0.05).floor() as i32);
@@ -298,7 +308,11 @@ fn patch_body_skin(bytes: &[u8], delta: &str) -> Result<Vec<u8>> {
     }
 
     let model = morphic::model::decode(bytes)?;
-    let body = model.meshes.iter().find(|m| m.name == "body").context("no body")?;
+    let body = model
+        .meshes
+        .iter()
+        .find(|m| m.name == "body")
+        .context("no body")?;
     let (prim_ix, prim) = body
         .primitives
         .iter()
@@ -314,7 +328,11 @@ fn patch_body_skin(bytes: &[u8], delta: &str) -> Result<Vec<u8>> {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    for &j in grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]).into_iter().flatten() {
+                    for &j in grid
+                        .get(&[c[0] + dx, c[1] + dy, c[2] + dz])
+                        .into_iter()
+                        .flatten()
+                    {
                         let r = &rows[j];
                         let d = (0..3).map(|k| (r[k] - p[k]).powi(2)).sum::<f32>();
                         if d < best.0 {
@@ -339,8 +357,12 @@ fn patch_body_skin(bytes: &[u8], delta: &str) -> Result<Vec<u8>> {
         bail!("skin match error {worst} in: wrong axis mapping?");
     }
     vb.tangents.clear();
-    println!("body skin: {moved}/{} verts reshaped (match error {worst:.1e} in)", vb.element_count);
-    let (out, _) = morphic::model::replace_draw_call_uncompressed(bytes, "body", prim_ix, &vb, &prim.indices)?;
+    println!(
+        "body skin: {moved}/{} verts reshaped (match error {worst:.1e} in)",
+        vb.element_count
+    );
+    let (out, _) =
+        morphic::model::replace_draw_call_uncompressed(bytes, "body", prim_ix, &vb, &prim.indices)?;
     Ok(out)
 }
 
@@ -443,8 +465,17 @@ fn read_pieces(glb: &str, prefix: &str, bone_ix: &HashMap<String, u16>) -> Resul
                 })
                 .collect();
             if name == "o02_skirt" {
-                let allowed: Vec<u16> = ["pelvis", "spine_0", "spine_1", "spine_2", "leg_upper_l", "leg_upper_r"]
-                    .iter().filter_map(|n| bone_ix.get(*n).copied()).collect();
+                let allowed: Vec<u16> = [
+                    "pelvis",
+                    "spine_0",
+                    "spine_1",
+                    "spine_2",
+                    "leg_upper_l",
+                    "leg_upper_r",
+                ]
+                .iter()
+                .filter_map(|n| bone_ix.get(*n).copied())
+                .collect();
                 for (j, w) in joints.iter().zip(&weights) {
                     for k in 0..4 {
                         if w[k] > 0.0001 && !allowed.contains(&j[k]) {
@@ -695,8 +726,13 @@ fn reseat_outline(bytes: &[u8], kept: &[[f32; 3]]) -> Result<Vec<u8>> {
     // individual hair-shell vertices to skin stretches adjoining triangles.
     let skeleton = morphic::model::decode_skeleton(bytes)?;
     let follows_hair = |i: usize| {
-        (0..4).any(|k| vb.weights[i][k] > 0.001
-            && skeleton.bones[vb.joints[i][k] as usize].name.to_ascii_lowercase().contains("hair"))
+        (0..4).any(|k| {
+            vb.weights[i][k] > 0.001
+                && skeleton.bones[vb.joints[i][k] as usize]
+                    .name
+                    .to_ascii_lowercase()
+                    .contains("hair")
+        })
     };
 
     let nearest_skin: Vec<(usize, f32)> = vb
@@ -715,7 +751,9 @@ fn reseat_outline(bytes: &[u8], kept: &[[f32; 3]]) -> Result<Vec<u8>> {
         .iter()
         .enumerate()
         .map(|(i, &p)| {
-            if follows_hair(i) { return false; }
+            if follows_hair(i) {
+                return false;
+            }
             let dk = keep.iter().map(|&k| d2(p, k)).fold(f32::MAX, f32::min);
             // kept pieces went through a GLB round trip (~2e-5 drift), so a
             // costume point must be clearly nearer than them to count

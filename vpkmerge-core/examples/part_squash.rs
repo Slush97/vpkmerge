@@ -11,11 +11,18 @@ fn main() -> anyhow::Result<()> {
     let targets = morphic::model::vertex_targets(&bytes)?;
     let selected: Vec<_> = targets.iter().filter(|t| t.mesh_name == a[3]).collect();
     anyhow::ensure!(!selected.is_empty(), "no mesh part {}", a[3]);
-    anyhow::ensure!(selected.iter().all(|t| t.editable), "part {} is not displacement-editable", a[3]);
+    anyhow::ensure!(
+        selected.iter().all(|t| t.editable),
+        "part {} is not displacement-editable",
+        a[3]
+    );
 
     let mut buffers = Vec::new();
     for t in &selected {
-        buffers.push((t.block_index, morphic::model::read_vertex_positions(&bytes, t.block_index)?));
+        buffers.push((
+            t.block_index,
+            morphic::model::read_vertex_positions(&bytes, t.block_index)?,
+        ));
     }
     let z_top = buffers
         .iter()

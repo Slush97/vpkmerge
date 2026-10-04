@@ -61,7 +61,9 @@ fn provenance(res: &Resource) -> J {
                 .map(|d| {
                     json!([
                         d.get("m_String").and_then(Value::as_str).unwrap_or(""),
-                        d.get("m_CompilerIdentifier").and_then(Value::as_str).unwrap_or(""),
+                        d.get("m_CompilerIdentifier")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
                         d.get("m_nUserData").and_then(Value::as_uint).unwrap_or(0),
                     ])
                 })
@@ -108,8 +110,14 @@ fn find(p: &mut [usize], x: usize) -> usize {
 fn pieces(fe: &Value) -> Vec<J> {
     let arr = |k: &str| fe.get(k).and_then(Value::as_array).unwrap_or(&[]);
     let n = fe.get("m_nNodeCount").and_then(Value::as_uint).unwrap_or(0) as usize;
-    let n_static = fe.get("m_nStaticNodes").and_then(Value::as_uint).unwrap_or(0) as usize;
-    let names: Vec<&str> = arr("m_CtrlName").iter().map(|v| v.as_str().unwrap_or("")).collect();
+    let n_static = fe
+        .get("m_nStaticNodes")
+        .and_then(Value::as_uint)
+        .unwrap_or(0) as usize;
+    let names: Vec<&str> = arr("m_CtrlName")
+        .iter()
+        .map(|v| v.as_str().unwrap_or(""))
+        .collect();
     let integ = arr("m_NodeIntegrator");
     let inv = arr("m_NodeInvMasses");
     let radii = arr("m_NodeCollisionRadii");
@@ -117,7 +125,10 @@ fn pieces(fe: &Value) -> Vec<J> {
     let mut parent: Vec<usize> = (0..n).collect();
     let rod_nodes = |r: &Value| -> Option<(usize, usize)> {
         let nn = r.get("nNode")?.as_array()?;
-        Some((nn.first()?.as_uint()? as usize, nn.get(1)?.as_uint()? as usize))
+        Some((
+            nn.first()?.as_uint()? as usize,
+            nn.get(1)?.as_uint()? as usize,
+        ))
     };
     for r in rods {
         if let Some((a, b)) = rod_nodes(r) {
@@ -127,7 +138,8 @@ fn pieces(fe: &Value) -> Vec<J> {
             }
         }
     }
-    let mut groups: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
     for i in n_static..n {
         let r = find(&mut parent, i);
         groups.entry(r).or_default().push(i);
@@ -157,7 +169,15 @@ fn pieces(fe: &Value) -> Vec<J> {
             relax.push(f(r, "flRelaxationFactor"));
             w0.push(f(r, "flWeight0"));
         }
-        let pick = |k: &str| median(members.iter().filter_map(|&i| integ.get(i)).map(|v| f(v, k)).collect());
+        let pick = |k: &str| {
+            median(
+                members
+                    .iter()
+                    .filter_map(|&i| integ.get(i))
+                    .map(|v| f(v, k))
+                    .collect(),
+            )
+        };
         let first = names.get(members[0]).copied().unwrap_or("");
         out.push(json!({
             "first": first,
@@ -195,10 +215,16 @@ fn main() -> anyhow::Result<()> {
             .cloned()
             .collect();
         for entry in paths {
-            let Ok(mut f) = vpk.get_file(&entry) else { continue };
+            let Ok(mut f) = vpk.get_file(&entry) else {
+                continue;
+            };
             let Ok(bytes) = f.read_all() else { continue };
-            let Ok(res) = Resource::parse(&bytes) else { continue };
-            let Some(phys) = res.find_block(*b"PHYS") else { continue };
+            let Ok(res) = Resource::parse(&bytes) else {
+                continue;
+            };
+            let Some(phys) = res.find_block(*b"PHYS") else {
+                continue;
+            };
             let Ok(root) = morphic::kv3::decode(phys) else {
                 eprintln!("PHYS undecodable: {vpk_path} {entry}");
                 continue;

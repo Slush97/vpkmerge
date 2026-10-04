@@ -121,6 +121,12 @@ enum Command {
     /// Scan pinned hero recipes for rainbow / animated-rainbow VFX support.
     RainbowScan(RainbowScanCmd),
 
+    /// Detect mods that ship a stale `.vdata_c` (`scripts/heroes.vdata_c`,
+    /// `abilities.vdata_c`, ...). A shipped copy overrides the whole file in
+    /// game, so fields Valve added since the mod was built are deleted. Compares
+    /// each mod's copies against the game's pak and reports missing fields.
+    VdataCheck(VdataCheckCmd),
+
     /// Style hero material shader parameters (`.vmat_c`): gemstone sheen, glass,
     /// solid-ink NPR outlines, unlit, or full-PBR flips, via presets or raw
     /// `--set-*` edits packed into an addon VPK. `--list` surveys the targeted
@@ -1182,6 +1188,26 @@ struct RainbowScanCmd {
 }
 
 #[derive(Args)]
+struct VdataCheckCmd {
+    /// The game's `citadel/pak01_dir.vpk`.
+    #[arg(long, value_name = "VPK")]
+    base: PathBuf,
+
+    /// Mod VPKs to check (`*_dir.vpk`).
+    #[arg(required = true)]
+    mods: Vec<PathBuf>,
+
+    /// Cap the number of missing/extra paths printed per entry (0 = no cap).
+    /// Text mode only.
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    limit: usize,
+
+    /// Emit a machine-readable JSON array (untruncated) instead of text.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 struct VmatCmd {
     /// VPK to read materials from (a skin VPK, or the base pak itself).
     #[arg(long, value_name = "VPK")]
@@ -1836,6 +1862,7 @@ fn main() -> Result<()> {
         Some(Command::TrippyVfx(args)) => run_trippy_vfx(&args),
         Some(Command::TrippyPreview(args)) => run_trippy_preview(&args),
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
+        Some(Command::VdataCheck(args)) => run_vdata_check(&args),
         Some(Command::Vmat(args)) => run_vmat(&args),
         Some(Command::Icon(args)) => run_icon(&args),
         Some(Command::Soundswap(args)) => run_soundswap(&args),
@@ -4909,6 +4936,105 @@ fn run_vmat(args: &VmatCmd) -> Result<()> {
         report.materials_patched
     );
     Ok(())
+}
+
+fn run_vdata_check(args: &VdataCheckCmd) -> Result<()> {
+    use vpkmerge_core::{check_vdata, VdataStatus};
+
+    let mut json_out = Vec::new();
+    let mut failed = 0usize;
+    let mut outdated_mods = 0usize;
+    for path in &args.mods {
+        let name = path.display().to_string();
+        if !args.json {
+            println!("{name}");
+        }
+        let reports = match check_vdata(path, &args.base) {
+            Ok(r) => r,
+            Err(e) => {
+                failed += 1;
+                if args.json {
+                    json_out.push(serde_json::json!({ "mod": name, "error": format!("{e:#}") }));
+                } else {
+                    println!("  error: {e:#}");
+                }
+                continue;
+            }
+        };
+        if reports.iter().any(|r| r.status == VdataStatus::Outdated) {
+            outdated_mods += 1;
+        }
+        if args.json {
+            json_out.push(serde_json::json!({ "mod": name, "reports": reports }));
+            continue;
+        }
+        if reports.is_empty() {
+            println!("  no .vdata_c entries");
+        }
+        for r in &reports {
+            match r.status {
+                VdataStatus::Outdated => {
+                    println!(
+                        "  {}  outdated: {} missing, {} extra, {} changed",
+                        r.entry,
+                        r.missing.len(),
+                        r.extra.len(),
+                        r.changed.len()
+                    );
+                    print_vdata_paths("missing", &r.missing, args.limit);
+                    print_vdata_paths("extra", &r.extra, args.limit);
+                }
+                VdataStatus::Modified => println!(
+                    "  {}  modified: {} changed (the mod's edits, or values Valve changed since)",
+                    r.entry,
+                    r.changed.len()
+                ),
+                VdataStatus::Current => {
+                    println!("  {}  current: identical to the game's copy", r.entry);
+                }
+                VdataStatus::NotInGame => println!(
+                    "  {}  not in game: compiler leftover or custom file, nothing to compare",
+                    r.entry
+                ),
+                VdataStatus::Undecodable => println!(
+                    "  {}  undecodable: {}",
+                    r.entry,
+                    r.error.as_deref().unwrap_or("unknown error")
+                ),
+            }
+        }
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_out).context("serializing JSON")?
+        );
+    }
+    eprintln!(
+        "{outdated_mods} of {} mods ship outdated vdata",
+        args.mods.len()
+    );
+    if failed > 0 {
+        anyhow::bail!("{failed} mod(s) failed to open");
+    }
+    Ok(())
+}
+
+fn print_vdata_paths(label: &str, paths: &[String], limit: usize) {
+    let shown = if limit == 0 {
+        paths.len()
+    } else {
+        limit.min(paths.len())
+    };
+    for p in &paths[..shown] {
+        println!("    {label:<8} {p}");
+    }
+    if shown < paths.len() {
+        println!(
+            "    +{} more {label} (raise or drop --limit to see the rest)",
+            paths.len() - shown
+        );
+    }
 }
 
 fn run_rainbow_scan(args: &RainbowScanCmd) -> Result<()> {

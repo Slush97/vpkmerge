@@ -42,7 +42,7 @@ pub use femodel::{
     FeCtrlOffset, FeCtrlSoftOffset, FeFitMatrix, FeFitWeight, FeLockToParent, FeModel, FeNode,
     FeNodeBase, FeReverseOffset, FeRod, FeSphere, FeStrayRadius,
 };
-pub use glb::{to_glb, to_glb_textured, FileResolver};
+pub use glb::{to_glb, to_glb_textured, FileResolver, GlbOptions};
 pub use gltf_import::{
     apply_animation, import_glb_onto_nm_clip, import_glb_onto_nm_clip_full, read_glb_animation,
     resample_clip, GltfAnimation, GltfBoneTrack,

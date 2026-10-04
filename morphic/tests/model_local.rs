@@ -159,7 +159,9 @@ fn export_glb_from_env() {
     }
     let resolver = VpkResolver { vpks };
 
-    let glb = morphic::model::to_glb_textured(&model, &resolver).expect("write glb");
+    let glb =
+        morphic::model::to_glb_textured(&model, &resolver, morphic::model::GlbOptions::default())
+            .expect("write glb");
     std::fs::write(&out, &glb).expect("write glb file");
     eprintln!(
         "exported {entry} -> {out} ({} bytes): {} bones, {} meshes, {} unique verts, {} materials",
@@ -194,7 +196,9 @@ fn glow_overlay_survives_export_local() {
     let model = morphic::model::decode(&bytes).expect("decode model");
 
     let resolver = VpkResolver { vpks: vec![vpk] };
-    let glb = morphic::model::to_glb_textured(&model, &resolver).expect("write glb");
+    let glb =
+        morphic::model::to_glb_textured(&model, &resolver, morphic::model::GlbOptions::default())
+            .expect("write glb");
 
     let gltf = gltf::Gltf::from_slice(&glb).expect("re-read glb");
     let mesh_names: Vec<String> = gltf

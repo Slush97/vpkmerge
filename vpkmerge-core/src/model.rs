@@ -8,8 +8,8 @@ use morphic::kv3::Value;
 use std::path::Path;
 
 pub use morphic::model::{
-    BlockSummary, DrawCallInfo, ModelInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup,
-    ReplacedMeshPart, SegmentBy, VertexTarget,
+    BlockSummary, DrawCallInfo, GlbOptions, ModelInfo, PrimitiveSelection, RemovedDrawCall,
+    ReplacedMeshGroup, ReplacedMeshPart, SegmentBy, VertexTarget,
 };
 
 /// Default candidate clips for a bare `--pose`, in priority order. Menu-pose
@@ -105,13 +105,14 @@ pub fn export_model(
     entry: &str,
     base: Option<&Path>,
     anim: &AnimOptions,
+    glb_opts: GlbOptions,
     out: impl AsRef<Path>,
 ) -> Result<()> {
     let vpks = open_vpks(vpk.as_ref(), base)?;
     if read_entry(&vpks, entry).is_none() {
         anyhow::bail!("model entry {entry} not found in the given VPK(s)");
     }
-    export_resolved(vpks, entry, anim, out.as_ref())
+    export_resolved(vpks, entry, anim, glb_opts, out.as_ref())
 }
 
 /// Like [`export_model`] but discovers the hero's body model by codename instead
@@ -125,13 +126,14 @@ pub fn export_hero_model(
     codename: &str,
     base: Option<&Path>,
     anim: &AnimOptions,
+    glb_opts: GlbOptions,
     out: impl AsRef<Path>,
 ) -> Result<()> {
     let vpks = open_vpks(vpk.as_ref(), base)?;
     let entry = discover_hero_entry(&vpks, codename).with_context(|| {
         format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
     })?;
-    export_resolved(vpks, &entry, anim, out.as_ref())
+    export_resolved(vpks, &entry, anim, glb_opts, out.as_ref())
 }
 
 /// Opens the VPKs in resolution priority order: `vpk` first (a skin's overrides
@@ -151,6 +153,7 @@ fn export_resolved(
     vpks: Vec<valve_pak::VPK>,
     entry: &str,
     anim: &AnimOptions,
+    glb_opts: GlbOptions,
     out: &Path,
 ) -> Result<()> {
     let bytes =
@@ -232,7 +235,7 @@ fn export_resolved(
     }
 
     let resolver = VpkResolver { vpks };
-    let glb = morphic::model::to_glb_textured(&model, &resolver)
+    let glb = morphic::model::to_glb_textured(&model, &resolver, glb_opts)
         .with_context(|| format!("writing glb for {entry}"))?;
 
     if let Some(parent) = out.parent() {
@@ -406,7 +409,7 @@ pub fn export_hero_preview(
     model.animations = pose.into_iter().collect();
 
     let resolver = VpkResolver { vpks };
-    let glb = morphic::model::to_glb_textured(&model, &resolver)
+    let glb = morphic::model::to_glb_textured(&model, &resolver, GlbOptions::default())
         .with_context(|| format!("writing glb for {entry}"))?;
     write_file(out.as_ref(), &glb)?;
     Ok(pose_name)
@@ -1082,7 +1085,7 @@ pub fn export_model_group_glb(
     }
 
     let resolver = VpkResolver { vpks };
-    let glb = morphic::model::to_glb_textured(&model, &resolver)
+    let glb = morphic::model::to_glb_textured(&model, &resolver, GlbOptions::default())
         .with_context(|| format!("writing group glb for {entry}"))?;
     let out = out_glb.as_ref();
     if let Some(parent) = out.parent() {

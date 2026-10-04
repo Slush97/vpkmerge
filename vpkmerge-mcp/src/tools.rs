@@ -2106,7 +2106,14 @@ impl Engine {
                 pose: Some(vpkmerge_core::PoseSelection::default()),
                 ..vpkmerge_core::AnimOptions::default()
             };
-            vpkmerge_core::export_hero_model(&first, codename, base.as_deref(), &anim, &out)?;
+            vpkmerge_core::export_hero_model(
+                &first,
+                codename,
+                base.as_deref(),
+                &anim,
+                vpkmerge_core::GlbOptions::default(),
+                &out,
+            )?;
         }
         prune_glbs(&dir, KEPT_PREVIEWS);
 

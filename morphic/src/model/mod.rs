@@ -61,7 +61,7 @@ pub use pose::{
 };
 pub use skeleton::{invert_remap, localize_joints, remap_table, Bone, Skeleton};
 pub use topology::{
-    append_skinned_draw_call, draw_call_targets, reencode_all_mdat_identity,
+    append_skinned_draw_call, collapse_lods_to_mesh, draw_call_targets, reencode_all_mdat_identity,
     remove_draw_calls_by_material, replace_mesh_group, replace_mesh_group_uncompressed,
     replace_mesh_part, replace_mesh_part_uncompressed, set_draw_call_groups, set_model_material,
     DrawCallGroup, DrawCallInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup,

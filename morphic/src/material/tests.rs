@@ -159,7 +159,7 @@ fn decodes_dynamic_params_with_failure_capture() {
     let bad = &mat.dynamic_params["g_flBroken"];
     assert!(!bad.decompiled, "failure is reported, not guessed");
     assert!(bad.error.is_some());
-    assert!(bad.source.is_empty());
+    assert_eq!(bad.source, "");
     assert_eq!(bad.byte_len, 0);
     assert!(!bad.hash.is_empty(), "blob hash present even on failure");
 }

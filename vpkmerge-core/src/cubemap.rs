@@ -108,11 +108,15 @@ pub fn export_cubemap_hdr(
 fn linear_rgb_pixels(image: &Image) -> Vec<[f32; 3]> {
     match &image.data {
         ImageData::Rgba16F(px) => px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| [p[0].to_f32(), p[1].to_f32(), p[2].to_f32()])
             .collect(),
         ImageData::Rgba8(px) => px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 [
                     srgb_to_linear(p[0]),
@@ -296,7 +300,7 @@ mod tests {
 
     #[test]
     fn srgb_endpoints_map_to_linear_endpoints() {
-        assert!(srgb_to_linear(0) == 0.0);
+        assert!(srgb_to_linear(0).abs() < 1e-6);
         assert!((srgb_to_linear(255) - 1.0).abs() < 1e-6);
         // Mid-gray sRGB 128 is roughly linear 0.2158.
         assert!((srgb_to_linear(128) - 0.2158).abs() < 1e-3);

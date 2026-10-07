@@ -1429,7 +1429,7 @@ mod tests {
         for name in ["gem", "glass", "pbr", "unlit", "ink"] {
             let p = VmatPreset::from_name(name).unwrap();
             assert_eq!(p.as_str(), name);
-            assert!(!p.edits(None).is_empty());
+            assert!(!p.edits(None).is_empty(), "preset {name} has no edits");
         }
         assert!(VmatPreset::from_name("nope").is_err());
     }

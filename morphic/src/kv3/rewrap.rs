@@ -315,7 +315,9 @@ pub(crate) fn replace_blob_v5(
 
     // Per-blob uncompressed lengths from the tail's length table.
     let lengths: Vec<usize> = raw2[types_end..types_end + len_table_bytes]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| usize::try_from(i32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0))
         .collect();
 
@@ -454,7 +456,7 @@ fn decompress_chained_frames(
     let mut out = vec![0u8; size_blobs];
     let mut done = 0usize;
     let mut fp = 0usize;
-    for fs in table.chunks_exact(2) {
+    for fs in table.as_chunks::<2>().0 {
         if done >= size_blobs {
             break;
         }

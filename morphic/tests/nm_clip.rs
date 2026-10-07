@@ -524,6 +524,6 @@ fn ui_hero_select_is_fully_static() {
     );
     // Re-encode of a static clip is an empty stream with one zero offset per frame.
     let (data2, offsets2) = encode_compressed_pose(&clip);
-    assert!(data2.is_empty());
+    assert_eq!(data2, [] as [u8; 0]);
     assert_eq!(offsets2, vec![0u32; clip.frame_count as usize]);
 }

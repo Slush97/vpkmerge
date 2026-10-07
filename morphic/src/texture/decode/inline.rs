@@ -20,7 +20,7 @@ pub fn decode_inline(_info: &TextureInfo, pixels: &[u8]) -> Result<Image, Decode
     // pixels Skia zeroes RGB; we match that so the diff against the oracle
     // PNG is byte-exact. Partial-alpha pixels are unaffected: Skia's
     // round-trip preserves them.
-    for px in raw.chunks_exact_mut(4) {
+    for px in raw.as_chunks_mut::<4>().0 {
         if px[3] == 0 {
             px[0] = 0;
             px[1] = 0;

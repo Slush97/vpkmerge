@@ -298,7 +298,9 @@ fn pretty_label(event: &str, hero: Option<&str>) -> String {
 /// Decode a UTF-16LE byte slice, dropping the trailing NUL terminator(s).
 fn decode_utf16le(raw: &[u8]) -> String {
     let units: Vec<u16> = raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .take_while(|&u| u != 0)
         .collect();

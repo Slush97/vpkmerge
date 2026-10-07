@@ -390,7 +390,7 @@ mod tests {
         let modded = obj(&[("v", strs(&["a", "a"]))]);
         let r = run(&base, &modded);
         assert_eq!(r.extra, ["v[=a]"]);
-        assert!(r.missing.is_empty());
+        assert!(r.missing.is_empty(), "{:?}", r.missing);
         assert_eq!(r.status, VdataStatus::Outdated);
     }
 

@@ -888,9 +888,9 @@ mod tests {
         assert_eq!(m.extra_goal_iterations, 12);
         assert!(m.fit_matrices.is_empty());
         assert!(m.fit_weights.is_empty());
-        assert!(m.free_nodes.is_empty());
+        assert_eq!(m.free_nodes, [] as [usize; 0]);
         assert!(m.lock_to_parent.is_empty());
-        assert!(m.lock_to_goal.is_empty());
+        assert_eq!(m.lock_to_goal, [] as [usize; 0]);
         assert_eq!(m.first_position_driven_node, None);
 
         assert!(m.nodes[0].is_pinned());

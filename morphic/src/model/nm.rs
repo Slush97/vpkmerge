@@ -1370,7 +1370,7 @@ mod tests {
             compressed_pose_offsets: Vec::new(),
         };
         let (data2, offsets2) = encode_compressed_pose(&clip);
-        assert!(data2.is_empty());
+        assert_eq!(data2, [] as [u8; 0]);
         assert_eq!(offsets2, vec![0u32; 10]);
     }
 }

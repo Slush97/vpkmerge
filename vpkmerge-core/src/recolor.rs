@@ -219,7 +219,7 @@ pub fn recolor_model_vertex_colors(
 fn shift_hue_in_place(image: &mut Image, recolor: Recolor) -> Result<()> {
     match &mut image.data {
         ImageData::Rgba8(buf) => {
-            for px in buf.chunks_exact_mut(4) {
+            for px in buf.as_chunks_mut::<4>().0 {
                 let [r, g, b] = set_color(
                     [px[0], px[1], px[2]],
                     recolor.hue,
@@ -452,8 +452,10 @@ mod tests {
         // separation gives the best-defined hue, so the check is robust to u8
         // quantization without depending on the fixture's pixel population.
         let best = orig
-            .chunks_exact(4)
-            .zip(new.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(new.as_chunks::<4>().0)
             .filter(|(o, _)| o[3] >= 16)
             .max_by_key(|(o, _)| o[0].max(o[1]).max(o[2]) - o[0].min(o[1]).min(o[2]))
             .expect("fixture has opaque pixels");

@@ -26,7 +26,7 @@ pub fn decode_bgra(info: &TextureInfo, pixels: &[u8]) -> Result<Image, DecodeErr
         });
     }
     let mut buf = pixels[..needed].to_vec();
-    for px in buf.chunks_exact_mut(4) {
+    for px in buf.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
     Ok(image_from(info, buf))

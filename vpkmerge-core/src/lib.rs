@@ -1376,7 +1376,7 @@ mod tests {
             "empty bucket should still produce a VPK file"
         );
         let paths: Vec<String> = valve_pak::open(&empty)?.file_paths().cloned().collect();
-        assert!(paths.is_empty());
+        assert!(paths.is_empty(), "{paths:?}");
         Ok(())
     }
 
@@ -1395,7 +1395,8 @@ mod tests {
         let report = split(&input, &outputs, &SplitOptions::default())?;
         assert_eq!(report.outputs[0].entries, 2);
         assert_eq!(report.outputs[1].entries, 0);
-        assert!(entry_set(&later)?.is_empty());
+        let later_entries = entry_set(&later)?;
+        assert!(later_entries.is_empty(), "{later_entries:?}");
         Ok(())
     }
 
@@ -1803,7 +1804,11 @@ mod tests {
         let drop = vec!["grimoire_meta.json".to_string()];
         let report = embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
         assert_eq!(report.dropped_paths, vec!["grimoire_meta.json".to_string()]);
-        assert!(report.unmatched_drops.is_empty());
+        assert!(
+            report.unmatched_drops.is_empty(),
+            "{:?}",
+            report.unmatched_drops
+        );
         assert_eq!(report.total_entries, 3);
 
         // The dropped entry is gone; every other original entry survives
@@ -1836,7 +1841,11 @@ mod tests {
         let report = embed_metadata(&input, Some(&metadata), &[], &drop, &output)?;
         // The report says what actually happened: nothing was dropped, the
         // request is surfaced as unmatched.
-        assert!(report.dropped_paths.is_empty());
+        assert!(
+            report.dropped_paths.is_empty(),
+            "{:?}",
+            report.dropped_paths
+        );
         assert_eq!(
             report.unmatched_drops,
             vec!["does/not/exist.txt".to_string()]
@@ -1874,7 +1883,11 @@ mod tests {
             report.embedded_paths,
             vec!["grimoire_meta.json".to_string()]
         );
-        assert!(report.replaced_paths.is_empty());
+        assert!(
+            report.replaced_paths.is_empty(),
+            "{:?}",
+            report.replaced_paths
+        );
 
         assert_eq!(
             entry_set(&output)?,
@@ -2025,7 +2038,11 @@ mod tests {
         let report = merge(&[&a, &b], &out, &opts)?;
         assert_eq!(report.total_entries, 3);
         assert_eq!(report.overridden_paths, 0);
-        assert!(report.extra_replaced_paths.is_empty());
+        assert!(
+            report.extra_replaced_paths.is_empty(),
+            "{:?}",
+            report.extra_replaced_paths
+        );
         assert!(entry_set(&out)?.contains(&"root.txt".to_string()));
         Ok(())
     }
@@ -2050,7 +2067,11 @@ mod tests {
 
         assert_eq!(entry_set(&output)?, vec!["materials/foo.txt".to_string()]);
         assert_eq!(report.dropped_paths, vec!["grimoire_meta.json".to_string()]);
-        assert!(report.unmatched_drops.is_empty());
+        assert!(
+            report.unmatched_drops.is_empty(),
+            "{:?}",
+            report.unmatched_drops
+        );
         assert_eq!(report.total_entries, 1);
         Ok(())
     }
@@ -2074,8 +2095,16 @@ mod tests {
         assert!(report.wrote_addon_info);
         assert_eq!(report.embedded_paths, vec!["data/cfg.txt".to_string()]);
         assert_eq!(report.replaced_paths, vec!["data/cfg.txt".to_string()]);
-        assert!(report.dropped_paths.is_empty());
-        assert!(report.unmatched_drops.is_empty());
+        assert!(
+            report.dropped_paths.is_empty(),
+            "{:?}",
+            report.dropped_paths
+        );
+        assert!(
+            report.unmatched_drops.is_empty(),
+            "{:?}",
+            report.unmatched_drops
+        );
         Ok(())
     }
 

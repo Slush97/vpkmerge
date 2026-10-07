@@ -268,7 +268,7 @@ mod tests {
             ImageData::Rgba8(_) => panic!("expected Rgba16F, got Rgba8"),
         };
         assert_eq!(pixels.len(), 8 * 8 * 4);
-        for px in pixels.chunks_exact(4) {
+        for px in pixels.as_chunks::<4>().0 {
             assert_eq!(px[3], half::f16::ONE, "alpha must be 1.0");
             for c in &px[..3] {
                 assert!(c.is_finite(), "channel must be finite, got {c}");

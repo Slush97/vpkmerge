@@ -265,7 +265,7 @@ pub(crate) fn apply_ycocg(image: &mut Image) {
     let ImageData::Rgba8(px) = &mut image.data else {
         return;
     };
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         let scale = (i32::from(p[2]) >> 3) + 1;
         let co = (i32::from(p[0]) - 128) / scale;
         let cg = (i32::from(p[1]) - 128) / scale;

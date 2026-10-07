@@ -207,7 +207,7 @@ pub fn import_hero_hat(
     }
     let span_xy = (max[0] - min[0]).max(max[1] - min[1]).max(1e-4);
     let scale = opts.width / span_xy;
-    let center = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
+    let center = [f32::midpoint(min[0], max[0]), f32::midpoint(min[1], max[1])];
     for p in &mut merged.positions {
         p[0] = (p[0] - center[0]) * scale + anchor[0];
         p[1] = (p[1] - center[1]) * scale + anchor[1];

@@ -38,7 +38,9 @@
 use anyhow::{anyhow, Context, Result};
 use gltf::mesh::Mode;
 use morphic::kv3::{Seg, Value as Kv3};
-use morphic::model::{replace_mesh_part_uncompressed, set_model_material, VertexBuffer};
+use morphic::model::{
+    collapse_lods_to_mesh, replace_mesh_part_uncompressed, set_model_material, VertexBuffer,
+};
 use morphic::{replace_mip_chain, Image, ImageData};
 use serde_json::Value as Json;
 use std::collections::HashMap;
@@ -495,8 +497,10 @@ pub fn import_clone(
             .map_err(|e| anyhow!("replacing mesh: {e}"))?;
     let mat_dir = &target.mat_dir;
     let vmat_path = format!("{mat_dir}/{name}.vmat");
-    let edited_model = set_model_material(&mesh_swapped, &vmat_path)
+    let repointed = set_model_material(&mesh_swapped, &vmat_path)
         .map_err(|e| anyhow!("repoint material: {e}"))?;
+    let edited_model = collapse_lods_to_mesh(&repointed, &target.mesh_name)
+        .map_err(|e| anyhow!("collapse LODs: {e}"))?;
 
     // --- 6. atlas albedo: each group's cell = its image (resized) or flat colour ---
     let donor = read(donor_entry)?;

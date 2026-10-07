@@ -95,7 +95,7 @@ pub fn encode_bc4(image: &Image) -> Result<Vec<u8>, EncodeError> {
     // BC4 takes one channel. Extract red.
     let pixel_count = (pw as usize) * (ph as usize);
     let mut r = Vec::with_capacity(pixel_count);
-    for px in data.chunks_exact(4) {
+    for px in data.as_chunks::<4>().0 {
         r.push(px[0]);
     }
     let surface = RSurface {
@@ -116,7 +116,7 @@ pub fn encode_bc5(image: &Image) -> Result<Vec<u8>, EncodeError> {
     // BC5 takes two channels. Extract red + green into interleaved RG.
     let pixel_count = (pw as usize) * (ph as usize);
     let mut rg = Vec::with_capacity(pixel_count * 2);
-    for px in data.chunks_exact(4) {
+    for px in data.as_chunks::<4>().0 {
         rg.push(px[0]);
         rg.push(px[1]);
     }

@@ -18,7 +18,7 @@ pub fn encode_bgra(image: &Image) -> Result<Vec<u8>, EncodeError> {
     let buf = require_rgba8(image, TextureFormat::Bgra8888)?;
     check_len(buf, image, TextureFormat::Bgra8888)?;
     let mut out = buf.to_vec();
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
     Ok(out)

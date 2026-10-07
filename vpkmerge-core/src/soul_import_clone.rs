@@ -1485,8 +1485,8 @@ mod tests {
             roughness: 0.5,
         };
         paint_normal_cell(&mut px, atlas, AtlasCell::new(0, 0, 8, 8), None, ns);
-        for p in px.chunks_exact(4) {
-            assert_eq!(p, [128, 128, 128, 255]); // 0.5 roughness -> B = 128
+        for p in px.as_chunks::<4>().0 {
+            assert_eq!(*p, [128, 128, 128, 255]); // 0.5 roughness -> B = 128
         }
     }
 
@@ -1508,7 +1508,7 @@ mod tests {
         paint_normal_cell(&mut px, atlas, AtlasCell::new(0, 0, 16, 16), Some(&img), ns);
         let rough = (0.25 * 255.0_f32).round() as u8;
         let mut saw_relief = false;
-        for p in px.chunks_exact(4) {
+        for p in px.as_chunks::<4>().0 {
             assert_eq!(p[2], rough, "roughness must be pinned in B");
             assert_eq!(p[3], 255);
             if p[0] != 128 || p[1] != 128 {

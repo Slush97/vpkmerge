@@ -805,7 +805,7 @@ impl Builder {
         if let Some(p) = pbr.base_color {
             if let Some((w, h, mut rgba)) = decode_slot(files, p) {
                 if opaque {
-                    for px in rgba.chunks_exact_mut(4) {
+                    for px in rgba.as_chunks_mut::<4>().0 {
                         px[3] = 255;
                     }
                 }
@@ -1436,7 +1436,7 @@ fn png_encode(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[allow(clippy::cast_sign_loss)]
 fn normal_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let nx = (f32::from(px[0]) / 255.0) * 2.0 - 1.0;
         let ny = (f32::from(px[1]) / 255.0) * 2.0 - 1.0;
         let nz = (1.0 - (nx * nx + ny * ny)).max(0.0).sqrt();
@@ -1463,7 +1463,7 @@ pub(super) fn is_pure_normal_map(rgba: &[u8]) -> bool {
     let mut checked: u32 = 0;
     let mut matched: u32 = 0;
     // Every 4th texel keeps the scan cheap on full-size masks without losing signal.
-    for px in rgba.chunks_exact(4).step_by(4) {
+    for px in rgba.as_chunks::<4>().0.iter().step_by(4) {
         let nx = (f32::from(px[0]) / 255.0) * 2.0 - 1.0;
         let ny = (f32::from(px[1]) / 255.0) * 2.0 - 1.0;
         let blue_z = (f32::from(px[2]) / 255.0) * 2.0 - 1.0;
@@ -1482,7 +1482,7 @@ pub(super) fn is_pure_normal_map(rgba: &[u8]) -> bool {
 /// instead of reconstructing it from R,G, preserving detail and non-unit normals.
 fn normal_passthrough_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         out.extend_from_slice(&[px[0], px[1], px[2], 255]);
     }
     png_encode(w, h, &out).unwrap_or_default()
@@ -1495,7 +1495,7 @@ fn normal_passthrough_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
 /// needs wiring. Emitted at the mask's own resolution.
 pub(super) fn metal_only_png(mw: u32, mh: u32, mask: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(mask.len());
-    for px in mask.chunks_exact(4) {
+    for px in mask.as_chunks::<4>().0 {
         out.extend_from_slice(&[0, 255, px[0], 255]);
     }
     png_encode(mw, mh, &out).unwrap_or_default()
@@ -1514,7 +1514,7 @@ pub(super) fn metal_rough_png(
     metalness: Option<&(u32, u32, Vec<u8>)>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
-    for (i, px) in rgba.chunks_exact(4).enumerate() {
+    for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
         let metal = metalness.map_or(0, |&(mw, mh, ref m)| {
             let x = i as u64 % u64::from(w);
             let y = i as u64 / u64::from(w);
@@ -1540,7 +1540,7 @@ pub(super) fn rough_metal_png(
     metalness: Option<&(u32, u32, Vec<u8>)>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(rough.len());
-    for (i, px) in rough.chunks_exact(4).enumerate() {
+    for (i, px) in rough.as_chunks::<4>().0.iter().enumerate() {
         let metal = metalness.map_or(0, |&(mw, mh, ref m)| {
             let x = i as u64 % u64::from(rw);
             let y = i as u64 / u64::from(rw);
@@ -1559,7 +1559,7 @@ pub(super) fn rough_metal_png(
 /// glTF reader ignores them for this slot).
 fn sheen_roughness_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         out.extend_from_slice(&[255, 255, 255, px[3]]);
     }
     png_encode(w, h, &out).unwrap_or_default()

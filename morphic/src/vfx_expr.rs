@@ -42,16 +42,15 @@ fn err<T>(msg: impl Into<String>) -> Result<T, ExprError> {
 pub fn murmur2(data: &[u8], seed: u32) -> u32 {
     const M: u32 = 0x5bd1_e995;
     let mut h = seed ^ u32::try_from(data.len()).unwrap_or(u32::MAX);
-    let mut chunks = data.chunks_exact(4);
-    for c in &mut chunks {
-        let mut k = u32::from_le_bytes(c.try_into().unwrap());
+    let (chunks, rem) = data.as_chunks::<4>();
+    for c in chunks {
+        let mut k = u32::from_le_bytes(*c);
         k = k.wrapping_mul(M);
         k ^= k >> 24;
         k = k.wrapping_mul(M);
         h = h.wrapping_mul(M);
         h ^= k;
     }
-    let rem = chunks.remainder();
     if rem.len() >= 3 {
         h ^= u32::from(rem[2]) << 16;
     }
@@ -820,7 +819,7 @@ fn unpack_swizzle(packed: u8) -> String {
         (packed >> 4) & 3,
         (packed >> 6) & 3,
     ];
-    let names = [b'x', b'y', b'z', b'w'];
+    let names = *b"xyzw";
     let mut len = 4;
     while len > 1 && lanes[len - 1] == lanes[len - 2] {
         len -= 1;
@@ -1166,7 +1165,7 @@ mod tests {
             hex(&c.bytecode),
             "070000003f0700004040061b001506000015070000003f1300"
         );
-        assert!(c.attributes.is_empty());
+        assert_eq!(c.attributes, [] as [std::string::String; 0]);
     }
 
     #[test]

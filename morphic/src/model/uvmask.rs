@@ -229,7 +229,7 @@ fn prim_uv_tris(mesh: &MeshPart, prim: &Primitive) -> Vec<UvTri> {
         return Vec::new();
     }
     let mut out = Vec::with_capacity(prim.indices.len() / 3);
-    for t in prim.indices.chunks_exact(3) {
+    for t in prim.indices.as_chunks::<3>().0 {
         let (i0, i1, i2) = (t[0] as usize, t[1] as usize, t[2] as usize);
         if i0 >= uvs.len() || i1 >= uvs.len() || i2 >= uvs.len() {
             continue;
@@ -311,7 +311,7 @@ fn by_island(meshes: &[MeshPart]) -> Vec<Segment> {
             let n = vb.element_count;
             let mut uf = UnionFind::new(n);
             for p in &prims {
-                for t in p.indices.chunks_exact(3) {
+                for t in p.indices.as_chunks::<3>().0 {
                     let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
                     if a < n && b < n && c < n {
                         uf.union(a, b);
@@ -321,7 +321,7 @@ fn by_island(meshes: &[MeshPart]) -> Vec<Segment> {
             }
             let mut groups: BTreeMap<usize, Vec<UvTri>> = BTreeMap::new();
             for p in &prims {
-                for t in p.indices.chunks_exact(3) {
+                for t in p.indices.as_chunks::<3>().0 {
                     let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
                     if a >= n || b >= n || c >= n {
                         continue;

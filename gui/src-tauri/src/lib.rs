@@ -776,7 +776,7 @@ async fn preview_texture(
 // purely for human preview).
 fn tonemap_rgba_f16_to_u8(buf: &[half::f16]) -> Vec<u8> {
     let mut out = Vec::with_capacity(buf.len());
-    for px in buf.chunks_exact(4) {
+    for px in buf.as_chunks::<4>().0 {
         for c in &px[..3] {
             let v = c.to_f32().max(0.0);
             let tonemapped = v / (1.0 + v);

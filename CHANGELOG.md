@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.20.1
+
+Fix: imported soul containers and spirit urns now show in game at every distance. Valve reworked the stock `soul_container.vmdl_c` to ship four LOD meshes, and `soul-container import` / `import-urn` only replaced the first one, so a few steps away the game drew the stock gold orb instead (and an imported urn turned into a soul orb). The importer now makes the imported mesh draw at every LOD and hides the stock ones (#51). All other commands are unchanged.
+
+- Library: new `morphic::model::collapse_lods_to_mesh(vmdl, mesh_name)`, a byte-faithful edit of `m_refLODGroupMasks`.
+- Internal: fixes for the lints clippy 1.99 added (#52), no behavior change.
+
 ## v0.20.0
 
 Outdated vdata check: find mods that ship an old copy of a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`, ...). The shipped copy replaces the whole file in game, so anything Valve added after the mod was built is gone, e.g. a new hero's abilities. Built for Grimoire's "Outdated data" warning (#47). All pre-existing commands are unchanged.

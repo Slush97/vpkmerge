@@ -28,11 +28,14 @@
     clippy::default_trait_access
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use gltf_json as json;
+use image::ImageEncoder;
 use json::validation::Checked::Valid;
 use json::validation::USize64;
+use rayon::prelude::*;
 use serde_json::json as jval;
 
 use crate::error::DecodeError;
@@ -51,23 +54,37 @@ fn transform_source_to_gltf() -> Mat4 {
 
 /// Resolves a compiled resource path (e.g. `models/.../foo.vtex_c`) to its
 /// bytes. Implemented by the caller, which owns the VPK I/O (skin VPK first,
-/// base pak second). Keeps `morphic` free of file/VPK access.
-pub trait FileResolver {
+/// base pak second). Keeps `morphic` free of file/VPK access. `Sync` because
+/// textures are resolved and decoded in parallel.
+pub trait FileResolver: Sync {
     fn resolve(&self, compiled_path: &str) -> Option<Vec<u8>>;
+}
+
+/// Options for [`to_glb_textured`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GlbOptions {
+    /// Embed each texture at its largest mip whose longer edge fits within this
+    /// many pixels instead of the full-size top mip (a texture with no mip that
+    /// small embeds its smallest). `None` embeds full size.
+    pub max_texture_edge: Option<u32>,
 }
 
 /// Writes `model` as a binary glTF (`.glb`) byte stream, untextured (named
 /// default-PBR materials only).
 pub fn to_glb(model: &Model) -> Result<Vec<u8>, DecodeError> {
-    build(model, None)
+    build(model, None, GlbOptions::default())
 }
 
 /// Writes `model` as a `.glb` with materials textured from the resolved
 /// `.vmat_c` / `.vtex_c` files: base color, normal, metallic-roughness
 /// (roughness split out of the packed normal texture), occlusion, and emissive.
 /// Materials that fail to resolve fall back to a named default.
-pub fn to_glb_textured(model: &Model, files: &dyn FileResolver) -> Result<Vec<u8>, DecodeError> {
-    build(model, Some(files))
+pub fn to_glb_textured(
+    model: &Model,
+    files: &dyn FileResolver,
+    opts: GlbOptions,
+) -> Result<Vec<u8>, DecodeError> {
+    build(model, Some(files), opts)
 }
 
 /// Writes a single vertex buffer as a minimal `.glb` for external editing
@@ -174,13 +191,35 @@ pub fn to_edit_glb(vb: &VertexBuffer, indices: &[u32]) -> Result<Vec<u8>, Decode
 /// underscore, which Blender round-trips cleanly).
 pub(crate) const ORIGID_ATTR: &str = "ORIGID";
 
-fn build(model: &Model, files: Option<&dyn FileResolver>) -> Result<Vec<u8>, DecodeError> {
-    let mut b = Builder::default();
+fn build(
+    model: &Model,
+    files: Option<&dyn FileResolver>,
+    opts: GlbOptions,
+) -> Result<Vec<u8>, DecodeError> {
+    let mut b = Builder {
+        opts,
+        ..Builder::default()
+    };
     b.root.asset.generator = Some("morphic".to_owned());
+
+    let mut mat_index: BTreeMap<String, json::Index<json::Material>> = BTreeMap::new();
+    if let Some(files) = files {
+        // Textures dominate export time. Build the materials a chunk at a time, in
+        // the order add_mesh reaches them (so indices match), letting each chunk's
+        // textures decode and then PNG-encode in parallel without holding every
+        // decoded texture of the model at once.
+        for chunk in exported_materials(model).chunks(materials_per_chunk(opts)) {
+            b.prefetch_textures(chunk, files);
+            for path in chunk {
+                b.material_for(path, &mut mat_index, Some(files));
+            }
+            b.flush_pngs();
+            b.decoded.clear();
+        }
+    }
 
     let skin = b.add_skin(&model.skeleton);
 
-    let mut mat_index: BTreeMap<String, json::Index<json::Material>> = BTreeMap::new();
     let mut scene_nodes: Vec<json::Index<json::Node>> = Vec::new();
 
     // Skeleton wrapper node carries the axis/scale transform; bone nodes hang
@@ -231,6 +270,56 @@ struct Builder {
     /// are injected into the serialized JSON by [`inject_material_extensions`]
     /// in [`Builder::finish`]; one mechanism covers every extension we emit.
     material_extensions: BTreeMap<usize, serde_json::Map<String, serde_json::Value>>,
+    opts: GlbOptions,
+    /// Decoded `.vtex` slots by path for the current material chunk, filled in
+    /// parallel by [`Builder::prefetch_textures`]. Some slots are read twice (the
+    /// self-illum mask), so each decodes once.
+    decoded: HashMap<String, Option<Rc<Slot>>>,
+    /// Embedded images still waiting for PNG encoding, with their RGBA. Encoded
+    /// in parallel by [`Builder::flush_pngs`].
+    pending_pngs: Vec<(json::Index<json::Image>, u32, u32, Vec<u8>)>,
+}
+
+/// `(width, height, RGBA8)` of a decoded texture.
+type Decoded = (u32, u32, Vec<u8>);
+
+/// A decoded `.vtex` slot: the embedded mip plus the facts the slot decisions
+/// read from the full-size texture, so a `max_texture_edge` export keeps the
+/// same slots and channel packing as a full-size one.
+struct Slot {
+    image: Decoded,
+    /// Top-mip edges, for the `<= 4` placeholder checks.
+    full: (u32, u32),
+    /// [`is_pure_normal_map`] of the top mip, set by the prefetch for normal
+    /// slots. Mip averaging pushes a packed normal-roughness toward the probe's
+    /// threshold, so it cannot run on a smaller mip.
+    pure_normal: Option<bool>,
+}
+
+impl Slot {
+    fn is_placeholder(&self) -> bool {
+        self.full.0.min(self.full.1) <= 4
+    }
+}
+
+/// Decoded RGBA bytes a material chunk may hold, assuming every slot reaches
+/// the size cap. A full-size export has no bound to plan with (one hero
+/// material can carry several 4096 textures, 64 MiB RGBA each, with derived
+/// normal/ORM copies waiting beside them for the PNG encode), so it decodes
+/// one material at a time, its slots still in parallel.
+const DECODED_BYTES_PER_CHUNK: usize = 256 << 20;
+
+/// Texture slots a material is budgeted for: the six PBR slots plus the
+/// Source 2 preview masks most hero materials bind.
+const SLOTS_PER_MATERIAL: usize = 12;
+
+pub(super) fn materials_per_chunk(opts: GlbOptions) -> usize {
+    opts.max_texture_edge.map_or(1, |edge| {
+        let material_bytes = (edge as usize)
+            .saturating_pow(2)
+            .saturating_mul(4 * SLOTS_PER_MATERIAL);
+        (DECODED_BYTES_PER_CHUNK / material_bytes).max(1)
+    })
 }
 
 struct SkinRefs {
@@ -719,6 +808,69 @@ impl Builder {
         }
     }
 
+    /// Decodes every texture `materials` can embed, in parallel, into
+    /// [`Builder::decoded`]. Covers the slots [`Builder::apply_textures`] and
+    /// [`Builder::morphic_extras`] read; a slot missed here still decodes lazily.
+    fn prefetch_textures(&mut self, materials: &[&str], files: &dyn FileResolver) {
+        let mut normals = BTreeSet::new();
+        let slots: Vec<(String, bool)> = materials
+            .par_iter()
+            .flat_map_iter(|path| {
+                let Some(mat) = files
+                    .resolve(&compiled(path))
+                    .and_then(|vmat| crate::material::parse(&vmat).ok())
+                else {
+                    return Vec::new();
+                };
+                let pbr = mat.pbr();
+                [
+                    pbr.base_color,
+                    pbr.normal,
+                    pbr.occlusion,
+                    pbr.emissive,
+                    pbr.roughness,
+                    pbr.metalness,
+                ]
+                .into_iter()
+                .chain(SOURCE2_PREVIEW_TEXTURE_SLOTS.iter().map(|s| mat.texture(s)))
+                .flatten()
+                .map(|slot| (slot.to_owned(), Some(slot) == pbr.normal))
+                .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut paths = BTreeSet::new();
+        for (path, normal) in slots {
+            if normal {
+                normals.insert(path.clone());
+            }
+            paths.insert(path);
+        }
+        let max_edge = self.opts.max_texture_edge;
+        let decoded: Vec<(String, Option<Slot>)> = paths
+            .into_par_iter()
+            .map(|path| {
+                let mut slot = decode_slot(files, &path, max_edge);
+                if let Some(slot) = slot.as_mut().filter(|_| normals.contains(&path)) {
+                    slot.pure_normal = Some(top_mip_is_pure_normal(files, &path, slot));
+                }
+                (path, slot)
+            })
+            .collect();
+        self.decoded
+            .extend(decoded.into_iter().map(|(path, d)| (path, d.map(Rc::new))));
+    }
+
+    /// The decoded `.vtex` slot at `vtex_path`, from the prefetch cache or decoded
+    /// now (and cached).
+    fn decoded(&mut self, files: &dyn FileResolver, vtex_path: &str) -> Option<Rc<Slot>> {
+        if let Some(d) = self.decoded.get(vtex_path) {
+            return d.clone();
+        }
+        let d = decode_slot(files, vtex_path, self.opts.max_texture_edge).map(Rc::new);
+        self.decoded.insert(vtex_path.to_owned(), d.clone());
+        d
+    }
+
     fn material_for(
         &mut self,
         path: &str,
@@ -803,16 +955,16 @@ impl Builder {
 
         // Base color (sRGB albedo).
         if let Some(p) = pbr.base_color {
-            if let Some((w, h, mut rgba)) = decode_slot(files, p) {
+            if let Some(d) = self.decoded(files, p) {
+                let (w, h, ref src) = d.image;
+                let mut rgba = src.clone();
                 if opaque {
                     for px in rgba.as_chunks_mut::<4>().0 {
                         px[3] = 255;
                     }
                 }
-                if let Some(png) = png_encode(w, h, &rgba) {
-                    if let Some(tex) = self.texture_png(&png) {
-                        material.pbr_metallic_roughness.base_color_texture = Some(tex_info(tex));
-                    }
+                if let Some(tex) = self.texture_rgba(w, h, rgba) {
+                    material.pbr_metallic_roughness.base_color_texture = Some(tex_info(tex));
                 }
             }
         }
@@ -823,30 +975,35 @@ impl Builder {
         // No size filter here (unlike the normal placeholder): Deadlock authors
         // constant metalness as a real 4x4 BC4 texture (e.g. shiv_glasses R=255),
         // so a 4x4 metalness is meaningful data, not a no-op placeholder.
-        let metalness = pbr.metalness.and_then(|p| decode_slot(files, p));
+        let metalness = pbr.metalness.and_then(|p| self.decoded(files, p));
+        let metalness = metalness.as_deref().map(|s| &s.image);
         // Standalone roughness texture (g_tRoughness), parsed but previously dropped.
-        let roughness = pbr.roughness.and_then(|p| decode_slot(files, p));
+        let roughness = pbr.roughness.and_then(|p| self.decoded(files, p));
+        let roughness = roughness.as_deref().map(|s| &s.image);
         let mut metalness_wired = false;
 
         // Normal map. Skip the 4x4 default_normal placeholder (a flat normal is a
         // no-op). `packed_rough` carries the normal's RGBA when it is a PACKED
         // normal-roughness (blue = roughness), so the metallic-roughness image
         // below can source roughness from its blue.
-        let mut packed_rough: Option<(u32, u32, Vec<u8>)> = None;
+        let mut packed_rough: Option<Rc<Slot>> = None;
         if let Some(p) = pbr.normal {
-            if let Some((w, h, rgba)) = decode_slot(files, p).filter(|&(w, h, _)| w.min(h) > 4) {
+            if let Some(d) = self.decoded(files, p).filter(|d| !d.is_placeholder()) {
+                let (w, h, ref rgba) = d.image;
                 // Some heroes bind a PURE normal map here (blue = normal Z), not a
                 // packed normal-roughness (blue = roughness). The slot name does not
                 // distinguish them, so probe the texel content: a pure normal map
                 // keeps its authored normal and must NOT have its blue read as
                 // roughness (which produced normal-Z-shaped garbage roughness).
-                let pure_normal = is_pure_normal_map(&rgba);
-                let normal_bytes = if pure_normal {
-                    normal_passthrough_png(w, h, &rgba)
+                let pure_normal = d
+                    .pure_normal
+                    .unwrap_or_else(|| top_mip_is_pure_normal(files, p, &d));
+                let normal_rgba = if pure_normal {
+                    normal_passthrough_rgba(rgba)
                 } else {
-                    normal_png(w, h, &rgba)
+                    normal_rgba(rgba)
                 };
-                if let Some(t) = self.texture_png(&normal_bytes) {
+                if let Some(t) = self.texture_rgba(w, h, normal_rgba) {
                     material.normal_texture = Some(json::material::NormalTexture {
                         index: t,
                         tex_coord: 0,
@@ -856,7 +1013,7 @@ impl Builder {
                     });
                 }
                 if !pure_normal {
-                    packed_rough = Some((w, h, rgba));
+                    packed_rough = Some(d.clone());
                 }
             }
         }
@@ -865,8 +1022,9 @@ impl Builder {
         // g_tRoughness (its R channel) > a packed normal-roughness (the normal's
         // blue) > the constant factor fallback below. Metalness (B) comes from the
         // metalness mask, resampled to the roughness image.
-        if let Some((rw, rh, rough)) = roughness.as_ref() {
-            if let Some(t) = self.texture_png(&rough_metal_png(*rw, *rh, rough, metalness.as_ref()))
+        if let Some((rw, rh, rough)) = roughness {
+            if let Some(t) =
+                self.texture_rgba(*rw, *rh, rough_metal_rgba(*rw, *rh, rough, metalness))
             {
                 material.pbr_metallic_roughness.metallic_roughness_texture = Some(tex_info(t));
                 material.pbr_metallic_roughness.roughness_factor =
@@ -877,8 +1035,8 @@ impl Builder {
                     metalness_wired = true;
                 }
             }
-        } else if let Some((w, h, rgba)) = packed_rough.as_ref() {
-            if let Some(t) = self.texture_png(&metal_rough_png(*w, *h, rgba, metalness.as_ref())) {
+        } else if let Some((w, h, rgba)) = packed_rough.as_deref().map(|s| &s.image) {
+            if let Some(t) = self.texture_rgba(*w, *h, metal_rough_rgba(*w, *h, rgba, metalness)) {
                 material.pbr_metallic_roughness.metallic_roughness_texture = Some(tex_info(t));
                 material.pbr_metallic_roughness.roughness_factor =
                     json::material::StrengthFactor(1.0);
@@ -890,11 +1048,11 @@ impl Builder {
                     metalness_wired = true;
                 }
             }
-        } else if let Some(&(mw, mh, ref m)) = metalness.as_ref() {
+        } else if let Some(&(mw, mh, ref m)) = metalness {
             // Pure normal / no normal, and no authored roughness texture: a
             // metalness-only ORM with a neutral roughness lane (G = 255), so the
             // constant roughness factor below still applies.
-            if let Some(t) = self.texture_png(&metal_only_png(mw, mh, m)) {
+            if let Some(t) = self.texture_rgba(mw, mh, metal_only_rgba(m)) {
                 material.pbr_metallic_roughness.metallic_roughness_texture = Some(tex_info(t));
                 material.pbr_metallic_roughness.metallic_factor =
                     json::material::StrengthFactor(1.0);
@@ -1025,15 +1183,15 @@ impl Builder {
             // sheenRoughnessTexture. Embedded twice (one sRGB color view, one
             // linear roughness view) since glTF wants distinct images/channels.
             if let Some(p) = mat.texture("g_tSheen") {
-                if let Some((w, h, rgba)) = decode_slot(files, p).filter(|&(w, h, _)| w.min(h) > 4)
-                {
-                    if let Some(t) = self.embed_rgba_png(w, h, &rgba) {
+                if let Some(d) = self.decoded(files, p).filter(|d| !d.is_placeholder()) {
+                    let (w, h, ref rgba) = d.image;
+                    if let Some(t) = self.texture_rgba(w, h, rgba.clone()) {
                         sheen.insert(
                             "sheenColorTexture".to_owned(),
                             jval!({ "index": t.value() }),
                         );
                     }
-                    if let Some(t) = self.texture_png(&sheen_roughness_png(w, h, &rgba)) {
+                    if let Some(t) = self.texture_rgba(w, h, sheen_roughness_rgba(rgba)) {
                         sheen.insert(
                             "sheenRoughnessTexture".to_owned(),
                             jval!({ "index": t.value() }),
@@ -1143,8 +1301,8 @@ impl Builder {
         let self_illum_valid = mat
             .pbr()
             .emissive
-            .and_then(|p| decode_slot(files, p))
-            .is_some_and(|(w, h, _)| w > 4 && h > 4);
+            .and_then(|p| self.decoded(files, p))
+            .is_some_and(|d| !d.is_placeholder());
         let extras = jval!({
             "morphic": {
                 // Bump on any wire-shape change; the viewer treats a missing
@@ -1182,11 +1340,12 @@ impl Builder {
         files: &dyn FileResolver,
         vtex_path: &str,
     ) -> Option<json::Index<json::Texture>> {
-        let (w, h, rgba) = decode_slot(files, vtex_path)?;
-        if w.min(h) <= 4 {
+        let d = self.decoded(files, vtex_path)?;
+        if d.is_placeholder() {
             return None;
         }
-        self.embed_rgba_png(w, h, &rgba)
+        let (w, h, ref rgba) = d.image;
+        self.texture_rgba(w, h, rgba.clone())
     }
 
     /// Like `texture_from`, but keeps placeholder-sized textures. Used for the
@@ -1198,35 +1357,32 @@ impl Builder {
         files: &dyn FileResolver,
         vtex_path: &str,
     ) -> Option<json::Index<json::Texture>> {
-        let (w, h, rgba) = decode_slot(files, vtex_path)?;
-        self.embed_rgba_png(w, h, &rgba)
+        let d = self.decoded(files, vtex_path)?;
+        let (w, h, ref rgba) = d.image;
+        self.texture_rgba(w, h, rgba.clone())
     }
 
-    fn embed_rgba_png(
+    /// Embeds `rgba` as a PNG image + texture (sharing one sampler), returning
+    /// the texture index. The PNG encode is deferred to [`Builder::flush_pngs`]
+    /// so encodes run in parallel; the image gets its buffer view there.
+    fn texture_rgba(
         &mut self,
         w: u32,
         h: u32,
-        rgba: &[u8],
+        rgba: Vec<u8>,
     ) -> Option<json::Index<json::Texture>> {
-        let png = png_encode(w, h, rgba)?;
-        self.texture_png(&png)
-    }
-
-    /// Embeds PNG bytes as an image + texture (sharing one sampler), returning
-    /// the texture index.
-    fn texture_png(&mut self, png: &[u8]) -> Option<json::Index<json::Texture>> {
-        if png.is_empty() {
+        if w == 0 || h == 0 || rgba.len() != w as usize * h as usize * 4 {
             return None;
         }
-        let view = self.add_image_view(png);
         let image = self.root.push(json::Image {
-            buffer_view: Some(view),
+            buffer_view: None,
             mime_type: Some(json::image::MimeType("image/png".to_owned())),
             uri: None,
             name: None,
             extensions: None,
             extras: Default::default(),
         });
+        self.pending_pngs.push((image, w, h, rgba));
         let sampler = self.ensure_sampler();
         Some(self.root.push(json::Texture {
             sampler: Some(sampler),
@@ -1235,6 +1391,20 @@ impl Builder {
             extensions: None,
             extras: Default::default(),
         }))
+    }
+
+    /// PNG-encodes every pending image in parallel and appends them to the
+    /// binary buffer in queue order, so the output stays deterministic.
+    fn flush_pngs(&mut self) {
+        let pending = std::mem::take(&mut self.pending_pngs);
+        let pngs: Vec<Vec<u8>> = pending
+            .par_iter()
+            .map(|(_, w, h, rgba)| png_encode(*w, *h, rgba))
+            .collect();
+        for ((image, ..), png) in pending.iter().zip(pngs) {
+            let view = self.add_image_view(&png);
+            self.root.images[image.value()].buffer_view = Some(view);
+        }
     }
 
     /// A buffer view with no target, for embedded image data.
@@ -1267,6 +1437,7 @@ impl Builder {
 
     /// Frames the document + binary buffer into a GLB byte stream.
     fn finish(mut self) -> Result<Vec<u8>, DecodeError> {
+        self.flush_pngs();
         self.root.push(json::Buffer {
             byte_length: USize64(self.bin.len() as u64),
             uri: None,
@@ -1376,6 +1547,28 @@ pub(crate) fn is_dropped(name: &str) -> bool {
     is_shell(name) || is_alt_form(name)
 }
 
+/// The material paths [`Builder::add_mesh`] gives a primitive, in first-use
+/// order: renderable parts and primitives over a buffer with positions.
+fn exported_materials(model: &Model) -> Vec<&str> {
+    let mut seen = BTreeSet::new();
+    model
+        .meshes
+        .iter()
+        .filter(|part| !is_dropped(&part.name))
+        .flat_map(|part| {
+            part.primitives.iter().filter(|prim| {
+                !is_dropped(&prim.material)
+                    && part
+                        .vertex_buffers
+                        .get(prim.vertex_buffer)
+                        .is_some_and(|vb| vb.positions.len() == vb.element_count)
+            })
+        })
+        .map(|prim| prim.material.as_str())
+        .filter(|path| seen.insert(*path))
+        .collect()
+}
+
 /// Appends `_c` to a source resource path unless it is already a compiled path.
 fn compiled(path: &str) -> String {
     if path.ends_with("_c") {
@@ -1408,25 +1601,73 @@ fn material_uses_vertex_color(path: &str, files: Option<&dyn FileResolver>) -> b
     crate::material::parse(&vmat).map_or(true, |m| m.uses_vertex_color())
 }
 
-/// Resolves a `.vtex` slot (+ `_c`), decodes its top mip, and returns
+/// Resolves a `.vtex` slot (+ `_c`), decodes its top mip (or, with `max_edge`,
+/// the largest mip that fits; see [`GlbOptions::max_texture_edge`]), and returns
 /// `(width, height, RGBA8)`. Skips HDR textures (no PBR slot we read is HDR).
 /// Tiny `4x4` placeholders are kept here (a flat base color is a real albedo,
 /// e.g. Deadlock body skin); callers that must reject placeholders (occlusion,
 /// emissive, normal) filter by size themselves.
-fn decode_slot(files: &dyn FileResolver, vtex_path: &str) -> Option<(u32, u32, Vec<u8>)> {
+fn decode_slot(files: &dyn FileResolver, vtex_path: &str, max_edge: Option<u32>) -> Option<Slot> {
     let bytes = files.resolve(&compiled(vtex_path))?;
-    let img = crate::decode(&bytes).ok()?;
-    match img.data {
-        crate::ImageData::Rgba8(d) => Some((img.width, img.height, d)),
-        crate::ImageData::Rgba16F(_) => None,
-    }
+    let (mip, full) = match max_edge {
+        Some(max_edge) => {
+            let info = crate::inspect(&bytes).ok()?;
+            (
+                fitting_mip(info.width, info.height, info.mip_count, max_edge),
+                (u32::from(info.width), u32::from(info.height)),
+            )
+        }
+        None => (0, (0, 0)),
+    };
+    let img = crate::decode_at(
+        &bytes,
+        &crate::DecodeOptions {
+            mip,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let crate::ImageData::Rgba8(d) = img.data else {
+        return None;
+    };
+    Some(Slot {
+        full: if mip == 0 {
+            (img.width, img.height)
+        } else {
+            full
+        },
+        image: (img.width, img.height, d),
+        pure_normal: None,
+    })
 }
 
-fn png_encode(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
-    let img = image::RgbaImage::from_raw(w, h, rgba.to_vec())?;
-    let mut out = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
-    Some(out.into_inner())
+/// [`is_pure_normal_map`] on `slot`'s top mip, decoding it when a smaller mip
+/// was embedded.
+fn top_mip_is_pure_normal(files: &dyn FileResolver, vtex_path: &str, slot: &Slot) -> bool {
+    if slot.full == (slot.image.0, slot.image.1) {
+        return is_pure_normal_map(&slot.image.2);
+    }
+    decode_slot(files, vtex_path, None).is_some_and(|top| is_pure_normal_map(&top.image.2))
+}
+
+/// The largest mip whose longer edge is at most `max_edge`, or the smallest mip
+/// when none is.
+pub(super) fn fitting_mip(width: u16, height: u16, mip_count: u8, max_edge: u32) -> u8 {
+    let last = mip_count.saturating_sub(1);
+    (0..=last)
+        .find(|&mip| {
+            let (w, h) = crate::texture::mip_dims(width, height, mip);
+            u32::from(w.max(h)) <= max_edge
+        })
+        .unwrap_or(last)
+}
+
+fn png_encode(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out)
+        .write_image(rgba, w, h, image::ExtendedColorType::Rgba8)
+        .expect("RGBA length is checked in texture_rgba; an in-memory PNG encode cannot fail");
+    out
 }
 
 /// Normal map: the packed normal texture's R,G are the tangent-space normal X,Y.
@@ -1434,7 +1675,7 @@ fn png_encode(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 /// Z from X,Y to keep a valid normal map. The old code passed blue (roughness)
 /// straight into the normal's Z, skewing every surface normal.
 #[allow(clippy::cast_sign_loss)]
-fn normal_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+fn normal_rgba(rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
     for px in rgba.as_chunks::<4>().0 {
         let nx = (f32::from(px[0]) / 255.0) * 2.0 - 1.0;
@@ -1443,7 +1684,7 @@ fn normal_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
         let bz = ((nz * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
         out.extend_from_slice(&[px[0], px[1], bz, 255]);
     }
-    png_encode(w, h, &out).unwrap_or_default()
+    out
 }
 
 /// Distinguish a PURE tangent-space normal map (BLUE = normal Z) from a packed
@@ -1478,14 +1719,14 @@ pub(super) fn is_pure_normal_map(rgba: &[u8]) -> bool {
 }
 
 /// Pass a PURE normal map through unchanged (authored R,G,B normal, forced opaque
-/// alpha). Unlike [`normal_png`] this keeps the authored blue (the real normal Z)
+/// alpha). Unlike [`normal_rgba`] this keeps the authored blue (the real normal Z)
 /// instead of reconstructing it from R,G, preserving detail and non-unit normals.
-fn normal_passthrough_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+fn normal_passthrough_rgba(rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
     for px in rgba.as_chunks::<4>().0 {
         out.extend_from_slice(&[px[0], px[1], px[2], 255]);
     }
-    png_encode(w, h, &out).unwrap_or_default()
+    out
 }
 
 /// glTF metallic-roughness texture carrying ONLY metalness (B = the mask's R
@@ -1493,12 +1734,12 @@ fn normal_passthrough_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
 /// material's `roughnessFactor`). Used when the normal slot is a pure normal map,
 /// so its blue must not become roughness, but a separate metalness mask still
 /// needs wiring. Emitted at the mask's own resolution.
-pub(super) fn metal_only_png(mw: u32, mh: u32, mask: &[u8]) -> Vec<u8> {
+pub(super) fn metal_only_rgba(mask: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(mask.len());
     for px in mask.as_chunks::<4>().0 {
         out.extend_from_slice(&[0, 255, px[0], 255]);
     }
-    png_encode(mw, mh, &out).unwrap_or_default()
+    out
 }
 
 /// glTF metallic-roughness texture: G = roughness (from the normal texture's
@@ -1507,7 +1748,7 @@ pub(super) fn metal_only_png(mw: u32, mh: u32, mask: &[u8]) -> Vec<u8> {
 /// matte surfaces), B = metalness (the metalness mask's R channel,
 /// nearest-neighbor resampled to the roughness image's dimensions; 0 without a
 /// mask).
-pub(super) fn metal_rough_png(
+pub(super) fn metal_rough_rgba(
     w: u32,
     h: u32,
     rgba: &[u8],
@@ -1524,7 +1765,7 @@ pub(super) fn metal_rough_png(
         });
         out.extend_from_slice(&[0, px[2], metal, 255]);
     }
-    png_encode(w, h, &out).unwrap_or_default()
+    out
 }
 
 /// glTF metallic-roughness from a SEPARATE roughness texture (Source 2
@@ -1533,7 +1774,7 @@ pub(super) fn metal_rough_png(
 /// G = roughness, B = metalness. Used for heroes that author roughness as its own
 /// texture (e.g. Ghost) instead of packing it into the normal's blue; that
 /// standalone texture was parsed but dropped by the writer before this.
-pub(super) fn rough_metal_png(
+pub(super) fn rough_metal_rgba(
     rw: u32,
     rh: u32,
     rough: &[u8],
@@ -1550,19 +1791,19 @@ pub(super) fn rough_metal_png(
         });
         out.extend_from_slice(&[0, px[0], metal, 255]);
     }
-    png_encode(rw, rh, &out).unwrap_or_default()
+    out
 }
 
 /// glTF `sheenRoughnessTexture`: glTF reads sheen roughness from the ALPHA
 /// channel. Source 2's `g_tSheen` packs sheen color in RGB and sheen roughness
 /// in alpha, so copy alpha into the output alpha and leave RGB at 255 (the
 /// glTF reader ignores them for this slot).
-fn sheen_roughness_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+fn sheen_roughness_rgba(rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
     for px in rgba.as_chunks::<4>().0 {
         out.extend_from_slice(&[255, 255, 255, px[3]]);
     }
-    png_encode(w, h, &out).unwrap_or_default()
+    out
 }
 
 /// Material texture slots embedded for the viewer and referenced from the

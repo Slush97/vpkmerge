@@ -149,7 +149,7 @@ GitHub Actions on push to `main` and PRs:
 
 - `valve_pak::from_directory` walks the filesystem in OS-dependent order, so byte-exact output is not reproducible across runs. Same set of files, same content, different VPK hash. Fix needs an upstream patch.
 - No streaming or progress callbacks yet; large merges block.
-- `valve_pak` is vendored (`vendor/valve_pak`, copied from crates.io 0.1.0) with one fix: `VPK::open` only reads the v2 MD5 section when the header declares it (>= 48 bytes). Upstream required it, so valid paks that omit it (common on GameBanana) failed to open with "failed to fill whole buffer". Regression tests: `vpkmerge-core/tests/optional_checksums.rs`. Keep any further vendored edits minimal and marked `vpkmerge patch`.
+- `valve_pak` is vendored (`vendor/valve_pak`, copied from crates.io 0.1.0) with two fixes: `VPK::open` only reads the v2 MD5 section when the header declares it (>= 48 bytes). Upstream required it, so valid paks that omit it (common on GameBanana) failed to open with "failed to fill whole buffer". Regression tests: `vpkmerge-core/tests/optional_checksums.rs`. And the directory tree is read with `read_until` instead of one `read_exact` per byte (pak01 opens in ~33 ms instead of ~51). Keep any further vendored edits minimal and marked `vpkmerge patch`.
 
 ## morphic (Source 2 texture decoder)
 

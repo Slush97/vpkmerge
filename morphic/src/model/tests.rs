@@ -706,7 +706,8 @@ fn glb_textured_embeds_resolved_images() {
             .expect("vtex fixture"),
     };
 
-    let glb = super::to_glb_textured(&synthetic_model(), &resolver).expect("textured glb");
+    let glb = super::to_glb_textured(&synthetic_model(), &resolver, super::GlbOptions::default())
+        .expect("textured glb");
     let g = gltf::Gltf::from_slice(&glb).expect("re-read glb");
     let doc = &g.document;
 
@@ -733,7 +734,8 @@ fn glb_textured_emits_npr_extras_and_emissive_strength() {
         vtex: std::fs::read(root.join("fixtures/bc7/generic_sleep_icon.vtex_c"))
             .expect("vtex fixture"),
     };
-    let glb = super::to_glb_textured(&synthetic_model(), &resolver).expect("textured glb");
+    let glb = super::to_glb_textured(&synthetic_model(), &resolver, super::GlbOptions::default())
+        .expect("textured glb");
 
     // Read the raw JSON chunk: the injected extensions and extras are easiest
     // to assert on structurally (the gltf crate hides unknown extensions).
@@ -799,18 +801,19 @@ fn metal_rough_packs_resampled_metalness() {
         10, 20, 120, 255,  10, 20, 130, 255,
     ];
     let metal = (1u32, 1u32, vec![200u8, 0, 0, 255]);
-    let png = super::glb::metal_rough_png(2, 2, &rough, Some(&metal));
-    let img = image::load_from_memory(&png).expect("orm png").to_rgba8();
+    let orm = super::glb::metal_rough_rgba(2, 2, &rough, Some(&metal));
     let expect_rough = [100u8, 110, 120, 130];
-    for (i, px) in img.pixels().enumerate() {
+    for (i, px) in orm.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(px[0], 0, "R unused");
         assert_eq!(px[1], expect_rough[i], "G = roughness");
         assert_eq!(px[2], 200, "B = metalness");
     }
 
-    let png = super::glb::metal_rough_png(2, 2, &rough, None);
-    let img = image::load_from_memory(&png).expect("orm png").to_rgba8();
-    assert!(img.pixels().all(|px| px[2] == 0), "no mask: B = 0");
+    let orm = super::glb::metal_rough_rgba(2, 2, &rough, None);
+    assert!(
+        orm.as_chunks::<4>().0.iter().all(|px| px[2] == 0),
+        "no mask: B = 0"
+    );
 }
 
 /// A pure tangent-space normal map (blue = the unit normal's Z) is detected so its
@@ -830,34 +833,65 @@ fn pure_normal_map_is_distinguished_from_packed() {
 /// The metalness-only ORM (used when the normal slot is a pure normal map) keeps a
 /// neutral roughness lane (G = 255) and packs the mask's R channel into B.
 #[test]
-fn metal_only_png_is_neutral_roughness_with_metalness() {
+fn metal_only_rgba_is_neutral_roughness_with_metalness() {
     let mask = [200u8, 0, 0, 255, 30, 0, 0, 255]; // 2x1 mask, R = 200 then 30
-    let png = super::glb::metal_only_png(2, 1, &mask);
-    let img = image::load_from_memory(&png).expect("orm png").to_rgba8();
-    let px: Vec<_> = img.pixels().collect();
+    let orm = super::glb::metal_only_rgba(&mask);
+    let px = orm.as_chunks::<4>().0;
     assert_eq!(px[0][1], 255, "G neutral roughness");
     assert_eq!(px[0][2], 200, "B = metalness mask R");
     assert_eq!(px[1][2], 30, "B = metalness mask R");
 }
 
+/// `--max-texture` embeds the largest mip whose longer edge fits, or the
+/// smallest mip when none does.
+#[test]
+fn fitting_mip_picks_the_largest_mip_within_the_edge() {
+    use super::glb::fitting_mip;
+    assert_eq!(fitting_mip(2048, 2048, 12, 2048), 0);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1024), 1);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1000), 2);
+    assert_eq!(fitting_mip(256, 1024, 11, 512), 1, "longer edge decides");
+    assert_eq!(
+        fitting_mip(2048, 2048, 3, 256),
+        2,
+        "short chain: smallest mip"
+    );
+}
+
+/// A capped export batches materials by their worst-case decoded size; full
+/// size has no bound to plan with and decodes one material at a time.
+#[test]
+fn materials_per_chunk_scales_with_the_cap() {
+    use super::glb::{materials_per_chunk, GlbOptions};
+    let cap = |edge| GlbOptions {
+        max_texture_edge: Some(edge),
+    };
+    assert_eq!(materials_per_chunk(GlbOptions::default()), 1);
+    assert_eq!(materials_per_chunk(cap(4096)), 1);
+    assert_eq!(materials_per_chunk(cap(1024)), 5);
+    assert!(materials_per_chunk(cap(64)) > materials_per_chunk(cap(1024)));
+    assert_eq!(materials_per_chunk(cap(u32::MAX)), 1);
+}
+
 /// A standalone roughness texture (`g_tRoughness`, roughness in R) is wired into
 /// the ORM's G lane, with the metalness mask nearest-neighbor resampled into B.
 #[test]
-fn rough_metal_png_sources_roughness_from_red_channel() {
+fn rough_metal_rgba_sources_roughness_from_red_channel() {
     let rough = [90u8, 0, 0, 255, 200, 0, 0, 255]; // 2x1, R = 90 then 200
     let metal = (1u32, 1u32, vec![150u8, 0, 0, 255]);
-    let png = super::glb::rough_metal_png(2, 1, &rough, Some(&metal));
-    let img = image::load_from_memory(&png).expect("orm png").to_rgba8();
-    let px: Vec<_> = img.pixels().collect();
+    let orm = super::glb::rough_metal_rgba(2, 1, &rough, Some(&metal));
+    let px = orm.as_chunks::<4>().0;
     assert_eq!(px[0][0], 0, "R unused");
     assert_eq!(px[0][1], 90, "G = roughness R");
     assert_eq!(px[1][1], 200, "G = roughness R");
     assert_eq!(px[0][2], 150, "B = metalness mask R (upsampled)");
     assert_eq!(px[1][2], 150, "B = metalness mask R (upsampled)");
 
-    let png = super::glb::rough_metal_png(2, 1, &rough, None);
-    let img = image::load_from_memory(&png).expect("orm png").to_rgba8();
-    assert!(img.pixels().all(|px| px[2] == 0), "no mask: B = 0");
+    let orm = super::glb::rough_metal_rgba(2, 1, &rough, None);
+    assert!(
+        orm.as_chunks::<4>().0.iter().all(|px| px[2] == 0),
+        "no mask: B = 0"
+    );
 }
 
 /// [`super::glb::inject_material_extensions`] lands each extension object on

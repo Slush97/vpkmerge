@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use crc32fast::Hasher;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -264,20 +264,22 @@ impl VPK {
     }
 
     /// Reads the file tree from the VPK
-    fn read_file_tree<R: Read>(
+    // vpkmerge patch: BufRead + read_cstring_buffered instead of a read_exact per
+    // byte. pak01's 144K-entry directory took ~51 ms to parse that way.
+    fn read_file_tree<R: BufRead>(
         reader: &mut R,
         header: &VPKHeader,
     ) -> Result<HashMap<String, FileMetadata>> {
         let mut tree = HashMap::new();
 
         loop {
-            let ext = read_cstring(reader)?;
+            let ext = read_cstring_buffered(reader)?;
             if ext.is_empty() {
                 break;
             }
 
             loop {
-                let path = read_cstring(reader)?;
+                let path = read_cstring_buffered(reader)?;
                 if path.is_empty() {
                     break;
                 }
@@ -289,7 +291,7 @@ impl VPK {
                 };
 
                 loop {
-                    let name = read_cstring(reader)?;
+                    let name = read_cstring_buffered(reader)?;
                     if name.is_empty() {
                         break;
                     }

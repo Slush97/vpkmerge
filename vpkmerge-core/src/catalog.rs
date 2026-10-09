@@ -48,8 +48,9 @@ pub struct VoiceLine {
     /// Soundevent name, e.g. `bebop_self_ultimate_cast_01_hero_3d`. Usable
     /// verbatim as the swap target in the soundevents layer.
     pub event: String,
-    /// Hero codename (`bebop`, `astro`, ...) from the event's `context_name`,
-    /// falling back to the source filename. `None` for announcer / non-hero VO.
+    /// Speaker codename (`bebop`, `astro`, ...) from the event's `context_name`,
+    /// with the optional `hero_` prefix removed, falling back to the source
+    /// filename. `None` for VO with no speaker context or hero filename.
     pub hero: Option<String>,
     /// Human-readable label derived from the event name, e.g.
     /// `"ally atlas killed in lane"`. This is the searchable text.
@@ -175,15 +176,31 @@ impl CaptionDb {
     }
 }
 
-/// Build the voice-line search index for one VPK whose caption database it also
-/// carries (the base `citadel/pak01` for English). Convenience over
-/// [`build_voiceline_index_with_captions`].
+/// Build the voice-line search index for one VPK, enriching it with English
+/// captions when the pak carries them. An absent caption resource is allowed;
+/// a present but unreadable or malformed resource remains an error.
+/// Convenience over [`build_voiceline_index_with_captions`].
 pub fn build_voiceline_index(vpk_path: impl AsRef<Path>) -> Result<Vec<VoiceLine>> {
     let vpk_path = vpk_path.as_ref();
-    let caption_bytes = crate::read_vpk_entry(vpk_path, ENGLISH_CAPTIONS_ENTRY)
-        .with_context(|| format!("reading {ENGLISH_CAPTIONS_ENTRY}"))?;
-    let captions = CaptionDb::parse(&caption_bytes)?;
-    build_voiceline_index_with_captions(vpk_path, &captions)
+    let vpk =
+        valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+    let captions = if vpk
+        .file_paths()
+        .any(|entry| entry == ENGLISH_CAPTIONS_ENTRY)
+    {
+        let mut file = vpk
+            .get_file(ENGLISH_CAPTIONS_ENTRY)
+            .with_context(|| format!("locating {ENGLISH_CAPTIONS_ENTRY}"))?;
+        let bytes = file
+            .read_all()
+            .with_context(|| format!("reading {ENGLISH_CAPTIONS_ENTRY}"))?;
+        CaptionDb::parse(&bytes).with_context(|| format!("parsing {ENGLISH_CAPTIONS_ENTRY}"))?
+    } else {
+        CaptionDb {
+            by_hash: HashMap::new(),
+        }
+    };
+    build_voiceline_index_from_vpk(&vpk, &captions)
 }
 
 /// Build the voice-line index from the VO soundevents tree in `vpk_path`,
@@ -201,7 +218,13 @@ pub fn build_voiceline_index_with_captions(
     let vpk_path = vpk_path.as_ref();
     let vpk =
         valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+    build_voiceline_index_from_vpk(&vpk, captions)
+}
 
+fn build_voiceline_index_from_vpk(
+    vpk: &valve_pak::VPK,
+    captions: &CaptionDb,
+) -> Result<Vec<VoiceLine>> {
     let mut vo_entries: Vec<String> = vpk
         .file_paths()
         .filter(|p| p.starts_with(VO_TREE_PREFIX) && p.ends_with(".vsndevts_c"))
@@ -233,6 +256,8 @@ pub fn build_voiceline_index_with_captions(
             let hero = event
                 .get("context_name")
                 .and_then(Value::as_str)
+                .map(|context| context.strip_prefix("hero_").unwrap_or(context))
+                .filter(|context| !context.is_empty())
                 .map(str::to_owned)
                 .or_else(|| file_hero.clone());
             let vsnd = match event.get("vsnd_files") {

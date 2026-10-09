@@ -38,6 +38,7 @@ pub fn read_cstring_buffered<R: BufRead>(reader: &mut R) -> Result<String> {
         .read_until(0, &mut buffer)
         .context("Failed to read cstring")?;
 
+    // vpkmerge patch: an unterminated string at EOF is an error, as with read_cstring.
     if buffer.pop() != Some(0) {
         anyhow::bail!("Failed to read cstring: unterminated at end of input");
     }

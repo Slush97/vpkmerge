@@ -264,6 +264,8 @@ impl VPK {
     }
 
     /// Reads the file tree from the VPK
+    // vpkmerge patch: BufRead + read_cstring_buffered instead of a read_exact per
+    // byte. pak01's 144K-entry directory took ~51 ms to parse that way.
     fn read_file_tree<R: BufRead>(
         reader: &mut R,
         header: &VPKHeader,

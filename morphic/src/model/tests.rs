@@ -842,6 +842,37 @@ fn metal_only_rgba_is_neutral_roughness_with_metalness() {
     assert_eq!(px[1][2], 30, "B = metalness mask R");
 }
 
+/// `--max-texture` embeds the largest mip whose longer edge fits, or the
+/// smallest mip when none does.
+#[test]
+fn fitting_mip_picks_the_largest_mip_within_the_edge() {
+    use super::glb::fitting_mip;
+    assert_eq!(fitting_mip(2048, 2048, 12, 2048), 0);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1024), 1);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1000), 2);
+    assert_eq!(fitting_mip(256, 1024, 11, 512), 1, "longer edge decides");
+    assert_eq!(
+        fitting_mip(2048, 2048, 3, 256),
+        2,
+        "short chain: smallest mip"
+    );
+}
+
+/// A capped export batches materials by their worst-case decoded size; full
+/// size has no bound to plan with and decodes one material at a time.
+#[test]
+fn materials_per_chunk_scales_with_the_cap() {
+    use super::glb::{materials_per_chunk, GlbOptions};
+    let cap = |edge| GlbOptions {
+        max_texture_edge: Some(edge),
+    };
+    assert_eq!(materials_per_chunk(GlbOptions::default()), 1);
+    assert_eq!(materials_per_chunk(cap(4096)), 1);
+    assert_eq!(materials_per_chunk(cap(1024)), 5);
+    assert!(materials_per_chunk(cap(64)) > materials_per_chunk(cap(1024)));
+    assert_eq!(materials_per_chunk(cap(u32::MAX)), 1);
+}
+
 /// A standalone roughness texture (`g_tRoughness`, roughness in R) is wired into
 /// the ORM's G lane, with the metalness mask nearest-neighbor resampled into B.
 #[test]

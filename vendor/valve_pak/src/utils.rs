@@ -38,9 +38,8 @@ pub fn read_cstring_buffered<R: BufRead>(reader: &mut R) -> Result<String> {
         .read_until(0, &mut buffer)
         .context("Failed to read cstring")?;
 
-    // Remove the null terminator
-    if buffer.last() == Some(&0) {
-        buffer.pop();
+    if buffer.pop() != Some(0) {
+        anyhow::bail!("Failed to read cstring: unterminated at end of input");
     }
 
     String::from_utf8(buffer).context("Invalid UTF-8 in cstring")

@@ -8,8 +8,10 @@ members = [
 ]
 exclude = ["vendor/valve_pak"]
 
-# valve_pak 0.1.0 (crates.io, MIT) vendored with one fix: VPK::open no longer
-# requires the optional v2 MD5 section. See vendor/valve_pak/src/vpk.rs.
+# valve_pak 0.1.0 (crates.io, MIT) vendored with two fixes: VPK::open no longer
+# requires the optional v2 MD5 section, and it reads directory strings with
+# BufRead::read_until instead of one read_exact per byte (pak01's 144K-entry
+# directory parsed in ~50 ms). See vendor/valve_pak/src/vpk.rs.
 [patch.crates-io]
 valve_pak = { path = "vendor/valve_pak" }
 

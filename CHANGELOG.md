@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.21.0
+
+Faster textured model export, and `model export --max-texture N` for previews. Built for Grimoire's Locker 3D viewer, which bakes its hero models at 1024 px (#48). Full-size output is unchanged apart from GLB buffer layout.
+
+### CLI (`vpkmerge` 0.21)
+
+- New `model export --max-texture N`: each texture embeds at its largest mip whose longer edge fits in N pixels, with no resampling. Slot decisions still come from the full-size texture (placeholder checks, the pure-vs-packed normal probe), so a capped export keeps the same materials and channel packing. A texture with no mip that small embeds its smallest one. Drifter's skin at 1024: a 14 MB GLB instead of 39 MB.
+- Textured exports decode and PNG-encode textures in parallel. Drifter's skin at full size goes from 0.98 s to 0.47 s; its rigged 6-clip export at 1024 takes ~0.14 s (0.82 s at full size on v0.20.1). Full size decodes one material at a time and peaks around twice v0.20.1's memory (mcginnis: 1.1 GB, was 512 MB).
+- VPKs open faster: the directory tree is read with `read_until` instead of one byte at a time (pak01: ~51 ms to ~33 ms per open), and a `model` command given pak01 as both `--vpk` and `--base` opens it once. `model clips --json` on drifter: 127 ms to 50 ms.
+
+### Library (`morphic` 0.11, `vpkmerge-core` 0.21)
+
+- `morphic::model::GlbOptions { max_texture_edge }`. `to_glb_textured`, `vpkmerge_core::export_model` and `export_hero_model` take it as a new argument, and `FileResolver` now requires `Sync` (textures resolve in parallel).
+- `valve_pak` (vendored) carries a second `vpkmerge patch`: the `read_until` directory read above.
+
 ## v0.20.1
 
 Fix: imported soul containers and spirit urns now show in game at every distance. Valve reworked the stock `soul_container.vmdl_c` to ship four LOD meshes, and `soul-container import` / `import-urn` only replaced the first one, so a few steps away the game drew the stock gold orb instead (and an imported urn turned into a soul orb). The importer now makes the imported mesh draw at every LOD and hides the stock ones (#51). All other commands are unchanged.

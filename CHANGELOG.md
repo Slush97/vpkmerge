@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.21.1
+
+Fix: the sound and hero catalogs work again on current Deadlock builds. Valve's recent data changes broke three things Grimoire's Foundry tab relies on. Contributed by @oldreceipt (#55).
+
+- `catalog voiceline` and `catalog cache` no longer fail when the pak has no English caption file (current builds don't ship one). A caption file that is there but unreadable or malformed still errors.
+- A voice line's `hero` is the bare codename again (`atlas`). The game now writes `context_name` as `hero_atlas`, so `--hero atlas` matched nothing and labels kept the hero's name. The catalog cache schema moves to 2, so existing caches rebuild on the next run.
+- `catalog heroes` lists heroes as selectable again. Current builds dropped `m_bPlayerSelectable`, which left the selectable list empty. Selectable now means `m_eHeroDevelopmentState` is `Release`, `DebugOnly` test rigs are skipped, and older data still reads the legacy flag. On build 25841406 that is 41 selectable of 63.
+
 ## v0.21.0
 
 Faster textured model export, and `model export --max-texture N` for previews. Built for Grimoire's Locker 3D viewer, which bakes its hero models at 1024 px (#48). Full-size output is unchanged apart from GLB buffer layout.

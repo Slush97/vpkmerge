@@ -1,0 +1,10 @@
+/* Ult-on-V2-bars patch: show the hero info panel (portrait + ult-ready ring)
+   beside the stacked V2 healthbars. Valve ships the full markup in
+   unit_status_overlay_v2.vxml but collapses it in unit_status_v2.vcss; this
+   later include re-enables it. The height line mirrors the use_new stylesheet
+   (the V2 rule omits height because the panel was never shown). */
+#UnitInfoContainer.unit_info_panel
+{
+	visibility: visible;
+	height: width-percentage(100%);
+}

@@ -15,25 +15,22 @@ pub(super) fn rebuild_panorama_layout_xml_resource(raw: &[u8], xml: &[u8]) -> Re
     let old_laco = resource_block(raw, *b"LaCo")?;
     let format = morphic::kv3::Format::from_payload(old_laco).context("reading LaCo KV3 format")?;
 
-    // Faithfulness gate. Our XML<->LaCo codec is canonicalizing, not byte-exact:
-    // it models the node types real Deadlock layouts use but does NOT yet
-    // reproduce every compiled detail (it normalizes single-child `child`
-    // containers to `vecChildren`, flattens reference-typed attribute values to
-    // plain values, and omits the `sourceLineColumn` source map). Rather than
-    // silently ship a layout whose structure we altered, we only rebuild a file
-    // we can prove we reproduce: decompile the ORIGINAL, recompile it, and
-    // require structural equality (ignoring the debug-only `sourceLineColumn`).
-    // If that fails, bail so the caller's --allow-stale-raw path keeps the
-    // original compiled bytes untouched. Verified against shipped HUD layouts:
-    // simple ones pass; ones using reference attributes / single-child
-    // containers correctly fall back instead of being silently rewritten.
+    // Faithfulness gate. Our XML<->LaCo codec models the node types real
+    // Deadlock layouts use, but its debug-only `sourceLineColumn` comes from the
+    // reconstructed XML (not Valve's source file), and a layout could still
+    // carry a construct it does not model. Rather
+    // than silently ship a layout whose structure we altered, we only rebuild a
+    // file we can prove we reproduce: decompile the ORIGINAL, recompile it, and
+    // require structural equality (ignoring `sourceLineColumn`). If that fails,
+    // bail so the caller's --allow-stale-raw path keeps the original compiled
+    // bytes untouched. Verified against all 434 shipped pak01 layouts (build
+    // 6711): every one reproduces.
     let original = morphic::kv3::decode(old_laco).context("decoding original LaCo KV3")?;
     if !layout_codec_reproduces(&original)? {
         bail!(
             "vpkmerge cannot losslessly rebuild this Panorama layout: its compiled form uses \
-             constructs the XML codec does not yet round-trip (reference-typed attributes or \
-             single-child containers). Re-pack with --allow-stale-raw to keep the original \
-             compiled layout."
+             constructs the XML codec does not yet round-trip. Re-pack with --allow-stale-raw \
+             to keep the original compiled layout."
         );
     }
 
@@ -79,16 +76,17 @@ pub(super) fn compile_panorama_layout_xml(xml: &[u8]) -> Result<Value> {
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     loop {
+        let pos = reader.buffer_position();
         match reader.read_event_into(&mut buf)? {
             Event::Start(start) => {
-                let root = parse_layout_element(&mut reader, &start)?;
+                let root = parse_layout_element(&mut reader, &start, xml, pos)?;
                 return Ok(Value::Object(vec![(
                     "m_AST".to_owned(),
                     Value::Object(vec![("m_pRoot".to_owned(), root)]),
                 )]));
             }
             Event::Empty(start) => {
-                let root = build_layout_node(&reader, &start, Vec::new())?;
+                let root = build_layout_node(&reader, &start, Vec::new(), xml, pos)?;
                 return Ok(Value::Object(vec![(
                     "m_AST".to_owned(),
                     Value::Object(vec![("m_pRoot".to_owned(), root)]),
@@ -105,6 +103,8 @@ pub(super) fn compile_panorama_layout_xml(xml: &[u8]) -> Result<Value> {
 fn parse_layout_element<R: BufRead>(
     reader: &mut Reader<R>,
     start: &BytesStart<'_>,
+    xml: &[u8],
+    start_pos: u64,
 ) -> Result<Value> {
     let tag = xml_name(start.name().as_ref())?;
     if tag == "script" {
@@ -114,9 +114,12 @@ fn parse_layout_element<R: BufRead>(
     let mut children = Vec::new();
     let mut buf = Vec::new();
     loop {
+        let pos = reader.buffer_position();
         match reader.read_event_into(&mut buf)? {
-            Event::Start(child) => children.push(parse_layout_element(reader, &child)?),
-            Event::Empty(child) => children.push(build_layout_node(reader, &child, Vec::new())?),
+            Event::Start(child) => children.push(parse_layout_element(reader, &child, xml, pos)?),
+            Event::Empty(child) => {
+                children.push(build_layout_node(reader, &child, Vec::new(), xml, pos)?);
+            }
             Event::End(end) => {
                 let end_tag = xml_name(end.name().as_ref())?;
                 if end_tag != tag {
@@ -141,7 +144,7 @@ fn parse_layout_element<R: BufRead>(
         buf.clear();
     }
 
-    build_layout_node(reader, start, children)
+    build_layout_node(reader, start, children, xml, start_pos)
 }
 
 fn parse_script_body<R: BufRead>(reader: &mut Reader<R>) -> Result<Value> {
@@ -171,6 +174,37 @@ fn parse_script_body<R: BufRead>(reader: &mut Reader<R>) -> Result<Value> {
 }
 
 fn build_layout_node<R: BufRead>(
+    reader: &Reader<R>,
+    start: &BytesStart<'_>,
+    children: Vec<Value>,
+    xml: &[u8],
+    pos: u64,
+) -> Result<Value> {
+    let mut node = layout_node(reader, start, children)?;
+    if let Value::Object(pairs) = &mut node {
+        pairs.push(("sourceLineColumn".to_owned(), source_line_column(xml, pos)));
+    }
+    Ok(node)
+}
+
+/// resourcecompiler's debug source map on every element node: 1-based line and
+/// the 1-based column of the tag name (one past the `<` at `pos`).
+fn source_line_column(xml: &[u8], pos: u64) -> Value {
+    let pos = usize::try_from(pos).unwrap_or(usize::MAX).min(xml.len());
+    let before = &xml[..pos];
+    let line = before.split(|&b| b == b'\n').count();
+    let line_start = before
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    let column = pos - line_start + 2;
+    Value::Array(vec![
+        Value::Int(i64::try_from(line).unwrap_or(i64::MAX)),
+        Value::Int(i64::try_from(column).unwrap_or(i64::MAX)),
+    ])
+}
+
+fn layout_node<R: BufRead>(
     reader: &Reader<R>,
     start: &BytesStart<'_>,
     children: Vec<Value>,
@@ -245,41 +279,52 @@ fn layout_container(
         .map(|(key, value)| layout_attribute_node(&key, &value))
         .collect::<Vec<_>>();
     sub_nodes.extend(children);
-    if !sub_nodes.is_empty() {
-        pairs.push(("vecChildren".to_owned(), Value::Array(sub_nodes)));
+    // resourcecompiler stores a lone sub-node as `child`, not a one-element array.
+    match sub_nodes.len() {
+        0 => {}
+        1 => pairs.push(("child".to_owned(), sub_nodes.remove(0))),
+        _ => pairs.push(("vecChildren".to_owned(), Value::Array(sub_nodes))),
     }
     Value::Object(pairs)
 }
 
 fn layout_attribute_node(name: &str, value: &str) -> Value {
+    // resourcecompiler stores an `s2r://` attribute value (e.g. `<Image src>`)
+    // as a compiled reference, not a plain string.
+    let child = layout_reference_node(value).unwrap_or_else(|| {
+        let mut pairs = vec![(
+            "eType".to_owned(),
+            Value::String("PANEL_ATTRIBUTE_VALUE".to_owned()),
+        )];
+        // An empty value (`onactivate=""`) compiles with no `name` at all.
+        if !value.is_empty() {
+            pairs.push(("name".to_owned(), Value::String(value.to_owned())));
+        }
+        Value::Object(pairs)
+    });
     Value::Object(vec![
         (
             "eType".to_owned(),
             Value::String("PANEL_ATTRIBUTE".to_owned()),
         ),
         ("name".to_owned(), Value::String(name.to_owned())),
-        (
-            "child".to_owned(),
-            Value::Object(vec![
-                (
-                    "eType".to_owned(),
-                    Value::String("PANEL_ATTRIBUTE_VALUE".to_owned()),
-                ),
-                ("name".to_owned(), Value::String(value.to_owned())),
-            ]),
-        ),
+        ("child".to_owned(), child),
     ])
 }
 
 fn layout_reference_value_node(src: &str) -> Result<Value> {
+    layout_reference_node(src).with_context(|| format!("unsupported Panorama reference {src:?}"))
+}
+
+fn layout_reference_node(src: &str) -> Option<Value> {
     let (node_type, name) = if let Some(path) = src.strip_prefix("s2r://") {
         ("REFERENCE_COMPILED", path)
     } else if let Some(path) = src.strip_prefix("file://") {
         ("REFERENCE_PASSTHROUGH", path)
     } else {
-        bail!("unsupported Panorama reference {src:?}");
+        return None;
     };
-    Ok(Value::Object(vec![
+    Some(Value::Object(vec![
         ("eType".to_owned(), Value::String(node_type.to_owned())),
         ("name".to_owned(), Value::String(name.to_owned())),
     ]))
@@ -481,8 +526,9 @@ mod tests {
 			<Panel id="PanelA" class="foo" hittest="false" />
 		</snippet>
 	</snippets>
-	<Panel class="Bar">
+	<Panel class="Bar" onactivate="">
 		<Label text="hi &amp; bye" />
+		<Image src="s2r://panorama/images/a.vtex" />
 	</Panel>
 </root>
 "#;
@@ -491,10 +537,38 @@ mod tests {
         let recompiled = compile_panorama_layout_xml(printed.as_bytes()).expect("recompile");
         let format = morphic::kv3::Format([1; 16]);
         assert_eq!(
-            morphic::kv3::encode(&recompiled, &format),
-            morphic::kv3::encode(&layout, &format),
+            morphic::kv3::encode(&strip_kv3_key(&recompiled, "sourceLineColumn"), &format),
+            morphic::kv3::encode(&strip_kv3_key(&layout, "sourceLineColumn"), &format),
             "compile->print->compile must be a fixed point"
         );
+    }
+
+    /// Matches resourcecompiler on a shipped layout (`hud_paused`): `<styles>`
+    /// on line 2 behind one tab is `[2, 3]`, its `<include>` behind two is `[3, 4]`.
+    #[test]
+    fn compile_emits_resourcecompiler_source_line_column() {
+        let xml = b"<root>\n\t<styles>\n\t\t<include src=\"s2r://panorama/styles/a.vcss\" />\n\t</styles>\n</root>\n";
+        let layout = compile_panorama_layout_xml(xml).expect("compile");
+        let root = layout
+            .get("m_AST")
+            .and_then(|a| a.get("m_pRoot"))
+            .expect("root");
+        let styles = root.get("child").expect("styles");
+        let include = styles.get("child").expect("include");
+        let slc = |node: &Value| node.get("sourceLineColumn").cloned();
+        assert_eq!(
+            slc(root),
+            Some(Value::Array(vec![Value::Int(1), Value::Int(2)]))
+        );
+        assert_eq!(
+            slc(styles),
+            Some(Value::Array(vec![Value::Int(2), Value::Int(3)]))
+        );
+        assert_eq!(
+            slc(include),
+            Some(Value::Array(vec![Value::Int(3), Value::Int(4)]))
+        );
+        assert_eq!(slc(include.get("child").expect("reference")), None);
     }
 
     /// The faithfulness gate passes for a layout built from our own compiler
@@ -507,28 +581,70 @@ mod tests {
         assert!(layout_codec_reproduces(&layout).expect("gate"));
     }
 
-    /// The gate rejects a layout whose compiled form uses a construct the codec
-    /// canonicalizes away. Here a single-child container stored as `child` (what
-    /// shipped HUD layouts do) recompiles to `vecChildren`, so the gate must fail
-    /// and the rebuild fall back to raw rather than silently restructure it.
+    fn node(pairs: Vec<(&str, Value)>) -> Value {
+        Value::Object(
+            pairs
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+        )
+    }
+
+    fn string(value: &str) -> Value {
+        Value::String(value.to_owned())
+    }
+
+    fn layout(root: Value) -> Value {
+        node(vec![("m_AST", node(vec![("m_pRoot", root)]))])
+    }
+
+    /// Shapes resourcecompiler emits: a lone sub-node as `child`, an `s2r://`
+    /// attribute as `REFERENCE_COMPILED`, an empty attribute with no `name`.
     #[test]
-    fn faithfulness_gate_rejects_single_child_container() {
-        let original = Value::Object(vec![(
-            "m_AST".to_owned(),
-            Value::Object(vec![(
-                "m_pRoot".to_owned(),
-                Value::Object(vec![
-                    ("eType".to_owned(), Value::String("ROOT".to_owned())),
-                    (
-                        "child".to_owned(),
-                        Value::Object(vec![(
-                            "eType".to_owned(),
-                            Value::String("STYLES".to_owned()),
-                        )]),
+    fn faithfulness_gate_accepts_compiler_shaped_nodes() {
+        let attribute = |name: &str, value: Value| {
+            node(vec![
+                ("eType", string("PANEL_ATTRIBUTE")),
+                ("name", string(name)),
+                ("child", value),
+            ])
+        };
+        let image = node(vec![
+            ("eType", string("PANEL")),
+            ("name", string("Image")),
+            (
+                "vecChildren",
+                Value::Array(vec![
+                    attribute(
+                        "src",
+                        node(vec![
+                            ("eType", string("REFERENCE_COMPILED")),
+                            ("name", string("panorama/images/a.vtex")),
+                        ]),
+                    ),
+                    attribute(
+                        "onactivate",
+                        node(vec![("eType", string("PANEL_ATTRIBUTE_VALUE"))]),
                     ),
                 ]),
-            )]),
-        )]);
+            ),
+        ]);
+        let original = layout(node(vec![("eType", string("ROOT")), ("child", image)]));
+        assert!(layout_codec_reproduces(&original).expect("gate"));
+    }
+
+    /// The gate rejects a layout whose compiled form the codec would reshape:
+    /// a one-element `vecChildren` recompiles to `child`, so the rebuild must
+    /// fall back to raw rather than silently restructure it.
+    #[test]
+    fn faithfulness_gate_rejects_one_element_child_array() {
+        let original = layout(node(vec![
+            ("eType", string("ROOT")),
+            (
+                "vecChildren",
+                Value::Array(vec![node(vec![("eType", string("STYLES"))])]),
+            ),
+        ]));
         assert!(!layout_codec_reproduces(&original).expect("gate"));
     }
 

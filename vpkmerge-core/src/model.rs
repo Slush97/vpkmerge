@@ -140,7 +140,7 @@ pub fn export_hero_model(
 /// win), then the base pak. A vanilla export passes the base pak as both; it
 /// opens once, since parsing its directory is most of the open cost and a base
 /// lookup would only find the entries `vpk` already resolved.
-fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak::VPK>> {
+pub(crate) fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak::VPK>> {
     let mut vpks =
         vec![valve_pak::open(vpk).with_context(|| format!("opening {}", vpk.display()))?];
     if let Some(base) = base.filter(|&base| base != vpk) {
@@ -352,6 +352,150 @@ pub fn hero_model_clips(
         format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
     })?;
     clips_resolved(&vpks, &entry)
+}
+
+// A hero preview is one textured, skinned GLB of the hero, then any of its
+// animations as skeleton-only GLBs that a viewer plays on that model. Besides the
+// few clips embedded in the body model, most heroes carry their whole in-game
+// move set as loose NM clips beside it (`<dir>/clips/*.vnmclip_c`).
+
+/// Names of the animations a hero preview can play: the clips embedded in the body
+/// model, then the loose NM clips beside it, sorted. Additive clips are left out:
+/// they only read correctly layered over another animation.
+pub fn hero_preview_clips(
+    vpk: impl AsRef<Path>,
+    codename: &str,
+    base: Option<&Path>,
+) -> Result<Vec<String>> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    let entry = hero_entry(&vpks, codename)?;
+    let model = decode_entry(&vpks, &entry)?;
+    let mut names: std::collections::BTreeSet<String> =
+        model.animations.iter().map(|a| a.name.clone()).collect();
+
+    let dir = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let prefix = format!("{dir}/clips/");
+    let loose: std::collections::BTreeSet<&String> = vpks
+        .iter()
+        .flat_map(valve_pak::VPK::file_paths)
+        .filter(|p| p.starts_with(&prefix) && p.ends_with(".vnmclip_c"))
+        .collect();
+    for path in loose {
+        let additive = read_entry(&vpks, path)
+            .and_then(|bytes| morphic::model::decode_nm_clip(&bytes).ok())
+            .is_none_or(|clip| clip.additive);
+        if !additive {
+            names.insert(path[prefix.len()..path.len() - ".vnmclip_c".len()].to_owned());
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
+/// Writes the hero's skinned, textured body model with its menu pose as a
+/// one-clip animation, so a viewer can show the pose and still play other clips
+/// on the same skeleton. Returns the pose clip's name, or `None` when no menu
+/// pose resolves and the model stands in its bind pose.
+pub fn export_hero_preview(
+    vpk: impl AsRef<Path>,
+    codename: &str,
+    base: Option<&Path>,
+    out: impl AsRef<Path>,
+) -> Result<Option<String>> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    let entry = hero_entry(&vpks, codename)?;
+    let mut model = decode_entry(&vpks, &entry)?;
+    let pose = DEFAULT_POSE_CLIPS
+        .iter()
+        .find_map(|name| resolve_preview_clip(&vpks, &entry, &model, name));
+    let pose_name = pose.as_ref().map(|c| c.name.clone());
+    model.animations = pose.into_iter().collect();
+
+    let resolver = VpkResolver { vpks };
+    let glb = morphic::model::to_glb_textured(&model, &resolver, GlbOptions::default())
+        .with_context(|| format!("writing glb for {entry}"))?;
+    write_file(out.as_ref(), &glb)?;
+    Ok(pose_name)
+}
+
+/// Writes only the skeleton and the animation `clip`, with no meshes or
+/// textures: what a viewer fetches to play it on a model from
+/// [`export_hero_preview`].
+pub fn export_hero_clip(
+    vpk: impl AsRef<Path>,
+    codename: &str,
+    base: Option<&Path>,
+    clip: &str,
+    out: impl AsRef<Path>,
+) -> Result<()> {
+    let vpks = open_vpks(vpk.as_ref(), base)?;
+    let entry = hero_entry(&vpks, codename)?;
+    let mut model = decode_entry(&vpks, &entry)?;
+    let found = resolve_preview_clip(&vpks, &entry, &model, clip)
+        .with_context(|| format!("{codename} has no animation named {clip}"))?;
+    model.animations = vec![found];
+    model.meshes.clear();
+    let glb = morphic::model::to_glb(&model).with_context(|| format!("writing glb for {clip}"))?;
+    write_file(out.as_ref(), &glb)
+}
+
+fn hero_entry(vpks: &[valve_pak::VPK], codename: &str) -> Result<String> {
+    discover_hero_entry(vpks, codename).with_context(|| {
+        format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
+    })
+}
+
+fn decode_entry(vpks: &[valve_pak::VPK], entry: &str) -> Result<morphic::model::Model> {
+    let bytes =
+        read_entry(vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
+    morphic::model::decode(&bytes).with_context(|| format!("decoding {entry}"))
+}
+
+/// `name` as a clip on `model`: embedded in the model first, then a loose NM clip
+/// beside it, tried as `name` and as `<stem>_<name>` (how hero-prefixed clips are
+/// filed). The clip keeps the name it was found under.
+fn resolve_preview_clip(
+    vpks: &[valve_pak::VPK],
+    entry: &str,
+    model: &morphic::model::Model,
+    name: &str,
+) -> Option<morphic::model::Clip> {
+    if let Some(clip) = model
+        .animations
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(name))
+    {
+        return Some(clip.clone());
+    }
+    let (dir, file) = entry.rsplit_once('/')?;
+    let stem = file.strip_suffix(".vmdl_c").unwrap_or(file);
+    for found_as in [name.to_owned(), format!("{stem}_{name}")] {
+        let Some(bytes) = read_entry(vpks, &format!("{dir}/clips/{found_as}.vnmclip_c")) else {
+            continue;
+        };
+        let Ok(clip) = morphic::model::decode_nm_clip(&bytes) else {
+            continue;
+        };
+        let Some(skel) = read_entry(vpks, &nm_skeleton_entry(&clip.skeleton_ref, dir, stem))
+            .and_then(|b| morphic::model::decode_nm_skeleton(&b).ok())
+        else {
+            continue;
+        };
+        return Some(morphic::model::nm_clip_to_clip(
+            &clip,
+            &skel,
+            &model.skeleton,
+            &found_as,
+        ));
+    }
+    None
+}
+
+fn write_file(out: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(out, bytes).with_context(|| format!("writing {}", out.display()))
 }
 
 /// Decodes `entry` and summarizes its clips, falling back to the base-pak donor
@@ -703,7 +847,7 @@ pub fn live_hero_materials(
 /// List selectable live heroes from `scripts/heroes.vdata_c`.
 pub fn live_hero_entries(vpk: impl AsRef<Path>, base: Option<&Path>) -> Result<Vec<LiveHeroEntry>> {
     let vpks = open_vpks(vpk.as_ref(), base)?;
-    live_hero_entries_from_vdata(&vpks)
+    live_hero_entries_from_vdata(&vpks, true)
 }
 
 fn decode_model_entry(
@@ -1395,11 +1539,11 @@ fn inspect_material_full(
     (material_source, Some(mat), textures)
 }
 
-fn live_hero_model_from_vdata(
+pub(crate) fn live_hero_model_from_vdata(
     vpks: &[valve_pak::VPK],
     codename: &str,
 ) -> Result<(String, Option<String>)> {
-    let entries = live_hero_entries_from_vdata(vpks)?;
+    let entries = live_hero_entries_from_vdata(vpks, false)?;
     let wanted = codename.to_ascii_lowercase();
     if let Some(entry) = entries
         .iter()
@@ -1408,7 +1552,7 @@ fn live_hero_model_from_vdata(
         return Ok((entry.model_entry.clone(), entry.localized_name.clone()));
     }
     anyhow::bail!(
-        "no hero_{wanted} in scripts/heroes.vdata_c; selectable codenames include: {}",
+        "no hero_{wanted} in scripts/heroes.vdata_c; codenames include: {}",
         entries
             .iter()
             .take(32)
@@ -1418,7 +1562,10 @@ fn live_hero_model_from_vdata(
     )
 }
 
-fn live_hero_entries_from_vdata(vpks: &[valve_pak::VPK]) -> Result<Vec<LiveHeroEntry>> {
+fn live_hero_entries_from_vdata(
+    vpks: &[valve_pak::VPK],
+    selectable_only: bool,
+) -> Result<Vec<LiveHeroEntry>> {
     let bytes = read_entry(vpks, "scripts/heroes.vdata_c")
         .context("scripts/heroes.vdata_c not found; pass the base pak as --vpk or --base")?;
     let data = morphic::decode_kv3_resource(&bytes).context("decoding scripts/heroes.vdata_c")?;
@@ -1430,11 +1577,13 @@ fn live_hero_entries_from_vdata(vpks: &[valve_pak::VPK]) -> Result<Vec<LiveHeroE
         if !key.starts_with("hero_") {
             continue;
         }
-        if !hero
-            .get("m_bPlayerSelectable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        let flag = |name| hero.get(name).and_then(Value::as_bool);
+        // Builds from 2026-09 on dropped `m_bPlayerSelectable`; a hero is pickable
+        // when it is neither disabled nor in development (same as the roster).
+        let selectable = flag("m_bPlayerSelectable").unwrap_or(
+            !flag("m_bDisabled").unwrap_or(false) && !flag("m_bInDevelopment").unwrap_or(false),
+        );
+        if selectable_only && !selectable {
             continue;
         }
         let Some(model) = hero
@@ -1704,7 +1853,7 @@ fn draw_call_id(c: &DrawCallInfo) -> String {
     )
 }
 
-fn compiled_resource_path(path: &str) -> String {
+pub(crate) fn compiled_resource_path(path: &str) -> String {
     if path.ends_with("_c") {
         path.to_string()
     } else {
@@ -1721,7 +1870,7 @@ fn source_label(index: usize, has_base: bool) -> String {
 }
 
 /// Reads a VPK entry from the first of `vpks` that contains it.
-fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>> {
+pub(crate) fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>> {
     read_entry_with_source(vpks, entry).map(|(bytes, _)| bytes)
 }
 

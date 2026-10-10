@@ -33,8 +33,8 @@ pub struct VertexTarget {
     pub vertex_count: usize,
     pub stride: usize,
     pub meshopt: bool,
-    /// True when this buffer can be displacement-edited: meshopt-compressed,
-    /// not ZSTD, and carrying an `R32G32B32_FLOAT` `POSITION`.
+    /// True when this buffer can be displacement-edited: not ZSTD, and carrying
+    /// an `R32G32B32_FLOAT` `POSITION`.
     pub editable: bool,
     /// True when this buffer carries a `COLOR` attribute (a baked per-vertex
     /// tint), i.e. is a candidate for [`recolor_vertex_buffer`].
@@ -80,7 +80,7 @@ pub fn vertex_targets(vmdl_bytes: &[u8]) -> Result<Vec<VertexTarget>, DecodeErro
                 vertex_count: d.element_count,
                 stride: d.element_size,
                 meshopt: d.meshopt,
-                editable: d.meshopt && !d.zstd && has_float_position(d),
+                editable: !d.zstd && has_float_position(d),
                 has_color: d.fields.iter().any(|f| f.semantic_name == "COLOR"),
             });
         }
@@ -334,14 +334,15 @@ fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
 }
 
 /// Replaces the `POSITION` lane of the vertex buffer at `block_index` with
-/// `new_positions` (same count, same order), re-encodes the buffer in its native
-/// meshoptimizer codec, and splices it back, returning the new `.vmdl_c` bytes.
+/// `new_positions` (same count, same order), returning the new `.vmdl_c` bytes.
 /// All other vertex attributes, every other block, and the model topology are
-/// preserved.
+/// preserved. Same meshopt handling as [`recolor_vertex_buffer`]: a meshopt
+/// buffer is converted to uncompressed (morphic's meshopt encoder round-trips
+/// only through morphic's decoder and renders broken in game); an uncompressed
+/// buffer is patched in place.
 ///
-/// Errors if the buffer is not meshopt-compressed (only those can be re-encoded),
-/// is ZSTD, lacks a float `POSITION`, or if `new_positions.len()` differs from
-/// the vertex count.
+/// Errors if the buffer is ZSTD, lacks a float `POSITION`, or if
+/// `new_positions.len()` differs from the vertex count.
 pub fn replace_vertex_positions(
     vmdl_bytes: &[u8],
     block_index: usize,
@@ -350,23 +351,29 @@ pub fn replace_vertex_positions(
     let (resource, embedded) = parse_embedded(vmdl_bytes)?;
     let desc = find_vertex_buffer(&embedded, block_index)
         .ok_or(DecodeError::Model("no vertex buffer at that block index"))?;
-    if !desc.meshopt {
-        return Err(DecodeError::Model(
-            "only meshopt-compressed vertex buffers can be re-encoded",
-        ));
-    }
     if desc.zstd {
         return Err(DecodeError::Model("ZSTD vertex buffers not supported"));
     }
 
+    let block_offset = resource
+        .blocks()
+        .get(block_index)
+        .ok_or(DecodeError::Model("MVTX block index out of range"))?
+        .offset as usize;
     let raw = resource
         .get_block_by_index(block_index)
         .ok_or(DecodeError::Model("MVTX block index out of range"))?;
     let mut on_disk = desc.decode(raw, true)?;
     on_disk.write_positions(new_positions)?;
 
-    let new_mvtx = encode_vertex_buffer(desc.element_count, desc.element_size, &on_disk.data)?;
-    resource.rebuild_with_block(block_index, &new_mvtx)
+    if desc.meshopt {
+        return convert_meshopt_to_uncompressed(vmdl_bytes, block_index, &on_disk.data);
+    }
+    let mut out = vmdl_bytes.to_vec();
+    out.get_mut(block_offset..block_offset + on_disk.data.len())
+        .ok_or(DecodeError::Model("uncompressed block past end of file"))?
+        .copy_from_slice(&on_disk.data);
+    Ok(out)
 }
 
 /// Reads the first `COLOR` attribute of the vertex buffer at `block_index` as

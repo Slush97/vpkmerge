@@ -5,6 +5,10 @@ members = [
     "vpkmerge-cli",
     "gui/src-tauri",
     "morphic",
+    "vpkmerge-harness",
+    "vpkmerge-mcp",
+    "workbench/crates/core",
+    "workbench/src-tauri",
 ]
 exclude = ["vendor/valve_pak"]
 

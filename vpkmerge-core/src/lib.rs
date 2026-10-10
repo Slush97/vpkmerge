@@ -45,8 +45,9 @@ pub use soundevents::{EventSummary, SoundEvents};
 
 pub mod catalog;
 pub use catalog::{
-    build_hero_sound_index, build_voiceline_index, build_voiceline_index_with_captions,
-    caption_hash, CaptionDb, HeroSound, HeroSoundCategory, VoiceLine, ENGLISH_CAPTIONS_ENTRY,
+    build_hero_sound_index, build_shared_sound_index, build_voiceline_index,
+    build_voiceline_index_with_captions, caption_hash, CaptionDb, HeroSound, HeroSoundCategory,
+    SharedSound, VoiceLine, ENGLISH_CAPTIONS_ENTRY,
 };
 
 pub mod texture_catalog;
@@ -77,14 +78,24 @@ pub use recolor::{
 };
 
 pub mod icon;
-pub use icon::{build_icon_from_template, png_to_rgba8_image};
+pub use icon::{
+    build_icon_addon, build_icon_from_template, build_texture_addon, build_texture_from_template,
+    png_to_rgba8_image, AlphaSource, IconReplacement, TextureReplacement,
+};
+
+pub mod texture_map;
+pub use texture_map::{
+    hero_textures, map_texture_regions, texture_facts, HeroTextures, MaterialTexture,
+    MaterialTextures, RegionMapOptions, RegionMask, TextureFacts, TextureRegion, TextureRegionMap,
+};
 
 pub mod mp3;
-pub use mp3::{apply_mp3_gain, trim_mp3};
+pub use mp3::{apply_mp3_gain, prepare_swap_audio, trim_mp3};
 
 pub mod soundswap;
 pub use soundswap::{
-    donor_is_looped, mint_swapped_clip, parse_mp3_params, swap_event_audio, EventSwap, PoolPolicy,
+    compiled_clip_entry, donor_is_looped, mint_swapped_clip, parse_mp3_params, swap_clip_to_addon,
+    swap_event_audio, swap_event_to_addon, ClipSwap, EventSwap, PoolPolicy,
 };
 
 pub mod hero_recolor;

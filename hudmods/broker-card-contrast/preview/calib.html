@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#0b0a09}#stage{position:absolute;left:100px;top:40px}#missing{position:absolute;left:0;top:1400px;color:#fff;font:12px monospace;white-space:pre}</style>
+</head><body><div id="stage"></div><pre id="missing"></pre>
+<script src="pano.js"></script><script src="fonts.js"></script><script src="cards.js"></script>
+<script>
+const q = new URLSearchParams(location.search);
+const SHEETS = ["citadel_base_styles", "ability_icons", "avatar_image", "citadel_mod_tooltip_shared", "ability_property_icons", "citadel_tooltip_mod_details", "citadel_modified_attribute_label"];
+(async () => {
+  await PanoFonts.loadFromUrl("fonts/");
+  const texts = await Promise.all(SHEETS.map(s => fetch(`css/${s}.vcss`).then(r => r.text())));
+  const override = (await fetch("css/override.vcss").then(r => r.text())).split("\n").filter(Boolean);
+  const n = q.has("stock") ? 0 : Number(q.get("n") ?? override.length);
+  texts[3] += "\n" + override.slice(0, n).join("\n");
+  const assets = await fetch("assets.json").then(r => r.json());
+  const eng = new Pano.Engine(texts, assets, { root: [0, 1, 2, 3, 4, 5], attr: [0, 6, 4, 3] }, { linear: !q.has("srgb"), k: Number(q.get("k") || 1), uiScale: !q.has("nouiscale") });
+  const card = CARDS[q.get("card") || "frenzy"];
+  const el = Pano.build(card.tree());
+  document.getElementById("stage").appendChild(el);
+  el.style.letterSpacing = q.get("ls") || "0";
+  eng.style(el, Number(q.get("scale") || 1));
+  await document.fonts.ready;
+  eng.shrinkLabels(el);
+  const box = el.querySelector("#ModTooltipContainer").getBoundingClientRect();
+  document.getElementById("missing").textContent = JSON.stringify({ missing: [...eng.missing], card: [box.left, box.top, box.width, box.height], fonts: document.fonts.size });
+})();
+</script></body></html>

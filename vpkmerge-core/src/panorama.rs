@@ -631,6 +631,7 @@ fn is_probably_text_source(bytes: &[u8]) -> bool {
         || trimmed.starts_with(b".")
         || trimmed.starts_with(b"#")
         || trimmed.starts_with(b"/")
+        || trimmed.first().is_some_and(u8::is_ascii_alphabetic)
 }
 
 fn compiled_extension_path(
@@ -1029,6 +1030,12 @@ mod tests {
         let (source, note) = readable_panorama_data("panorama/scripts/foo.vjs_c", &data);
         assert_eq!(source, &data);
         assert!(note.is_none());
+
+        // hud.vcss opens with a type selector, not `.`/`#`/`@`.
+        let data = [1, 2, 3, 4, 0, 0, b'C', b'i', b't', b'{'];
+        let (source, note) = readable_panorama_data("panorama/styles/hud.vcss_c", &data);
+        assert_eq!(source, b"Cit{");
+        assert!(note.is_some());
     }
 
     #[test]

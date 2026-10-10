@@ -12,12 +12,17 @@ Rust Cargo workspace:
 vpkmerge-core/        pure-Rust merge engine (lib, v0.6.0)
   src/lib.rs          public API: inspect / detect_conflicts / merge / split
 vpkmerge-cli/         CLI binary `vpkmerge` on top of core (v0.5.0)
+vpkmerge-mcp/         local MCP server `vpkmerge-mcp` on top of core (stdio, rmcp)
 gui/
   src/                Vue 3 + Vite + Tailwind 4 frontend
   src-tauri/          Tauri v2 desktop app wrapping the same engine
+workbench/            LLM agent desktop app driving vpkmerge-mcp (Tauri v2 + React 19)
+  crates/core/        workbench-core: providers, agent loop, MCP + ACP clients, skills, sqlite store
+  src-tauri/          Tauri shell; bundles vpkmerge-mcp as a sidecar
+  src/                React frontend
 morphic/              pure-Rust Source 2 decoder: .vtex_c + KV3 + .vmdl_c->.glb (lib, v0.2.0)
   src/                resource / kv3 / texture / model modules
-  src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed)
+  src/kv3/            binary KeyValues3 codec (reader v1..=5 + LZ4, writer v4 uncompressed, lossless v5 writer)
   fixtures/           committed canonical corpus (.vtex_c + .png + .meta.json; kv3/ holds .vsndevts_c)
   tests/golden.rs     diffs morphic's decode against oracle PNGs
   tests/kv3.rs        decode + uncompressed-v4 round-trip against gigawatt.vsndevts_c
@@ -96,6 +101,64 @@ Frontend stack:
 
 **Visual identity is ferry's paper/sepia palette**, not Grimoire's dark-orange. Tokens copied from `/home/esoc/ferry/app/main/src/vue_lib/`. Intentional aesthetic split.
 
+## MCP server (`vpkmerge-mcp`)
+
+Local stdio MCP server (rmcp) that exposes the engine as intent-shaped tools for an
+LLM host (the workbench app, Claude Code, Claude Desktop). Design:
+[docs/mcp-server-design.md](./docs/mcp-server-design.md); usage + host config:
+[vpkmerge-mcp/README.md](./vpkmerge-mcp/README.md).
+
+```
+vpkmerge-mcp/src/
+  config.rs    game discovery (DEADLOCK_PAK, DEADLOCK_GAME_DIR, Steam libraryfolders.vdf) + staging dir
+  heroes.rs    hero alias join: display name / roster codename / asset namespaces
+  docs.rs      knowledge base: embedded guides + VPKMERGE_DOCS_DIRS, heading-split, BM25
+  tools.rs     Engine: typed params/results, all tool logic, sync and transport-free
+  server.rs    rmcp glue: tool names, model-facing descriptions, spawn_blocking
+```
+
+19 tools. Read-only: `game_status`, `list_heroes`, `browse_sounds`, `browse_textures`,
+`inspect_mod`, `search_docs`, `read_doc`, the painting pair `list_hero_textures` and
+`map_texture_regions` (see "Hero texture painting" below), and the preview trio: `preview_hero` (skinned,
+textured `.glb` opening in the menu pose, in `<staging>/.previews`, newest 5 kept),
+`list_hero_animations` and `preview_hero_animation` (skeleton-only `.glb` per clip,
+newest 40 kept). Clips come from the model plus the loose `clips/*.vnmclip_c` beside it
+(`vpkmerge_core::model::{hero_preview_clips, export_hero_preview, export_hero_clip}`);
+additive clips are not listed. Build to staging: `swap_hero_sound`,
+`swap_sound_clip`, `make_sound_louder`, `replace_textures`, `recolor_hero_vfx`,
+`merge_mods`. Install: `open_in_grimoire` launches Grimoire (`GRIMOIRE_BIN`, PATH, or
+the platform install dir) with the VPK as an argument; Grimoire's import dialog does
+the rest after the user confirms.
+
+- **Staging only.** Build tools write `<VPKMERGE_STAGING_DIR>/<slug>_dir.vpk` and
+  return the path. Nothing writes to `citadel/addons`; installing goes through Grimoire.
+- **Tool logic lives in `tools.rs` on `Engine`**, not in `server.rs`. Add a tool by
+  adding a method + param/result types there, then a thin `#[tool]` wrapper. The doc
+  comments on those types are the JSON-schema descriptions the model reads.
+- **Failures are tool errors, not protocol errors**, and the text says what to call
+  next (unknown hero lists the roster, unknown event points at `browse_sounds`,
+  missing game says which env var to set).
+- **Hero names:** every tool takes a display name. `Roster::resolve` maps it to a
+  hero, and `Hero::owns(key)` matches that hero against whatever key an index uses
+  (`atlas` in VO, `abrams` in sound stems, `archer` in recipes, `hornet_v3` in
+  textures). Asset namespaces that are neither the codename nor the display name go
+  in `EXTRA_ALIASES` in `heroes.rs`.
+- **`browse_sounds` covers three indexes:** per-hero gameplay
+  (`build_hero_sound_index`), shared/world (`build_shared_sound_index`: every
+  soundevents file outside `vo/` and the per-hero files), and voice lines. Events
+  whose clips are all absent from the pak (unreleased content, ~5% of VO) are
+  hidden because a swap has no donor to mint from.
+- **Indexes are memoized per game build** (`BuildFingerprint`), so a Steam update
+  invalidates them without a restart.
+- Tests: `tests/stdio.rs` drives the real binary over JSON-RPC (runs in CI);
+  `tests/live.rs` builds real mods, gated on `DEADLOCK_PAK`.
+- **The workbench app bundles this binary** (`workbench/`): `workbench/scripts/sidecar.mjs`
+  builds `-p vpkmerge-mcp --release` from this workspace into
+  `workbench/src-tauri/binaries/vpkmerge-mcp-<triple>` (Tauri `externalBin`), and the app
+  registers it as the built-in MCP server `vpkmerge`. Renaming the crate's binary
+  breaks that script. `workbench/src-tauri` won't compile until the binary exists, so
+  run `pnpm sidecar` in `workbench/` first (CI touches an empty placeholder instead).
+
 ## Outdated vdata check (`vdata-check`)
 
 A mod that ships a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`)
@@ -123,8 +186,9 @@ leftover the game does not have (`not-in-game`, harmless).
 CLI: `vpkmerge vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`.
 With `--json`, a mod that fails to open gets an `error` field and the exit code stays 0,
 so one bad file never hides the rest of a batch (Grimoire relies on this). Text mode
-exits non-zero if any mod failed to open. Live test: `tests/vdata_check_live.rs`, gated
-on `DEADLOCK_PAK`.
+exits non-zero if any mod failed to open. MCP: `inspect_mod` runs the check whenever
+the mod ships a `.vdata_c` (path lists cut at `limit`, `changed` as a count only).
+Live test: `tests/vdata_check_live.rs`, gated on `DEADLOCK_PAK`.
 
 ## CI
 
@@ -169,6 +233,20 @@ just fixture materials/foo.vtex_c bc7   # add one fixture from local Deadlock
 reads v1..=5 (incl. v5 two-buffer/LZ4), writes **v4 uncompressed** (no LZ4 *encoder*
 needed; the engine reads either). `morphic::{decode_kv3_resource, encode_kv3_resource}`
 wrap the resource envelope, preserving the format GUID and `RED2` on re-encode.
+
+The v4 path goes through the folded `Value` tree, which drops typed-array framing,
+narrow numeric tags and value flags (fine for soundevents, fatal for models: untyped
+arrays load as an error model). `kv3::decode_lossless` -> `kv3::Document` keeps all of
+it, and `kv3::encode_v5` writes it back as LZ4 **v5** (`src/kv3/wire.rs`).
+`kv3::encode_v5_like(value, template)` / `morphic::encode_kv3_resource_like` encode an
+edited `Value` borrowing each node's wire shape from the original by path, so
+`Value`-based editors keep Valve's framing. Gate: `examples/kv3_v5_roundtrip.rs` over
+all of pak01 (285K KV3 blocks, 252K v5): decompressed buffers and every
+compressor-independent header field byte-identical to Valve's. The four v5 header
+fields VRF leaves unnamed are fitted: @104 = typed nodes, @46 = arrays (u16
+saturated), @112/@116 = main-buffer arrays / their slots (an empty array takes one
+slot; an auxiliary-buffer array counts only at >= 32 elements). `examples/kv3_arrays.rs`
+prints any entry's array framing.
 
 `vpkmerge-core::soundevents::SoundEvents` is the soundevents-aware layer (load from
 file/VPK, JSON projection, `swap_vsnd`, `set_event_field`, re-encode). Exposed as
@@ -252,6 +330,15 @@ any other tree.
   `sound-swaps/seven-vineboom-melee/`): collapse + custom path puts a downloaded vine-boom
   MP3 on `Seven.Melee.Swing` only; in-game reconfirm pending. One event per invocation
   (multi-event-per-hero in one addon would need chained soundevents edits, a follow-up).
+- **Build 2026-09-29 removed the per-hero melee events.** The swing is now one shared
+  event, `Hero.Default.Melee.Swing` in `soundevents/hero/_shared.vsndevts_c`, so a
+  melee swap changes every hero and the per-hero `Seven.Melee.Swing` recipe above no
+  longer applies. Collapse + custom path still isolates the 204 clips that one hero's
+  event borrows from another's (e.g. `Wraith.Telekenisis.Slam` plays Lash's slam clips).
+- Clip refs resolve case-insensitively (`compiled_clip_entry` lowercases): `vsnd_files`
+  can say `..._groupA-001.vsnd` while the pak stores `..._groupa-001.vsnd_c`.
+- One-call forms shared by the CLI and the MCP server: `swap_event_to_addon`,
+  `swap_clip_to_addon`, `prepare_swap_audio`, `build_icon_addon`.
 
 **Ability music map (which ult fits a music swap):** `examples/ult_sound_map.rs`
 generates, from `scripts/heroes.vdata_c` (`ESlot_Signature_4` = ult) +
@@ -287,6 +374,14 @@ the search key. Exposed as `vpkmerge catalog voiceline --vpk <VPK> [--hero CODEN
 [--search TEXT] [--limit N] [--json]` (table or machine array; logs a truncation note,
 never a silent cap). Example: `examples/voiceline_index.rs`. Full design + findings:
 [../grimoire/docs/foundry-tab-design.md](../grimoire/docs/foundry-tab-design.md).
+
+Build 2026-09-29 no longer ships the compiled `.dat` in pak01 (captions are loose
+`.txt` only), so `build_voiceline_index` treats a missing caption DB as empty instead
+of failing (a present but malformed one still errors). Each row (`VoiceLine`, `HeroSound`, and the new `SharedSound` from
+`build_shared_sound_index`) carries `source`: the `.vsndevts_c` entry that defines the
+event, which is what an event swap needs. `hero` on a voice line is the event's
+`context_name` with its `hero_` prefix stripped (the game now writes `hero_atlas`), so
+it is the bare roster codename and `--hero atlas` matches.
 
 ## Foundry texture / icon index (`catalog texture`)
 
@@ -359,8 +454,12 @@ loc_dir, lang)` reads the codenames + availability flags from `scripts/heroes.vd
 (inside the pak) and resolves each `hero_<codename>` token against
 `citadel_gc_hero_names/citadel_gc_hero_names_<lang>.txt` (loose, located via
 `localization_dir_for_pak`), returning `HeroInfo { codename, name, selectable,
-in_development, disabled }`. On the live build that is 38 selectable / 59 total, with
-the non-obvious mappings correct (`atlas`->Abrams, `forge`->McGinnis,
+in_development, disabled }`. On the live build (25841406, 2026-10-09) that is 41 selectable / 63
+total. Current builds replaced `m_bPlayerSelectable` with `m_eHeroDevelopmentState`:
+`selectable` is `EHeroDevState_Release` (PreRelease heroes such as Violet, Deadman
+Danny and Nurse Harrow are not), `DebugOnly` nodes are skipped, and nodes with no
+state need a positive `m_HeroID`. Legacy data still reads `m_bPlayerSelectable`. The non-obvious mappings are
+correct (`atlas`->Abrams, `forge`->McGinnis,
 `familiar`->Rem, `orion`->Grey Talon, `synth`->Pocket, `frank`->Victor). A missing
 localization tree degrades names to the codename (still returns the roster + flags).
 
@@ -373,6 +472,36 @@ hardcoded 14-hero map in `examples/ult_sound_map.rs`. **Ability / item display n
 are the remaining piece: the strings are in the same localization tree but join to
 their icons only through a fuzzy filename / vdata-node mapping (a later pass); the
 catalog's filename-derived `label` already reads fine for those.
+
+## Face video (flipbook screen material)
+
+`tools/make-face-video.sh <video> <mod_dir.vpk> <out_dir.vpk> [fps=24] [grid=32]
+[maps=shop]` puts an arbitrary video onto a flipbook-screen material (the RUINER
+Billy mechanism: an NxN frame atlas played back by a dynamic expression stepping
+`g_vAlbedoTexcoordOffset1`, mesh UVs parked in the first cell). ffmpeg extracts
+frames, `vpkmerge-core/examples/face_video.rs` tiles them into the donor sheet
+(RGB only; donor alpha kept; unused cells blacked), re-encodes the mip chain in
+the sheet's own format, retimes the expression to the real frame count/fps
+(local-free form, compiled by `morphic::vfx_expr`), rebuilds the mod's nested
+`maps/ui/*` VPKs so shop/postgame scenes match (`maps` = `shop`/`all`/`none`),
+and packs one addon VPK that installs at higher priority than the base mod.
+Frame budget is `grid^2` (32 -> 1024 frames = 42.7 s at 24 fps; fewer, larger
+cells via smaller grids). Defaults target RUINER Billy's entries; `--sheet-entry`
+/ `--vmat-entry` retarget any mod with the same contract. Verified offline
+(VRF strict load + expression decompile + true-color frame dump); in-game
+verification pending.
+
+`--whole-material` is the stock-hero mode (no parked screen UVs needed): it
+additionally sets `g_vAlbedoTexcoordScale1 = 1/grid` so the hero's normal UV
+layout compresses into one cell per frame, i.e. each cell is a full albedo
+variant and the whole skin plays the flipbook. Only clean when the material's
+UVs stay inside [0,1]: check with `examples/uv_range.rs` (prints per-material
+UV bounds + a FLIPBOOK-CLEAN verdict). The sheet keeps the donor albedo's size
+(`replace_mip_chain` is dimension-locked), so a 4096 skin gives 8x8 = 64 frames
+at 512px. Whole-material mode writes opaque alpha (the donor's albedo-alpha
+mask layout is spatially wrong once cells are frames). First target: Paradox
+(`chrono_v2` measured flipbook-clean; content generators
+`tools/gen-time-vortex.py`, `tools/gen-matrix-rain.py`).
 
 ## Texture recolor (`.vtex_c`)
 
@@ -454,16 +583,41 @@ a vertex index share that UV exactly, so a connected component is exactly an isl
 hero UVs tile/mirror and inflate area well past 100%.
 
 `vpkmerge model mask --vpk <VPK> [--base <VPK>] (--hero CODENAME | --entry PATH)
-[--by island|part|material] [--part NAME] [--list] [--atlas PNG]
+[--by island|part|material|bone] [--part NAME] [--list] [--atlas PNG]
 [--select ID... --mask PNG] [--resolution N]`. Core API:
 `model_uv_segments` / `bake_uv_atlas` / `bake_uv_mask` (+ `hero_model_entry`).
 
-**Caveat (Deadlock heroes):** `--by part` and `--by material` give clean masks;
-island mode on hero **bodies** is streaky because the body mesh carries stretched
-bridging UV triangles (the same overlapping/mirrored UVs that defeat Cycles
-baking). Use `--part body` to drop the many small weapon islands, but expect
-material/part masks to be the cleaner region selector on these specific assets.
-Island mode is clean on models with proper UV charts.
+**Stitch triangles (fixed 2026-09-30):** island masks on hero bodies used to be
+streaky. The cause was zero-area stitch triangles: a third of Vindicta's dress
+triangles have two corners at one 3D position with UVs on opposite sides of a seam.
+They never render, but in UV space they span half the sheet, and they also joined
+unrelated islands. `uvmask` now skips every triangle with zero 3D area, so island
+masks are clean (Vindicta's dress: 1388 islands). `--by bone` gives one region per
+dominant skin bone, with bones under 1% of the UV area folded into their parent;
+labels are bone names, so regions read as body areas.
+
+### Hero texture painting (`vpkmerge_core::texture_map`, MCP)
+
+`hero_textures(vpk, base, codename)` lists every texture the live model
+(`heroes.vdata_c` `m_strModelName`) samples, per material: slot, real size, format,
+`ycocg`, `uniform` (every texel one value: the 1x1 compiler constants), alpha range,
+vertex-color materials, non-identity `TexCoord` params, and textures shared between
+materials. `map_texture_regions(..., texture, RegionMapOptions { by, select, padding,
+labels }, out_dir)` segments only the draw calls whose material samples that texture
+(`morphic::model::segments_where`) and reports per region: texel coverage, bounds,
+patch count, `shared` (texels another region also samples: mirrored L/R parts sit on
+the same texels, e.g. Vindicta's arms are 100% shared), `uv_reuse`, mirrored share
+and top skin bones. It writes `texture.png` (RGB), `texture-alpha.png` (alpha is a
+data channel on material textures: the dress albedo's alpha is ~0 everywhere), an
+overlay at <= 1024 px with ids drawn at each region's deepest interior texel, and a
+full-size mask that grows `padding` texels into unused space only.
+`build_texture_addon` / `build_texture_from_template` (icon.rs) composite a PNG
+through an optional mask and keep the template's alpha (`AlphaSource::Original`);
+they refuse YCoCg DXT5 (decodes, but no forward transform). MCP: `list_hero_textures`,
+`map_texture_regions`, `replace_textures` (renamed from `create_icon_mod`; `alpha:
+auto` = PNG alpha under `panorama/`, original elsewhere). Live test:
+`hero_texture_paints_through_a_region_mask`. Image generation is not wired in: an
+agent paints `texture.png` itself.
 
 **First reskin consumer:** `vpkmerge-core/examples/reskin_chrono_stained_glass.rs`
 (Paradox "Stained Glass") drives its region selection off a baked **part** mask
@@ -682,10 +836,16 @@ null round-trip measured 0.51 deg mean rotation diff). Helper examples:
 `gen_obvious_anim_glb.rs` (synthesize an exaggerated `.glb` with no Blender) and
 `anim_glb_diff.rs` (the null-round-trip per-bone angle diff tool).
 
-**End-state design** for hand-authoring animations in Blender (export rig to glTF,
-key it, import + pack) and what's still missing (a v5 clip *encoder* that writes an
-arbitrary-length pose blob in-engine, so translation/scale adds + frame-count
-changes become engine-viable, vs. today's equal-length in-place patch):
+**Full re-encode (v5; in-game confirmed 2026-09-29: rotation rebuild, frame-count change, added translation channels):** `reencode_nm_clip_full` now rebuilds the
+clip through `encode_kv3_resource_like` (v5 with Valve's typed framing) instead of the
+v4 writer whose output the engine loaded but never animated. On top of it,
+`import_glb_onto_nm_clip_full` (+ `resample_clip`) adds translation/scale channels the
+slot keeps static and resamples to a new frame count (same duration);
+`nm_clip_import_glb --full [--frames N]` drives it, and `gen_obvious_anim_glb --bob
+BONE:UNITS` synthesizes a translation test. A frame-count change on a clip with
+per-frame root motion is refused. Test addons: `exports/anim-v5-tests/`
+(a = full rotation-only, b = 21 -> 42 frames, c2 = neck/clavicle translation added, d =
+control on an existing channel; Yamato reload slots). End-state design:
 [docs/anim-authoring-pipeline.md](docs/anim-authoring-pipeline.md).
 
 ## Related

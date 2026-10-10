@@ -159,6 +159,18 @@ So the encoder is feature-complete for the importer:
 - **Engine timing** is clip-duration-driven (confirmed via the Warden slow-mo test),
   so a resampled clip plays at the slot's duration.
 
+**Update (2026-09-29): v5 writer landed; test (a) IN-GAME CONFIRMED.** A rotation edit rebuilt whole through the v5 path animates in the live engine, so the earlier inert result came from the lossy v4 writer, not from rebuilding the clip. (b) frame-count change and (c2) added translation channels (neck +20, clavicles +15 on bones the slot kept translation-static) also confirmed. With that, the in-place limits below no longer bind: `nm_clip_import_glb --full` takes any rotation/translation/scale edit at any frame count. Still true: replace-only slots, same skeleton, bone masks, cloth bones. The v4 output was
+built from the folded `Value` tree, which also dropped Valve's typed-array framing
+(`m_compressedPoseOffsets` is an auxiliary-buffer `UINT32` array,
+`m_trackCompressionSettings` a typed `OBJECT` array) and value flags. The same loss is
+what turned an untyped model re-encode into an error model, so it is at least as
+likely a cause of the inert clip as v4 itself. `morphic::kv3::encode_v5` (lossless,
+byte-identical buffers against all of pak01) plus `encode_v5_like` now back
+`reencode_nm_clip_full`, and `import_glb_onto_nm_clip_full` adds translation/scale
+channels and frame-count resampling on top. Test addons in `exports/anim-v5-tests/`:
+(a) rotation-only through the full path, (b) 21 -> 42 frames, (c) a head translation
+channel added. VRF parses all three as `AnimationClip`.
+
 ## De-risking order
 
 The full clip encoder landed first (`reencode_nm_clip` in-place + the offline

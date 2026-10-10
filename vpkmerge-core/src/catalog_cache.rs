@@ -29,8 +29,9 @@ use crate::catalog::{build_voiceline_index, VoiceLine};
 use crate::texture_catalog::{build_texture_index, TextureEntry};
 
 /// On-disk format version. Bump when the cached JSON shape or value semantics
-/// change so older caches are rebuilt. Version 2 normalizes VO hero contexts.
-pub const CACHE_SCHEMA_VERSION: u32 = 2;
+/// change so older caches are rebuilt. Version 2 normalizes VO hero contexts;
+/// version 3 adds each row's `source` entry.
+pub const CACHE_SCHEMA_VERSION: u32 = 3;
 
 /// Cache-file stem for the voice-line index.
 const KIND_VOICELINE: &str = "voiceline";

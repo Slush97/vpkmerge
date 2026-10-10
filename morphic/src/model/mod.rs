@@ -44,7 +44,8 @@ pub use femodel::{
 };
 pub use glb::{to_glb, to_glb_textured, FileResolver, GlbOptions};
 pub use gltf_import::{
-    apply_animation, import_glb_onto_nm_clip, read_glb_animation, GltfAnimation, GltfBoneTrack,
+    apply_animation, import_glb_onto_nm_clip, import_glb_onto_nm_clip_full, read_glb_animation,
+    resample_clip, GltfAnimation, GltfBoneTrack,
 };
 pub use math::{Mat4, Quat, Vec3};
 pub use mesh::{
@@ -62,13 +63,14 @@ pub use pose::{
 pub use skeleton::{invert_remap, localize_joints, remap_table, Bone, Skeleton};
 pub use topology::{
     append_skinned_draw_call, collapse_lods_to_mesh, draw_call_targets, reencode_all_mdat_identity,
-    remove_draw_calls_by_material, replace_mesh_group, replace_mesh_group_uncompressed,
-    replace_mesh_part, replace_mesh_part_uncompressed, set_draw_call_groups, set_model_material,
-    DrawCallGroup, DrawCallInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup,
-    ReplacedMeshPart,
+    remove_draw_calls_by_material, remove_part_draw_calls, replace_draw_call_uncompressed,
+    replace_mesh_group, replace_mesh_group_uncompressed, replace_mesh_part,
+    replace_mesh_part_uncompressed, set_draw_call_groups, set_model_material, DrawCallGroup,
+    DrawCallInfo, PrimitiveSelection, RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart,
 };
 pub use uvmask::{
-    atlas_png, mask_png, segment_color, segment_coverage, segments, Segment, SegmentBy,
+    atlas_png, mask_png, segment_color, segment_coverage, segments, segments_where, Segment,
+    SegmentBy,
 };
 
 use crate::error::DecodeError;

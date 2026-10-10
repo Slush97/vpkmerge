@@ -1,0 +1,529 @@
+<title>Broker Card Contrast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: dark shop-floor ground; one card at a time at in-game 1440p size, stock beside override or wiped against the real screenshot; ledger and editor below. */
+:root {
+  --ground: #15120f;
+  --panel: #1e1a16;
+  --line: #342d26;
+  --ink: #ece4d6;
+  --muted: #a69c8d;
+  --accent: #d8ec57;
+  --pass: #8fd694;
+  --fail: #ff7a66;
+  --font-ui: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+body { background: var(--ground); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5; }
+.page { max-width: 1320px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; display: grid; gap: 26px; }
+h1, h2 { text-wrap: balance; margin: 0; font-weight: 600; }
+h1 { font-size: 30px; }
+h2 { font-size: 19px; }
+p { margin: 0; max-width: 72ch; }
+code { font-family: var(--font-data); font-size: 0.92em; }
+.lede, .note { color: var(--muted); }
+.note { font-size: 13px; }
+.eyebrow { font-family: var(--font-data); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+header.top { display: grid; gap: 10px; }
+
+.fontbar { border: 1px solid var(--accent); border-radius: 4px; padding: 14px 16px; display: grid; gap: 8px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.fontbar strong { color: var(--ink); }
+.fontbar .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.fontbar code.path { user-select: all; background: var(--ground); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; overflow-wrap: anywhere; }
+.fontstate { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--ground); padding-block: 10px; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { font: 500 13px var(--font-ui); color: var(--muted); background: transparent; border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.btn { font: 500 13px var(--font-ui); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.seg button:focus-visible, .btn:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.check { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.check input { accent-color: var(--accent); margin: 0; }
+.tally { margin-left: auto; font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.bad { color: var(--fail); }
+.good { color: var(--pass); }
+
+.stage { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+.col { display: grid; gap: 8px; min-width: 0; }
+.col-label { display: flex; justify-content: space-between; gap: 12px; font-family: var(--font-data); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.col-label .n { letter-spacing: 0; text-transform: none; }
+.fit { position: relative; }
+.fit > .zoom { transform-origin: 0 0; }
+.hold { position: absolute; left: -9999px; top: 0; opacity: 0; pointer-events: none; }
+body.mark .fail-outline { outline: 1.5px dashed #ff4d4d; outline-offset: 1px; }
+
+.wipe { position: relative; }
+.wipe img.ref { position: absolute; pointer-events: none; z-index: 200; }
+.wipe .handle { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; z-index: 201; }
+.wipe .tag { position: absolute; z-index: 202; top: 6px; font: 600 11px var(--font-data); letter-spacing: 0.06em; text-transform: uppercase; background: #000a; color: var(--ink); padding: 2px 6px; border-radius: 2px; pointer-events: none; }
+.wipebar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.wipebar input[type="range"] { width: min(360px, 70vw); accent-color: var(--accent); }
+
+.ledger-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+table.ledger { border-collapse: collapse; width: 100%; font-family: var(--font-data); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ledger th, .ledger td { padding: 6px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.ledger th:first-child, .ledger td:first-child { text-align: left; font-family: var(--font-ui); font-size: 13.5px; white-space: normal; min-width: 180px; }
+.ledger thead th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; vertical-align: bottom; }
+.ledger tbody tr:last-child td { border-bottom: 0; }
+.ledger .dim { color: var(--muted); }
+.ledger td small { color: var(--muted); font-family: var(--font-data); font-size: 11px; }
+
+.editor { display: grid; gap: 10px; }
+.editor-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.editor-status { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+textarea#css-edit { width: 100%; box-sizing: border-box; min-height: 320px; resize: vertical; font: 12.5px/1.55 var(--font-data); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; white-space: pre; overflow-x: auto; }
+</style>
+
+<div class="page">
+  <header class="top">
+    <div class="eyebrow">Deadlock HUD fix &middot; WCAG 2.x AA</div>
+    <h1>Broker Card Contrast</h1>
+    <p class="lede">The corrupted item tooltip, rendered from the game's own layout and stylesheets at 1440p. Valve's cascade and layout rules run in the browser, cards blend in linear light the way Source 2 does, and the tint on corrupted stats multiplies text and panels as in game. Wipe across either card to check it against a real screenshot.</p>
+  </header>
+
+  <section class="fontbar" id="fontbar" hidden>
+    <p><strong>Load the game fonts for exact text.</strong> They ship with Deadlock and are licensed with it, so this page doesn't include them. Pick every file in this folder once; your browser keeps them for next time.</p>
+    <code class="path" id="font-path">steamapps/common/Deadlock/game/citadel/panorama/fonts</code>
+    <div class="row">
+      <label class="btn" for="font-files">Choose font files</label>
+      <input type="file" id="font-files" multiple accept=".otf,.ttf" hidden>
+      <span class="fontstate" id="font-state">Using fallback fonts. Text widths and wrapping will differ from the game.</span>
+    </div>
+  </section>
+
+  <div class="controls" role="group" aria-label="Preview controls">
+    <div class="seg" id="seg-card" role="group" aria-label="Item">
+      <button type="button" id="c-frenzy" data-v="frenzy" aria-pressed="true">Frenzy</button>
+      <button type="button" id="c-focus" data-v="focuslens" aria-pressed="false">Focus Lens</button>
+    </div>
+    <div class="seg" id="seg-view" role="group" aria-label="View">
+      <button type="button" id="v-side" data-v="side" aria-pressed="true">Stock vs override</button>
+      <button type="button" id="v-wipe" data-v="wipe" aria-pressed="false">Against the game</button>
+    </div>
+    <label class="check" for="mark-fails"><input type="checkbox" id="mark-fails" checked> Outline failing text</label>
+    <span class="tally" id="tally">rendering&hellip;</span>
+  </div>
+
+  <section class="stage" id="stage" aria-label="Tooltip cards"></section>
+  <div class="hold" id="hold" aria-hidden="true"></div>
+
+  <section class="editor" aria-labelledby="ledger-h">
+    <h2 id="ledger-h">Contrast ledger</h2>
+    <p class="note" id="ledger-note">Each ratio is computed in linear light through every layer between the card art and the text, including the corrupted tint, and reports the level 99% of the text's area beats. AA needs 4.5:1, or 3:1 for large text.</p>
+    <div class="ledger-wrap"><table class="ledger" id="ledger"></table></div>
+  </section>
+
+  <section class="editor" aria-labelledby="edit-h">
+    <h2 id="edit-h">Override CSS</h2>
+    <p class="note">This is <code>corrupted_contrast.vcss</code> as installed. Edits restyle the override card and the ledger as you type. Copy it back into <code>hudmods/broker-card-contrast/</code> and run <code>build.sh</code> to ship it.</p>
+    <div class="editor-bar">
+      <button type="button" class="btn" id="btn-copy">Copy CSS</button>
+      <button type="button" class="btn" id="btn-reset">Reset to installed</button>
+      <span class="editor-status" id="edit-status"></span>
+    </div>
+    <textarea id="css-edit" spellcheck="false" aria-label="Override CSS"></textarea>
+  </section>
+</div>
+
+<script src="pano.js"></script>
+<script src="fonts.js"></script>
+<script src="cards.js"></script>
+<script>
+"use strict";
+if (location.hash === "#debug") window.DEBUG_BOXES = [];
+const SHEETS = ["citadel_base_styles", "ability_icons", "avatar_image", "citadel_mod_tooltip_shared", "ability_property_icons", "citadel_tooltip_mod_details", "citadel_modified_attribute_label"];
+const SCOPES = { root: [0, 1, 2, 3, 4, 5], attr: [0, 6, 4, 3] };
+const UI_SCALE = 4 / 3;
+const LETTER_SPACING = "-0.01em";
+// Screenshot placement relative to the card, found by aligning the render to each capture.
+const REF_OFFSET = { frenzy: [2.98, 0.02], focuslens: [-3.02, 12.02] };
+
+const state = { card: "frenzy", view: "side", wipe: 50 };
+let sheetTexts, stockShared, assets, shipped;
+const images = {};
+
+const $ = id => document.getElementById(id);
+const lin = v => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+const LUT = new Float64Array(256).map((_, i) => lin(i));
+const lumLin = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+function loadImage(url) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+      res({ w: c.width, h: c.height, d: ctx.getImageData(0, 0, c.width, c.height).data, img });
+    };
+    img.onerror = () => res(null);
+    img.src = url;
+  });
+}
+
+function overrideText(src, lines) {
+  return stockShared + "\n" + (lines == null ? src : src.split("\n").filter(Boolean).slice(0, lines).join("\n"));
+}
+
+function render(cardKey, css, host) {
+  const texts = sheetTexts.slice();
+  texts[3] = css;
+  const eng = new Pano.Engine(texts, assets, SCOPES, { linear: true });
+  const el = Pano.build(CARDS[cardKey].tree());
+  el.style.letterSpacing = LETTER_SPACING;
+  const zoom = document.createElement("div");
+  zoom.className = "zoom";
+  zoom.appendChild(el);
+  host.replaceChildren(zoom);
+  eng.style(el, UI_SCALE);
+  return el;
+}
+
+// ----- contrast in linear light -----
+function textElements(root) {
+  const out = [];
+  for (const el of root.querySelectorAll("label, span")) {
+    const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim();
+    if (!own || !el.__pano) continue;
+    const text = el.textContent.trim().replace(/\s+/g, " ");
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1 || getComputedStyle(el).visibility === "hidden") continue;
+    out.push({ el, text });
+  }
+  return out;
+}
+
+function chain(el, root) {
+  const list = [];
+  for (let n = el; n && n !== root.parentElement; n = n.parentElement) list.unshift(n);
+  return list;
+}
+
+function describe(el) {
+  const p = el.__pano.props;
+  const lab = el.closest("citadelmodifiedattributelabel");
+  const role = el.id === "AdditionalText" ? "stat name" : el.id === "BaseLabel" || el.id === "ModifiedLabel" ? (lab && lab.id === "ImportantStatValue" ? "box value" : lab && lab.id === "CooldownLabel" ? "cooldown" : "stat value")
+    : el.classList.contains("PostfixValue") ? "unit" : el.classList.contains("corrupted_rng") ? "RANDOMIZED tag" : el.classList.contains("ImportantStatType") ? "box label"
+    : el.classList.contains("ModName") ? "item name" : el.classList.contains("ModPurchasedLabel") ? "owned" : el.closest("#CorruptedLabel") ? "stamp"
+    : el.classList.contains("ActivePassiveLabel") ? "section header" : el.classList.contains("componentsLabel") ? "components label" : el.classList.contains("componentModName") ? "component"
+    : el.id === "ExtraInfo" ? "description" : el.tagName === "SPAN" ? `description .${el.className}` : "text";
+  const kind = lab && lab.classList.contains("Corrupted") ? (lab.classList.contains("isNegative") ? " (penalty)" : " (bonus)") : "";
+  return { role: role + kind, size: parseFloat(p["font-size"] || "0") };
+}
+
+function measure(root, cardRect) {
+  const results = [];
+  const backerHost = root.querySelector("#ModTooltipContainer");
+  const zoomTotal = cardRect.width / 450;
+  for (const { el, text } of textElements(root)) {
+    const nodes = chain(el, root);
+    let textColor = null, fontSize = 16, weight = 400;
+    const brushes = [];
+    const layers = [];
+    for (const n of nodes) {
+      const info = n.__pano;
+      if (!info) continue;
+      const p = info.props;
+      if (p.color) textColor = Pano.parseColor(p.color) || textColor;
+      if (p["font-size"]) fontSize = parseFloat(p["font-size"]);
+      if (p["font-weight"]) weight = { bold: 700, "semi-bold": 600, black: 900 }[p["font-weight"]] || 400;
+      if (info.brush) brushes.push({ b: info.brush, rect: n.getBoundingClientRect() });
+      const op = info.opacity ?? 1;
+      layers.push({ n, info, rect: n.getBoundingClientRect(), op, brushCount: brushes.length });
+      if (n === el) break;
+    }
+    if (!textColor) textColor = [255, 255, 255, 1];
+    const r = el.getBoundingClientRect();
+    const samples = [];
+    const step = Math.max(1, Math.sqrt((r.width * r.height) / 900));
+    for (let y = r.top + step / 2; y < r.bottom; y += step) for (let x = r.left + step / 2; x < r.right; x += step) {
+      let bg = [0, 0, 0];
+      let opAcc = 1;
+      for (let li = 0; li < layers.length; li++) {
+        const L = layers[li];
+        opAcc *= L.op;
+        const mul = [1, 1, 1];
+        let mulA = 1;
+        for (let bi = 0; bi < L.brushCount; bi++) {
+          const { b, rect } = brushes[bi];
+          for (let k = 0; k < 3; k++) mul[k] *= b.rgb[k] / 255;
+          const t = Math.min(1, Math.max(0, (x - rect.left) / rect.width));
+          mulA *= b.a0 + (b.a1 - b.a0) * t;
+        }
+        const paint = (rgb, a) => {
+          const aa = a * opAcc * mulA;
+          for (let k = 0; k < 3; k++) bg[k] = aa * lin(rgb[k]) * lin(mul[k] * 255) + (1 - aa) * bg[k];
+        };
+        const img = L.info.bgImage && images[L.info.bgImage.srgb];
+        if (img) {
+          const size = L.info.props["background-size"] || "auto";
+          let u, v;
+          if (/100%\s+100%/.test(size)) { u = (x - L.rect.left) / L.rect.width * img.w; v = (y - L.rect.top) / L.rect.height * img.h; }
+          else { u = (x - L.rect.left) / zoomTotal; v = (y - L.rect.top) / zoomTotal; }
+          u = Math.floor(u); v = Math.floor(v);
+          if (u >= 0 && v >= 0 && u < img.w && v < img.h) {
+            const o = (v * img.w + u) * 4;
+            paint([img.d[o], img.d[o + 1], img.d[o + 2]], img.d[o + 3] / 255);
+          }
+        }
+        if (L.info.bgColor) paint(L.info.bgColor, L.info.bgColor[3]);
+        if (L.info.bgGradient) {
+          const g = L.info.bgGradient;
+          const t = Math.min(1, Math.max(0, (x - L.rect.left) / L.rect.width));
+          const c0 = g.stops[0][1], c1 = g.stops[g.stops.length - 1][1];
+          paint([0, 1, 2].map(k => c0[k] + (c1[k] - c0[k]) * t), c0[3] + (c1[3] - c0[3]) * t);
+        }
+      }
+      // text
+      let ta = textColor[3];
+      let mul = [1, 1, 1];
+      for (const { b, rect } of brushes) {
+        for (let k = 0; k < 3; k++) mul[k] *= b.rgb[k] / 255;
+        const t = Math.min(1, Math.max(0, (x - rect.left) / rect.width));
+        ta *= b.a0 + (b.a1 - b.a0) * t;
+      }
+      for (const L of layers) ta *= L.op;
+      const fg = [0, 1, 2].map(k => ta * lin(textColor[k]) * lin(mul[k] * 255) + (1 - ta) * bg[k]);
+      const lf = lumLin(...fg), lb = lumLin(...bg);
+      samples.push((Math.max(lf, lb) + 0.05) / (Math.min(lf, lb) + 0.05));
+    }
+    if (!samples.length) continue;
+    samples.sort((a, b) => a - b);
+    const d = describe(el);
+    const large = fontSize >= 24 || (fontSize >= 18.66 && weight >= 700);
+    results.push({ el, text, role: d.role, ratio: samples[Math.floor(samples.length * 0.01)], need: large ? 3 : 4.5, rect: r });
+  }
+  return results;
+}
+
+// In-game ratio straight from screenshot pixels under the same box.
+function measureShot(shot, rect, cardRect, off, scale) {
+  const x0 = Math.max(0, Math.floor((rect.left - cardRect.left) / scale - off[0]));
+  const y0 = Math.max(0, Math.floor((rect.top - cardRect.top) / scale - off[1]));
+  const x1 = Math.min(shot.w, Math.ceil((rect.right - cardRect.left) / scale - off[0]));
+  const y1 = Math.min(shot.h, Math.ceil((rect.bottom - cardRect.top) / scale - off[1]));
+  if (x1 - x0 < 2 || y1 - y0 < 2) return null;
+  const px = [];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const o = (y * shot.w + x) * 4; px.push([shot.d[o], shot.d[o + 1], shot.d[o + 2]]); }
+  const L = px.map(c => lumLin(LUT[c[0]], LUT[c[1]], LUT[c[2]]));
+  const sorted = [...L].sort((a, b) => a - b);
+  const cut = sorted[Math.floor(sorted.length * 0.55)];
+  const bgPx = px.filter((_, i) => L[i] <= cut);
+  const med = k => { const v = bgPx.map(c => c[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const bg = [med(0), med(1), med(2)];
+  const dist = px.map(c => Math.hypot(c[0] - bg[0], c[1] - bg[1], c[2] - bg[2]));
+  const dcut = [...dist].sort((a, b) => a - b)[Math.floor(dist.length * 0.95)];
+  const fgPx = px.filter((_, i) => dist[i] >= dcut);
+  const medF = k => { const v = fgPx.map(c => c[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const fg = [medF(0), medF(1), medF(2)];
+  const lf = lumLin(LUT[fg[0]], LUT[fg[1]], LUT[fg[2]]), lb = lumLin(LUT[bg[0]], LUT[bg[1]], LUT[bg[2]]);
+  return (Math.max(lf, lb) + 0.05) / (Math.min(lf, lb) + 0.05);
+}
+
+// ----- page -----
+let pending = 0;
+function schedule() { cancelAnimationFrame(pending); pending = requestAnimationFrame(draw); }
+
+function fitWidth() {
+  const w = $("stage").clientWidth;
+  const cols = state.view === "side" ? 2 : 1;
+  const need = cols * 600 + (cols - 1) * 28;
+  return Math.min(1, w / need);
+}
+
+function column(label, id) {
+  const col = document.createElement("div");
+  col.className = "col";
+  col.innerHTML = `<div class="col-label"><span>${label}</span><span class="n" id="n-${id}"></span></div><div class="fit" id="fit-${id}"></div>`;
+  return col;
+}
+
+function draw() {
+  const card = CARDS[state.card];
+  const stage = $("stage");
+  const f = fitWidth();
+  stage.replaceChildren();
+  const editCss = overrideText($("css-edit").value, null);
+  const shotCss = overrideText(shipped, card.refOverride);
+  const out = {};
+  if (state.view === "side") {
+    stage.append(column("Stock", "stock"), column("Override", "fixed"));
+    out.stock = render(state.card, stockShared, $("fit-stock"));
+    out.fixed = render(state.card, editCss, $("fit-fixed"));
+  } else {
+    const col = column(`Preview vs game screenshot`, "wipe");
+    stage.append(col);
+    const bar = document.createElement("div");
+    bar.className = "wipebar";
+    bar.innerHTML = `<input type="range" id="wipe" min="0" max="100" value="${state.wipe}" aria-label="Wipe position"><label class="check" for="diff"><input type="checkbox" id="diff"> Difference</label><span class="note">${card.refOverride === shipped.split("\n").filter(Boolean).length ? "Screenshot taken with the installed rules." : `Screenshot taken with the first ${card.refOverride} rules, so the preview here uses those too.`}</span>`;
+    stage.append(bar);
+    out.fixed = render(state.card, shotCss, $("fit-wipe"));
+    $("wipe").addEventListener("input", e => { state.wipe = +e.target.value; placeWipe(); });
+    $("diff").addEventListener("change", placeWipe);
+  }
+  for (const fit of stage.querySelectorAll(".fit")) {
+    const z = fit.firstElementChild;
+    z.style.transform = `scale(${f})`;
+  }
+  // measurements need layout, fonts and filters in place
+  requestAnimationFrame(() => {
+    for (const fit of stage.querySelectorAll(".fit")) {
+      const tip = fit.firstElementChild.firstElementChild;
+      const card = tip.querySelector("#ModTooltipContainer").getBoundingClientRect();
+      const t = tip.getBoundingClientRect();
+      const shift = Math.max(0, t.left - card.left);
+      fit.firstElementChild.style.marginLeft = shift + "px";
+      fit.style.width = Math.max(t.right, card.right) - Math.min(t.left, card.left) + "px";
+      fit.style.height = t.height + "px";
+    }
+    if (state.view === "wipe") placeWipe();
+    ledger(out, shotCss);
+  });
+}
+
+function placeWipe() {
+  const fit = $("fit-wipe");
+  if (!fit) return;
+  const card = CARDS[state.card];
+  const shot = images[card.ref];
+  const tip = fit.querySelector("#ModTooltipContainer");
+  const fr = fit.getBoundingClientRect(), cr = tip.getBoundingClientRect();
+  const scale = cr.width / 600;
+  const off = REF_OFFSET[state.card];
+  fit.classList.add("wipe");
+  let img = fit.querySelector("img.ref"), handle = fit.querySelector(".handle");
+  if (!img) {
+    img = document.createElement("img"); img.className = "ref"; img.alt = "In-game screenshot"; img.src = card.ref; fit.appendChild(img);
+    handle = document.createElement("div"); handle.className = "handle"; fit.appendChild(handle);
+    const t1 = document.createElement("span"); t1.className = "tag"; t1.textContent = "Game"; t1.style.left = "6px"; fit.appendChild(t1);
+    const t2 = document.createElement("span"); t2.className = "tag"; t2.textContent = "Preview"; t2.style.right = "6px"; fit.appendChild(t2);
+  }
+  const left = cr.left - fr.left + off[0] * scale, top = cr.top - fr.top + off[1] * scale;
+  img.style.left = left + "px"; img.style.top = top + "px";
+  img.style.width = shot.w * scale + "px";
+  const cut = left + shot.w * scale * state.wipe / 100;
+  const diff = $("diff") && $("diff").checked;
+  img.style.mixBlendMode = diff ? "difference" : "normal";
+  img.style.clipPath = diff ? "none" : `inset(0 ${100 - state.wipe}% 0 0)`;
+  handle.style.left = cut + "px";
+  handle.hidden = diff;
+}
+
+function ledger(out, shotCss) {
+  const card = CARDS[state.card];
+  const shot = images[card.ref];
+  const cols = [];
+  if (out.stock) cols.push(["Stock", out.stock]);
+  cols.push([state.view === "side" ? "Override" : "Preview", out.fixed]);
+  // preview at the screenshot's rules, for the in-game comparison
+  let refEl = state.view === "wipe" ? out.fixed : render(state.card, shotCss, $("hold"));
+  const data = cols.map(([name, root]) => {
+    const rect = root.querySelector("#ModTooltipContainer").getBoundingClientRect();
+    return { name, root, rect, rows: measure(root, rect) };
+  });
+  const refRect = refEl.querySelector("#ModTooltipContainer").getBoundingClientRect();
+  const refRows = measure(refEl, refRect);
+  const off = REF_OFFSET[state.card];
+  const counts = {};
+  const tot = {};
+  const n = data[0].rows.length;
+  let html = `<thead><tr><th>Text</th><th>AA</th>${data.map(d => `<th>${d.name}</th>`).join("")}<th>Preview at<br>screenshot rules</th><th>In game<br>(screenshot)</th></tr></thead><tbody>`;
+  for (let i = 0; i < n; i++) {
+    const base = data[0].rows[i];
+    const cells = data.map(d => d.rows[i]);
+    const ref = refRows[i];
+    const game = shot && ref ? measureShot(shot, ref.rect, refRect, off, refRect.width / 600) : null;
+    if (window.DEBUG_BOXES && ref) window.DEBUG_BOXES.push([ref.text, ...["left","top","right","bottom"].map(k => Math.round((ref.rect[k] - refRect[k === "left" || k === "right" ? "left" : "top"]) / (refRect.width / 600) - off[k === "left" || k === "right" ? 0 : 1]))]);
+    const fmt = (r, need) => r == null ? `<span class="dim">n/a</span>` : `<span class="${r < need ? "bad" : "good"}">${r.toFixed(1)}${r < need ? "!" : "&nbsp;"}</span>`;
+    html += `<tr><td>${base.text.length > 34 ? base.text.slice(0, 32) + "&hellip;" : base.text} <small>${base.role}</small></td><td class="dim">${base.need.toFixed(1)}</td>`;
+    cells.forEach((c, k) => {
+      html += `<td>${fmt(c && c.ratio, base.need)}</td>`;
+      const bad = c && c.ratio < base.need;
+      if (c) { c.el.classList.toggle("fail-outline", bad); tot[k] = tot[k] || { f: 0, n: 0 }; tot[k].n++; if (bad) tot[k].f++; }
+    });
+    html += `<td>${fmt(ref && ref.ratio, base.need)}</td><td>${fmt(game, base.need)}</td></tr>`;
+  }
+  $("ledger").innerHTML = html + "</tbody>";
+  if (window.DEBUG_BOXES) document.body.insertAdjacentHTML("beforeend", `<pre id="dbg">${JSON.stringify(window.DEBUG_BOXES)}</pre>`);
+  data.forEach((d, k) => {
+    const id = d.name === "Stock" ? "n-stock" : state.view === "side" ? "n-fixed" : "n-wipe";
+    const t = tot[k] || { f: 0, n: 0 };
+    if ($(id)) { $(id).textContent = t.f ? `${t.f} of ${t.n} fail AA` : `all ${t.n} pass AA`; $(id).className = "n " + (t.f ? "bad" : "good"); }
+  });
+  const s = tot[0], o = tot[data.length - 1];
+  $("tally").innerHTML = data.length > 1
+    ? `AA failures: stock <b class="${s.f ? "bad" : "good"}">${s.f}/${s.n}</b> &rarr; override <b class="${o.f ? "bad" : "good"}">${o.f}/${o.n}</b>`
+    : `AA failures: <b class="${o.f ? "bad" : "good"}">${o.f}/${o.n}</b>`;
+}
+
+function segment(id, key) {
+  const root = $(id);
+  root.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    for (const x of root.querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    state[key] = b.dataset.v;
+    try { localStorage.setItem("bcc2-" + key, b.dataset.v); } catch {}
+    schedule();
+  });
+  let saved = null;
+  try { saved = localStorage.getItem("bcc2-" + key); } catch {}
+  const b = saved && root.querySelector(`[data-v="${saved}"]`);
+  if (b) { for (const x of root.querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b)); state[key] = saved; }
+}
+
+async function fontsSetup() {
+  let n = await PanoFonts.loadFromUrl("fonts/");
+  if (n < PanoFonts.total) n = Math.max(n, await PanoFonts.loadCached());
+  const bar = $("fontbar");
+  if (n >= PanoFonts.total - 2) { bar.hidden = true; return; }
+  bar.hidden = false;
+  $("font-files").addEventListener("change", async e => {
+    const got = await PanoFonts.loadFromFiles(e.target.files);
+    $("font-state").textContent = got ? `Loaded ${got} of ${PanoFonts.total} font files.` : "None of those files are Deadlock UI fonts. Pick the files inside the folder above.";
+    if (got >= PanoFonts.total - 2) bar.hidden = true;
+    await document.fonts.ready;
+    schedule();
+  });
+}
+
+(async () => {
+  segment("seg-card", "card");
+  segment("seg-view", "view");
+  const [hashCard, hashView] = location.hash.slice(1).split("-");
+  if (CARDS[hashCard]) state.card = hashCard;
+  if (hashView === "wipe") state.view = "wipe";
+  for (const [id, key] of [["seg-card", "card"], ["seg-view", "view"]]) for (const b of $(id).querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === state[key]));
+  const mark = $("mark-fails");
+  document.body.classList.toggle("mark", mark.checked);
+  mark.addEventListener("change", () => document.body.classList.toggle("mark", mark.checked));
+  const [texts, man, ship] = await Promise.all([
+    Promise.all(SHEETS.map(s => fetch(`css/${s}.vcss`).then(r => r.text()))),
+    fetch("assets.json").then(r => r.json()),
+    fetch("css/override.vcss").then(r => r.text()),
+    fontsSetup(),
+  ]);
+  sheetTexts = texts; stockShared = texts[3]; assets = man; shipped = ship.trim();
+  const imgUrls = new Set(Object.values(man).filter(a => /backer_.*_corrupted|catalog_tooltip_header/.test(a.url)).map(a => a.url));
+  await Promise.all([...imgUrls, CARDS.frenzy.ref, CARDS.focuslens.ref].map(async u => { images[u] = await loadImage(u); }));
+  $("css-edit").value = shipped;
+  let typing = 0;
+  $("css-edit").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(schedule, 200); });
+  $("btn-reset").addEventListener("click", () => { $("css-edit").value = shipped; schedule(); });
+  $("btn-copy").addEventListener("click", () => {
+    navigator.clipboard.writeText($("css-edit").value).then(
+      () => { $("edit-status").textContent = "Copied."; },
+      () => { $("css-edit").focus(); $("css-edit").select(); $("edit-status").textContent = "Clipboard blocked. The text is selected; copy it with your keyboard."; });
+  });
+  await document.fonts.ready;
+  window.addEventListener("resize", schedule);
+  draw();
+})();
+</script>

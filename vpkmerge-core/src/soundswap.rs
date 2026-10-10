@@ -62,13 +62,19 @@ pub struct EventSwap {
 
 /// Map a soundevent `.vsnd` source path to the compiled `.vsnd_c` VPK entry it is
 /// packed under (the engine resolves the source path to the compiled asset).
-fn compiled_clip_entry(vsnd_path: &str) -> String {
-    if vsnd_path.ends_with(".vsnd_c") {
-        vsnd_path.to_owned()
-    } else if let Some(stem) = vsnd_path.strip_suffix(".vsnd") {
+///
+/// Lowercased: resource paths are case-insensitive and the pak stores every
+/// entry lowercase, while `vsnd_files` can keep mixed case (`..._groupA-001.vsnd`
+/// for the entry `..._groupa-001.vsnd_c`).
+#[must_use]
+pub fn compiled_clip_entry(vsnd_path: &str) -> String {
+    let path = vsnd_path.to_lowercase();
+    if path.ends_with(".vsnd_c") {
+        path
+    } else if let Some(stem) = path.strip_suffix(".vsnd") {
         format!("{stem}.vsnd_c")
     } else {
-        format!("{vsnd_path}.vsnd_c")
+        format!("{path}.vsnd_c")
     }
 }
 
@@ -242,6 +248,87 @@ pub fn swap_event_audio(
     }
 }
 
+/// [`swap_event_audio`] packed straight into an addon VPK at `out`: the one-call
+/// form the CLI and the MCP server share.
+///
+/// # Errors
+/// Propagates [`swap_event_audio`] and [`crate::pack`] failures.
+#[allow(clippy::too_many_arguments)]
+pub fn swap_event_to_addon(
+    vpk_path: impl AsRef<Path>,
+    soundevents_entry: &str,
+    event: &str,
+    mp3: &[u8],
+    looped_override: Option<bool>,
+    policy: PoolPolicy,
+    collapse_target: Option<&str>,
+    out: impl AsRef<Path>,
+) -> Result<EventSwap> {
+    let swap = swap_event_audio(
+        vpk_path,
+        soundevents_entry,
+        event,
+        mp3,
+        looped_override,
+        policy,
+        collapse_target,
+    )?;
+    let files: Vec<(&str, &[u8])> = swap
+        .files
+        .iter()
+        .map(|(e, b)| (e.as_str(), b.as_slice()))
+        .collect();
+    crate::pack(&files, out)?;
+    Ok(swap)
+}
+
+/// What [`swap_clip_to_addon`] wrote.
+pub struct ClipSwap {
+    /// Entry path the minted clip was packed at.
+    pub entry: String,
+    /// Whether the minted clip loops.
+    pub looped: bool,
+}
+
+/// Swap a single clip: read `clip_entry` from `vpk_path` as its own donor, mint a
+/// new `.vsnd_c` around `mp3`, and pack it into an addon VPK at `out`.
+///
+/// `looped_override` is `None` to inherit the donor's loop flag. `target_entry`
+/// packs the minted clip at a different path than the donor's (`None` overrides
+/// the donor in place).
+///
+/// # Errors
+/// Fails if the donor clip cannot be read or is not mintable, or if `mp3` is not
+/// MP3.
+pub fn swap_clip_to_addon(
+    vpk_path: impl AsRef<Path>,
+    clip_entry: &str,
+    mp3: &[u8],
+    looped_override: Option<bool>,
+    target_entry: Option<&str>,
+    out: impl AsRef<Path>,
+) -> Result<ClipSwap> {
+    let vpk_path = vpk_path.as_ref();
+    let clip_entry = &compiled_clip_entry(clip_entry);
+    let donor = crate::read_vpk_entry(vpk_path, clip_entry).with_context(|| {
+        format!(
+            "reading donor clip {clip_entry} from {}",
+            vpk_path.display()
+        )
+    })?;
+    let looped = looped_override
+        .map_or_else(|| donor_is_looped(&donor), Ok)
+        .with_context(|| format!("reading the loop flag of donor {clip_entry}"))?;
+    let minted =
+        mint_swapped_clip(&donor, mp3, looped).with_context(|| format!("minting {clip_entry}"))?;
+    let entry = target_entry.unwrap_or(clip_entry);
+    crate::pack(&[(entry, minted.as_slice())], out)?;
+    Ok(ClipSwap {
+        entry: entry.to_owned(),
+        looped,
+    })
+}
+
 /// Parse the audio parameters needed to mint a `.vsnd_c` straight from an MP3
 /// byte stream: sample rate, channel count, and the total sample count / duration
 /// (derived by walking the frame headers, so it is correct for both CBR and VBR).
@@ -372,6 +459,11 @@ mod tests {
         );
         // A path with no known suffix gets `.vsnd_c` appended.
         assert_eq!(compiled_clip_entry("sounds/a/b"), "sounds/a/b.vsnd_c");
+        // Mixed-case refs resolve to the pak's lowercase entry.
+        assert_eq!(
+            compiled_clip_entry("sounds/a/whizby_groupA-001.vsnd"),
+            "sounds/a/whizby_groupa-001.vsnd_c"
+        );
     }
 
     const SNDEVTS_FIXTURE: &str = concat!(

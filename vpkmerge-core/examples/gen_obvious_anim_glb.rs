@@ -9,10 +9,18 @@
 //! Only already-animated bones are touched, so the re-import is an equal-length,
 //! byte-faithful in-place splice (the most engine-safe path) -- just unmistakable.
 //!
+//! `--bob BONE:UNITS` (repeatable) also pushes one bone along its own
+//! parent-space offset by UNITS, eased in, held through the middle of the clip,
+//! eased out (so `neck_0:20` stretches the neck 20 units). A bone the slot keeps
+//! translation-static only lands through the full re-importer
+//! (`nm_clip_import_glb --full`): the in-game test for adding a translation
+//! channel. Amplitude 0 leaves the rotations as they are, so the bob is the only
+//! visible motion.
+//!
 //! Usage:
 //!   cargo run --release -p vpkmerge-core --example gen_obvious_anim_glb -- \
 //!       <pak01_dir.vpk> <mesh_entry.vmdl_c> <clip_entry.vnmclip_c> <out.glb> \
-//!       [amplitude_deg] [cycles]
+//!       [amplitude_deg] [cycles] [--bob BONE:UNITS ...]
 
 // File paths in the usage doc above are not Rust items.
 #![allow(clippy::doc_markdown, clippy::cast_precision_loss)]
@@ -117,7 +125,19 @@ fn tilt_axis_world(model: &Model) -> Vec3 {
 }
 
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+    let mut positional: Vec<String> = Vec::new();
+    let mut bobs: Vec<(String, f32)> = Vec::new();
+    let mut raw = std::env::args().skip(1);
+    while let Some(arg) = raw.next() {
+        if arg == "--bob" {
+            let v = raw.next().context("--bob needs BONE:UNITS")?;
+            let (bone, units) = v.split_once(':').context("--bob needs BONE:UNITS")?;
+            bobs.push((bone.to_owned(), units.parse().context("--bob units")?));
+        } else {
+            positional.push(arg);
+        }
+    }
+    let mut args = positional.into_iter();
     let pak = args.next().context("missing arg: pak01_dir.vpk")?;
     let mesh_entry = args.next().context("missing arg: mesh entry")?;
     let clip_entry = args.next().context("missing arg: clip entry")?;
@@ -185,6 +205,63 @@ fn main() -> Result<()> {
         !tracks.is_empty(),
         "clip animates no rotation bones present in the mesh skeleton"
     );
+
+    for (bone, units) in &bobs {
+        let ti = skel
+            .bone_names
+            .iter()
+            .position(|n| n == bone)
+            .with_context(|| format!("--bob: no bone {bone} in the clip skeleton"))?;
+        let mi = model_bone(&model, bone).with_context(|| format!("--bob: {bone} not in mesh"))?;
+        let t = &clip.tracks[ti];
+        let r = &t.settings.translation_range;
+        let base: Vec<Vec3> = match &t.translations {
+            Some(v) => v.clone(),
+            None => vec![
+                Vec3 {
+                    x: r[0].start,
+                    y: r[1].start,
+                    z: r[2].start,
+                };
+                frames
+            ],
+        };
+        let dir = base[0].normalized();
+        let bobbed: Vec<Vec3> = base
+            .iter()
+            .enumerate()
+            .map(|(f, p)| {
+                let tt = if frames > 1 {
+                    f as f32 / (frames - 1) as f32
+                } else {
+                    0.0
+                };
+                let k = units * (tt / 0.15).min((1.0 - tt) / 0.15).clamp(0.0, 1.0);
+                Vec3 {
+                    x: p.x + dir.x * k,
+                    y: p.y + dir.y * k,
+                    z: p.z + dir.z * k,
+                }
+            })
+            .collect();
+        println!(
+            "  bob {bone}: {units} units along its offset (slot translation {})",
+            if t.translations.is_some() {
+                "animated"
+            } else {
+                "STATIC: needs --full"
+            }
+        );
+        match tracks.iter_mut().find(|bt| bt.bone == mi) {
+            Some(bt) => bt.translations = Some(bobbed),
+            None => tracks.push(BoneTrack {
+                bone: mi,
+                translations: Some(bobbed),
+                rotations: None,
+                scales: None,
+            }),
+        }
+    }
     println!("  animated {} bone rotation track(s)", tracks.len());
 
     let mut out_model = model;

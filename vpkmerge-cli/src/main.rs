@@ -1350,7 +1350,7 @@ enum ModelAction {
     /// the regions; `--atlas <PNG>` renders a distinct-color-per-region picking
     /// atlas; `--select <ID>... --mask <PNG>` bakes a white-on-black mask the
     /// reskin builders consume as a region selector (in place of the AO
-    /// heuristic). Segment by UV island (default), mesh part, or material.
+    /// heuristic). Segment by UV island (default), mesh part, material, or bone.
     Mask(ModelMaskArgs),
 
     /// List the animation clips a model carries (name, frame count, length), the
@@ -1493,7 +1493,8 @@ struct ModelMaskArgs {
     base: Option<PathBuf>,
 
     /// How to partition texture space into regions: `island` (connected UV
-    /// components, the default), `part` (one per mesh part), or `material`.
+    /// components, the default), `part` (one per mesh part), `material`, or
+    /// `bone` (one per dominant skin bone, small bones folded into parents).
     #[arg(long, value_name = "MODE", default_value = "island")]
     by: MaskByArg,
 
@@ -1531,6 +1532,7 @@ enum MaskByArg {
     Island,
     Part,
     Material,
+    Bone,
 }
 
 impl From<MaskByArg> for SegmentBy {
@@ -1539,6 +1541,7 @@ impl From<MaskByArg> for SegmentBy {
             MaskByArg::Island => SegmentBy::Island,
             MaskByArg::Part => SegmentBy::Part,
             MaskByArg::Material => SegmentBy::Material,
+            MaskByArg::Bone => SegmentBy::Bone,
         }
     }
 }
@@ -2318,6 +2321,7 @@ fn print_uv_segments(segs: &[vpkmerge_core::UvSegmentInfo], by: SegmentBy) {
         SegmentBy::Island => "UV island",
         SegmentBy::Part => "mesh part",
         SegmentBy::Material => "material",
+        SegmentBy::Bone => "bone",
     };
     eprintln!(
         "{} region(s) by {mode} (sorted by texture coverage):",
@@ -3469,43 +3473,37 @@ fn run_icon(args: &IconCmd) -> Result<()> {
         jobs.push((entry.to_string(), PathBuf::from(png)));
     }
 
-    let mut built: Vec<(String, Vec<u8>)> = Vec::with_capacity(jobs.len());
-    for (entry, png_path) in &jobs {
-        let template =
-            vpkmerge_core::read_vpk_entry(&args.template_vpk, entry).with_context(|| {
-                format!(
-                    "reading template {entry} from {}",
-                    args.template_vpk.display()
-                )
-            })?;
-        let summary = vpkmerge_core::inspect_texture(&template)
-            .with_context(|| format!("{entry} is not a readable .vtex_c"))?;
-        let png = std::fs::read(png_path)
-            .with_context(|| format!("reading PNG {}", png_path.display()))?;
-        let vtex = vpkmerge_core::build_icon_from_template(&template, &png)
-            .with_context(|| format!("building {entry} from {}", png_path.display()))?;
+    let mut pngs: Vec<Vec<u8>> = Vec::with_capacity(jobs.len());
+    for (_, png_path) in &jobs {
+        pngs.push(
+            std::fs::read(png_path)
+                .with_context(|| format!("reading PNG {}", png_path.display()))?,
+        );
+    }
+    let replacements: Vec<(&str, &[u8])> = jobs
+        .iter()
+        .zip(&pngs)
+        .map(|((entry, _), png)| (entry.as_str(), png.as_slice()))
+        .collect();
+    let written =
+        vpkmerge_core::build_icon_addon(&args.template_vpk, &replacements, &args.encode_vpk)?;
+
+    for (icon, ((_, png_path), png)) in written.iter().zip(jobs.iter().zip(&pngs)) {
         eprintln!(
-            "{entry}: {} {}x{} <- {} ({} bytes)",
-            summary.format,
-            summary.width,
-            summary.height,
+            "{}: {} {}x{} <- {} ({} bytes)",
+            icon.entry,
+            icon.template.format,
+            icon.template.width,
+            icon.template.height,
             png_path.display(),
             png.len()
         );
-        built.push((entry.clone(), vtex));
     }
-
-    // pack() borrows entry as &str and bytes as &[u8].
-    let refs: Vec<(&str, &[u8])> = built
-        .iter()
-        .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
-        .collect();
-    vpkmerge_core::pack(&refs, &args.encode_vpk)?;
     eprintln!(
         "wrote {}: {} entr{} override the base art in place",
         args.encode_vpk.display(),
-        refs.len(),
-        if refs.len() == 1 { "y" } else { "ies" }
+        written.len(),
+        if written.len() == 1 { "y" } else { "ies" }
     );
     Ok(())
 }
@@ -3573,18 +3571,12 @@ fn run_metadata(args: &MetadataCmd) -> Result<()> {
 /// Both are pure-Rust frame-level edits (no decode / re-encode); either absent is
 /// a passthrough.
 fn prepare_swap_audio(raw: &[u8], args: &SoundswapCmd) -> Result<Vec<u8>> {
-    let mut audio = match (args.trim_start, args.trim_end) {
-        (Some(start), Some(end)) => {
-            let cut = vpkmerge_core::trim_mp3(raw, start, end)
-                .with_context(|| format!("trimming audio to {start}..{end} ms"))?;
-            eprintln!("trimmed audio to {start}..{end} ms ({} bytes)", cut.len());
-            cut
-        }
-        _ => raw.to_vec(),
-    };
+    let trim = args.trim_start.zip(args.trim_end);
+    let audio = vpkmerge_core::prepare_swap_audio(raw, trim, args.gain_db)?;
+    if let Some((start, end)) = trim {
+        eprintln!("trimmed audio to {start}..{end} ms ({} bytes)", audio.len());
+    }
     if let Some(db) = args.gain_db {
-        audio = vpkmerge_core::apply_mp3_gain(&audio, db)
-            .with_context(|| format!("applying {db:+.1} dB gain to audio"))?;
         eprintln!("applied {db:+.1} dB loudness gain");
     }
     Ok(audio)
@@ -3603,37 +3595,34 @@ fn run_soundswap(args: &SoundswapCmd) -> Result<()> {
         anyhow::bail!("pass --clip <ENTRY.vsnd_c> for a single clip, or --event <NAME> (with --hero/--soundevents) for an event");
     };
 
-    // The clip being swapped is its own donor template: read it from the pak for
-    // its container shape (format GUID, envelope, loop flag).
-    let donor = vpkmerge_core::read_vpk_entry(&args.from_vpk, clip).with_context(|| {
-        format!(
-            "reading donor clip {} from {}",
-            clip,
-            args.from_vpk.display()
-        )
-    })?;
-
-    // Resolve whether the minted clip loops: inherit the donor's own flag unless
-    // forced. Inheriting keeps a `..._loop`/music clip looping and a VO line one-shot.
-    let looped = match args.loop_mode {
-        LoopMode::On => true,
-        LoopMode::Off => false,
-        LoopMode::Auto => vpkmerge_core::donor_is_looped(&donor)
-            .with_context(|| format!("reading the loop flag of donor {clip}"))?,
-    };
-
-    let minted = vpkmerge_core::mint_swapped_clip(&donor, &audio, looped)
-        .with_context(|| format!("minting {} from {}", clip, args.audio.display()))?;
-
-    let entry = args.vpk_entry.as_deref().unwrap_or(clip);
-    vpkmerge_core::pack(&[(entry, minted.as_slice())], &args.encode_vpk)?;
+    // The clip being swapped is its own donor template (container shape, loop
+    // flag). Auto inherits the donor's loop flag, keeping a `..._loop`/music clip
+    // looping and a VO line one-shot.
+    let swap = vpkmerge_core::swap_clip_to_addon(
+        &args.from_vpk,
+        clip,
+        &audio,
+        looped_override(args.loop_mode),
+        args.vpk_entry.as_deref(),
+        &args.encode_vpk,
+    )
+    .with_context(|| format!("swapping {clip} for {}", args.audio.display()))?;
     eprintln!(
-        "wrote {}: {entry} ({}) <- {} overrides the clip in place",
+        "wrote {}: {} ({}) <- {} overrides the clip in place",
         args.encode_vpk.display(),
-        if looped { "looping" } else { "one-shot" },
+        swap.entry,
+        if swap.looped { "looping" } else { "one-shot" },
         args.audio.display(),
     );
     Ok(())
+}
+
+fn looped_override(mode: LoopMode) -> Option<bool> {
+    match mode {
+        LoopMode::Auto => None,
+        LoopMode::On => Some(true),
+        LoopMode::Off => Some(false),
+    }
 }
 
 /// Event mode: swap a whole soundevent's clip pool (the catalog-surfaced swap
@@ -3651,11 +3640,6 @@ fn run_soundswap_event(args: &SoundswapCmd, event: &str, audio: &[u8]) -> Result
         );
     };
 
-    let looped_override = match args.loop_mode {
-        LoopMode::Auto => None,
-        LoopMode::On => Some(true),
-        LoopMode::Off => Some(false),
-    };
     let policy = match args.pool {
         PoolMode::All => vpkmerge_core::PoolPolicy::ReplaceAll,
         PoolMode::Collapse => vpkmerge_core::PoolPolicy::Collapse,
@@ -3668,23 +3652,17 @@ fn run_soundswap_event(args: &SoundswapCmd, event: &str, audio: &[u8]) -> Result
         PoolMode::Collapse => args.vpk_entry.as_deref(),
         PoolMode::All => None,
     };
-    let swap = vpkmerge_core::swap_event_audio(
+    let swap = vpkmerge_core::swap_event_to_addon(
         &args.from_vpk,
         &soundevents,
         event,
         audio,
-        looped_override,
+        looped_override(args.loop_mode),
         policy,
         collapse_target,
+        &args.encode_vpk,
     )
     .with_context(|| format!("swapping event {event} from {soundevents}"))?;
-
-    let files: Vec<(&str, &[u8])> = swap
-        .files
-        .iter()
-        .map(|(e, b)| (e.as_str(), b.as_slice()))
-        .collect();
-    vpkmerge_core::pack(&files, &args.encode_vpk)?;
 
     let mode = match args.pool {
         PoolMode::All => "replace-all",

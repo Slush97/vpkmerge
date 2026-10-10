@@ -1,6 +1,6 @@
 pkgbase = vpkmerge-cli-bin
 	pkgdesc = Combine multiple Valve Pak (.vpk) mods into one (Deadlock modding; CLI, prebuilt)
-	pkgver = 0.21.0
+	pkgver = 0.21.1
 	pkgrel = 1
 	url = https://github.com/Slush97/vpkmerge
 	arch = x86_64
@@ -8,9 +8,9 @@ pkgbase = vpkmerge-cli-bin
 	depends = gcc-libs
 	provides = vpkmerge-cli
 	conflicts = vpkmerge-cli
-	source = vpkmerge-cli-0.21.0::https://github.com/Slush97/vpkmerge/releases/download/v0.21.0/vpkmerge-linux-x86_64
-	source = LICENSE-0.21.0::https://github.com/Slush97/vpkmerge/raw/v0.21.0/LICENSE
-	sha256sums = 1222b5aad5974b659949693409d205d1eb719e2c296dc7337de0a43a7e4f2240
+	source = vpkmerge-cli-0.21.1::https://github.com/Slush97/vpkmerge/releases/download/v0.21.1/vpkmerge-linux-x86_64
+	source = LICENSE-0.21.1::https://github.com/Slush97/vpkmerge/raw/v0.21.1/LICENSE
+	sha256sums = c8407a3dbe7398c3a81799de5c653ce58cde6e21d3df256cd40264182d0cd6e5
 	sha256sums = 00b2f40961e16423ce60d95c9087bde5bc5a2ed7d078312a56c54f0452863d19
 
 pkgname = vpkmerge-cli-bin

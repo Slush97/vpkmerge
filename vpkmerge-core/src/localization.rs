@@ -44,7 +44,8 @@ pub struct HeroInfo {
     /// In-game display name, e.g. `Infernus`. Falls back to the codename if the
     /// localization file is missing or the token does not resolve.
     pub name: String,
-    /// `m_bPlayerSelectable`: the hero can be picked in a normal game.
+    /// The hero can be picked in a normal game, from its development state or
+    /// the legacy `m_bPlayerSelectable` flag.
     pub selectable: bool,
     /// `m_bInDevelopment`: a work-in-progress hero.
     pub in_development: bool,
@@ -214,14 +215,33 @@ pub fn build_hero_roster(
         if NON_HERO_CODENAMES.contains(&codename) {
             continue;
         }
-        // Only nodes that actually carry the hero flags are heroes.
-        let Some(selectable) = node.get("m_bPlayerSelectable").and_then(Value::as_bool) else {
+        // Current game data replaced m_bPlayerSelectable with a development
+        // state. Debug-only entries are test rigs, not roster heroes.
+        let development_state = node.get("m_eHeroDevelopmentState");
+        if development_state.and_then(Value::as_str) == Some("EHeroDevState_DebugOnly") {
             continue;
-        };
+        }
+        let legacy_selectable = node.get("m_bPlayerSelectable").and_then(Value::as_bool);
+        let has_hero_id = node
+            .get("m_HeroID")
+            .and_then(Value::as_int)
+            .is_some_and(|id| id > 0);
+        // Disabled, unreleased heroes can have no state at all. Their real IDs
+        // distinguish them from base/helper nodes. Legacy nodes remain supported
+        // even when their ID was not stored in the decoded node.
+        if !has_hero_id && (development_state.is_some() || legacy_selectable.is_none()) {
+            continue;
+        }
+        let selectable = development_state.map_or_else(
+            || legacy_selectable.unwrap_or(false),
+            |state| state.as_str() == Some("EHeroDevState_Release"),
+        );
         let in_development = node
             .get("m_bInDevelopment")
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .unwrap_or_else(|| {
+                development_state.and_then(Value::as_str) == Some("EHeroDevState_PreRelease")
+            });
         let disabled = node
             .get("m_bDisabled")
             .and_then(Value::as_bool)

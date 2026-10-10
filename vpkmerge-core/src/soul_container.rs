@@ -496,7 +496,7 @@ fn extract_static_mesh(
                 mesh.texcoords
                     .push(local_uvs.get(i).copied().unwrap_or([0.0, 0.0]));
             }
-            for tri in indices.chunks_exact(3) {
+            for tri in indices.as_chunks::<3>().0 {
                 mesh.triangles
                     .push([base + tri[0], base + tri[1], base + tri[2]]);
                 mesh.triangle_materials.push(material_index);
@@ -576,16 +576,22 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
     let out = match image.format {
         Format::R8 => pixels.iter().flat_map(|&r| [r, r, r, 255]).collect(),
         Format::R8G8 => pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
         Format::R8G8B8 => pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
         Format::R8G8B8A8 => pixels.clone(),
         Format::R16 => pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| {
                 let r = u16::from_le_bytes([p[0], p[1]]);
                 let r = (r >> 8) as u8;
@@ -593,7 +599,9 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
             })
             .collect(),
         Format::R16G16 => pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| {
                 let r = (u16::from_le_bytes([p[0], p[1]]) >> 8) as u8;
                 let a = (u16::from_le_bytes([p[2], p[3]]) >> 8) as u8;
@@ -601,7 +609,9 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
             })
             .collect(),
         Format::R16G16B16 => pixels
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     (u16::from_le_bytes([p[0], p[1]]) >> 8) as u8,
@@ -612,7 +622,9 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
             })
             .collect(),
         Format::R16G16B16A16 => pixels
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     (u16::from_le_bytes([p[0], p[1]]) >> 8) as u8,
@@ -623,7 +635,9 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
             })
             .collect(),
         Format::R32G32B32FLOAT => pixels
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     f32_to_unorm8(f32::from_le_bytes([p[0], p[1], p[2], p[3]])),
@@ -634,7 +648,9 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<Vec<u8>> {
             })
             .collect(),
         Format::R32G32B32A32FLOAT => pixels
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     f32_to_unorm8(f32::from_le_bytes([p[0], p[1], p[2], p[3]])),
@@ -2222,7 +2238,7 @@ fn f32_to_unorm8(c: f32) -> u8 {
 }
 
 fn midpoint(a: f32, b: f32) -> f32 {
-    (a + b) * 0.5
+    f32::midpoint(a, b)
 }
 
 fn gltf_to_source_point(p: [f32; 3]) -> [f32; 3] {

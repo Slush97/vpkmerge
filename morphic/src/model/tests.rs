@@ -803,14 +803,17 @@ fn metal_rough_packs_resampled_metalness() {
     let metal = (1u32, 1u32, vec![200u8, 0, 0, 255]);
     let orm = super::glb::metal_rough_rgba(2, 2, &rough, Some(&metal));
     let expect_rough = [100u8, 110, 120, 130];
-    for (i, px) in orm.chunks_exact(4).enumerate() {
+    for (i, px) in orm.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(px[0], 0, "R unused");
         assert_eq!(px[1], expect_rough[i], "G = roughness");
         assert_eq!(px[2], 200, "B = metalness");
     }
 
     let orm = super::glb::metal_rough_rgba(2, 2, &rough, None);
-    assert!(orm.chunks_exact(4).all(|px| px[2] == 0), "no mask: B = 0");
+    assert!(
+        orm.as_chunks::<4>().0.iter().all(|px| px[2] == 0),
+        "no mask: B = 0"
+    );
 }
 
 /// A pure tangent-space normal map (blue = the unit normal's Z) is detected so its
@@ -833,10 +836,41 @@ fn pure_normal_map_is_distinguished_from_packed() {
 fn metal_only_rgba_is_neutral_roughness_with_metalness() {
     let mask = [200u8, 0, 0, 255, 30, 0, 0, 255]; // 2x1 mask, R = 200 then 30
     let orm = super::glb::metal_only_rgba(&mask);
-    let px: Vec<_> = orm.chunks_exact(4).collect();
+    let px = orm.as_chunks::<4>().0;
     assert_eq!(px[0][1], 255, "G neutral roughness");
     assert_eq!(px[0][2], 200, "B = metalness mask R");
     assert_eq!(px[1][2], 30, "B = metalness mask R");
+}
+
+/// `--max-texture` embeds the largest mip whose longer edge fits, or the
+/// smallest mip when none does.
+#[test]
+fn fitting_mip_picks_the_largest_mip_within_the_edge() {
+    use super::glb::fitting_mip;
+    assert_eq!(fitting_mip(2048, 2048, 12, 2048), 0);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1024), 1);
+    assert_eq!(fitting_mip(2048, 2048, 12, 1000), 2);
+    assert_eq!(fitting_mip(256, 1024, 11, 512), 1, "longer edge decides");
+    assert_eq!(
+        fitting_mip(2048, 2048, 3, 256),
+        2,
+        "short chain: smallest mip"
+    );
+}
+
+/// A capped export batches materials by their worst-case decoded size; full
+/// size has no bound to plan with and decodes one material at a time.
+#[test]
+fn materials_per_chunk_scales_with_the_cap() {
+    use super::glb::{materials_per_chunk, GlbOptions};
+    let cap = |edge| GlbOptions {
+        max_texture_edge: Some(edge),
+    };
+    assert_eq!(materials_per_chunk(GlbOptions::default()), 1);
+    assert_eq!(materials_per_chunk(cap(4096)), 1);
+    assert_eq!(materials_per_chunk(cap(1024)), 5);
+    assert!(materials_per_chunk(cap(64)) > materials_per_chunk(cap(1024)));
+    assert_eq!(materials_per_chunk(cap(u32::MAX)), 1);
 }
 
 /// A standalone roughness texture (`g_tRoughness`, roughness in R) is wired into
@@ -846,7 +880,7 @@ fn rough_metal_rgba_sources_roughness_from_red_channel() {
     let rough = [90u8, 0, 0, 255, 200, 0, 0, 255]; // 2x1, R = 90 then 200
     let metal = (1u32, 1u32, vec![150u8, 0, 0, 255]);
     let orm = super::glb::rough_metal_rgba(2, 1, &rough, Some(&metal));
-    let px: Vec<_> = orm.chunks_exact(4).collect();
+    let px = orm.as_chunks::<4>().0;
     assert_eq!(px[0][0], 0, "R unused");
     assert_eq!(px[0][1], 90, "G = roughness R");
     assert_eq!(px[1][1], 200, "G = roughness R");
@@ -854,7 +888,10 @@ fn rough_metal_rgba_sources_roughness_from_red_channel() {
     assert_eq!(px[1][2], 150, "B = metalness mask R (upsampled)");
 
     let orm = super::glb::rough_metal_rgba(2, 1, &rough, None);
-    assert!(orm.chunks_exact(4).all(|px| px[2] == 0), "no mask: B = 0");
+    assert!(
+        orm.as_chunks::<4>().0.iter().all(|px| px[2] == 0),
+        "no mask: B = 0"
+    );
 }
 
 /// [`super::glb::inject_material_extensions`] lands each extension object on

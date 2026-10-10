@@ -1035,7 +1035,9 @@ mod tests {
                 .unwrap();
             let flat = on_disk.blend_indices(f, None).expect("joints");
             let got: Vec<[u16; 4]> = flat
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| [c[0], c[1], c[2], c[3]])
                 .collect();
             assert_eq!(got, vb.joints, "joints (identity remap)");

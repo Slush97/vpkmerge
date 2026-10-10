@@ -1,6 +1,6 @@
 [package]
 name = "vpkmerge-core"
-version = "0.19.1"
+version = "0.21.0"
 edition = "2021"
 description = "Core VPK merging and splitting logic shared by the vpkmerge CLI and GUI."
 license = "MIT"
@@ -20,7 +20,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde = { version = "1", features = ["derive"] }
 # Source 2 .vtex_c decoder (same workspace). Used to turn extracted portrait
 # textures into PNGs; covers the uncompressed, embedded-PNG, and BCn formats.
-morphic = { path = "../morphic", version = "0.10.0" }
+morphic = { path = "../morphic", version = "0.11.0" }
 # Decode + resize user PNGs for the custom icon/hero-card import (icon.rs).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Parse decompiled Panorama layout XML back into the LaCo KV3 AST for

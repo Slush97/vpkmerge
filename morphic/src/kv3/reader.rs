@@ -350,7 +350,9 @@ fn read_blobs(
     let lengths_region = slice(buf2, off, lengths_len)?;
     off += lengths_len;
     let lengths: Vec<usize> = lengths_region
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| usize_of(i64::from(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))))
         .collect::<Result<_, _>>()?;
     check_trailer(buf2, off)?;
@@ -398,7 +400,7 @@ fn decompress_blob_frames(
     }
     let mut out = vec![0u8; size_blobs];
     let mut done = 0usize;
-    for fs in table.chunks_exact(2) {
+    for fs in table.as_chunks::<2>().0 {
         if done >= size_blobs {
             break;
         }

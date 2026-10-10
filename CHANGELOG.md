@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.21.0
+
+Faster textured model export, and `model export --max-texture N` for previews. Built for Grimoire's Locker 3D viewer, which bakes its hero models at 1024 px (#48). Full-size output is unchanged apart from GLB buffer layout.
+
+### CLI (`vpkmerge` 0.21)
+
+- New `model export --max-texture N`: each texture embeds at its largest mip whose longer edge fits in N pixels, with no resampling. Slot decisions still come from the full-size texture (placeholder checks, the pure-vs-packed normal probe), so a capped export keeps the same materials and channel packing. A texture with no mip that small embeds its smallest one. Drifter's skin at 1024: a 14 MB GLB instead of 39 MB.
+- Textured exports decode and PNG-encode textures in parallel. Drifter's skin at full size goes from 0.98 s to 0.47 s; its rigged 6-clip export at 1024 takes ~0.14 s (0.82 s at full size on v0.20.1). Full size decodes one material at a time and peaks around twice v0.20.1's memory (mcginnis: 1.1 GB, was 512 MB).
+- VPKs open faster: the directory tree is read with `read_until` instead of one byte at a time (pak01: ~51 ms to ~33 ms per open), and a `model` command given pak01 as both `--vpk` and `--base` opens it once. `model clips --json` on drifter: 127 ms to 50 ms.
+
+### Library (`morphic` 0.11, `vpkmerge-core` 0.21)
+
+- `morphic::model::GlbOptions { max_texture_edge }`. `to_glb_textured`, `vpkmerge_core::export_model` and `export_hero_model` take it as a new argument, and `FileResolver` now requires `Sync` (textures resolve in parallel).
+- `valve_pak` (vendored) carries a second `vpkmerge patch`: the `read_until` directory read above.
+
+## v0.20.1
+
+Fix: imported soul containers and spirit urns now show in game at every distance. Valve reworked the stock `soul_container.vmdl_c` to ship four LOD meshes, and `soul-container import` / `import-urn` only replaced the first one, so a few steps away the game drew the stock gold orb instead (and an imported urn turned into a soul orb). The importer now makes the imported mesh draw at every LOD and hides the stock ones (#51). All other commands are unchanged.
+
+- Library: new `morphic::model::collapse_lods_to_mesh(vmdl, mesh_name)`, a byte-faithful edit of `m_refLODGroupMasks`.
+- Internal: fixes for the lints clippy 1.99 added (#52), no behavior change.
+
+## v0.20.0
+
+Outdated vdata check: find mods that ship an old copy of a game `.vdata_c` (`scripts/heroes.vdata_c`, `scripts/abilities.vdata_c`, ...). The shipped copy replaces the whole file in game, so anything Valve added after the mod was built is gone, e.g. a new hero's abilities. Built for Grimoire's "Outdated data" warning (#47). All pre-existing commands are unchanged.
+
+### CLI (`vpkmerge` 0.20)
+
+- New `vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`. Each `.vdata_c` a mod ships is decoded as KV3 and diffed against the game's copy: `missing` (what the mod deletes in game, shallowest first), `extra` (fields the game dropped) and `changed` (values that differ). Status is `outdated`, `modified`, `current`, `not-in-game` (compiler leftovers like `panorama/image_compiler.vdata_c`) or `undecodable`.
+- Arrays count as structure. When lengths differ, arrays of plain values are matched by value and reported as `path[=value]`, since Valve inserts mid-array. Arrays of objects report the tail as `path[i]`.
+- `--json` prints full, untruncated reports. A mod that fails to open gets an `error` field and the exit code stays 0, so one bad file never hides the rest of a batch. Text mode exits non-zero if any mod failed to open.
+
+### Library (`vpkmerge-core` 0.20)
+
+- `check_vdata(mod_vpk, base_vpk) -> Result<Vec<VdataReport>>` and `VdataChecker` for batches: the base pak is opened only once a mod actually ships a `.vdata_c`, and each game file is read and decoded once (68 mods in 0.1 s).
+
 ## v0.19.1
 
 Fix: VPKs that leave out the optional v2 MD5 checksum section now open. Some GameBanana mods ship valid v2 VPKs whose header declares a 0-byte checksum section, and every command that read them failed with "failed to fill whole buffer" (seen as merges in Grimoire failing on specific mods). The VPK reader (`valve_pak` 0.1.0) is now vendored with one change: it reads the checksum section only when the header says it is there (#45). Output for every other VPK is byte-identical to v0.19.0.

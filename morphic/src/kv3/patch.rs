@@ -778,11 +778,15 @@ fn finalize_blob_block(
         .ok_or(DecodeError::Kv3("blob frame table out of range"))?;
 
     let old_lengths: Vec<usize> = lengths_region
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
         .collect();
     let old_frame_sizes: Vec<usize> = old_table
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
         .collect();
     if blob_index > old_lengths.len() {

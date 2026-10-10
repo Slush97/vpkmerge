@@ -140,7 +140,7 @@ the rest after the user confirms.
   missing game says which env var to set).
 - **Hero names:** every tool takes a display name. `Roster::resolve` maps it to a
   hero, and `Hero::owns(key)` matches that hero against whatever key an index uses
-  (`hero_atlas` in VO, `abrams` in sound stems, `archer` in recipes, `hornet_v3` in
+  (`atlas` in VO, `abrams` in sound stems, `archer` in recipes, `hornet_v3` in
   textures). Asset namespaces that are neither the codename nor the display name go
   in `EXTRA_ALIASES` in `heroes.rs`.
 - **`browse_sounds` covers three indexes:** per-hero gameplay
@@ -170,6 +170,13 @@ shallowest first so a whole missing hero comes before its fields), `extra` (path
 game dropped), and `changed` (leaf values that differ). Status: `outdated` (any missing
 or extra), `modified` (values only), `current` (identical), `not-in-game`, `undecodable`.
 
+Arrays count as structure too. Equal-length arrays diff by index. When lengths differ,
+arrays of plain values are matched by value (Valve inserts mid-array: the 2026 hero
+batch added `EHeroSpiritLifestealEffectiveness` inside every hero's
+`m_vecDisplayStats`), reported as `path[=value]`; arrays of objects report the tail
+as `path[i]`. `VdataChecker` checks many mods against one pak: it opens the pak only
+once a mod actually ships a `.vdata_c`, and reads and decodes each game file once.
+
 `changed` cannot separate the mod's intended edits from values Valve rebalanced since:
 that needs the build the mod was made against (GameTracking-Deadlock history), which
 is also what a future auto-rebase would need. So `modified` is not proof the mod is
@@ -177,9 +184,11 @@ current. Most mods with vdata only ship `panorama/image_compiler.vdata_c`, a com
 leftover the game does not have (`not-in-game`, harmless).
 
 CLI: `vpkmerge vdata-check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--limit N] [--json]`.
-MCP: `inspect_mod` runs the check whenever the mod ships a `.vdata_c` (path lists cut
-at `limit`, `changed` as a count only). Live test: `tests/vdata_check_live.rs`, gated on
-`DEADLOCK_PAK`.
+With `--json`, a mod that fails to open gets an `error` field and the exit code stays 0,
+so one bad file never hides the rest of a batch (Grimoire relies on this). Text mode
+exits non-zero if any mod failed to open. MCP: `inspect_mod` runs the check whenever
+the mod ships a `.vdata_c` (path lists cut at `limit`, `changed` as a count only).
+Live test: `tests/vdata_check_live.rs`, gated on `DEADLOCK_PAK`.
 
 ## CI
 
@@ -204,7 +213,7 @@ GitHub Actions on push to `main` and PRs:
 
 - `valve_pak::from_directory` walks the filesystem in OS-dependent order, so byte-exact output is not reproducible across runs. Same set of files, same content, different VPK hash. Fix needs an upstream patch.
 - No streaming or progress callbacks yet; large merges block.
-- `valve_pak` is vendored (`vendor/valve_pak`, copied from crates.io 0.1.0) with one fix: `VPK::open` only reads the v2 MD5 section when the header declares it (>= 48 bytes). Upstream required it, so valid paks that omit it (common on GameBanana) failed to open with "failed to fill whole buffer". Regression tests: `vpkmerge-core/tests/optional_checksums.rs`. Keep any further vendored edits minimal and marked `vpkmerge patch`.
+- `valve_pak` is vendored (`vendor/valve_pak`, copied from crates.io 0.1.0) with two fixes: `VPK::open` only reads the v2 MD5 section when the header declares it (>= 48 bytes). Upstream required it, so valid paks that omit it (common on GameBanana) failed to open with "failed to fill whole buffer". Regression tests: `vpkmerge-core/tests/optional_checksums.rs`. And the directory tree is read with `read_until` instead of one `read_exact` per byte (pak01 opens in ~33 ms instead of ~51). Keep any further vendored edits minimal and marked `vpkmerge patch`.
 
 ## morphic (Source 2 texture decoder)
 
@@ -368,11 +377,11 @@ never a silent cap). Example: `examples/voiceline_index.rs`. Full design + findi
 
 Build 2026-09-29 no longer ships the compiled `.dat` in pak01 (captions are loose
 `.txt` only), so `build_voiceline_index` treats a missing caption DB as empty instead
-of failing. Each row (`VoiceLine`, `HeroSound`, and the new `SharedSound` from
+of failing (a present but malformed one still errors). Each row (`VoiceLine`, `HeroSound`, and the new `SharedSound` from
 `build_shared_sound_index`) carries `source`: the `.vsndevts_c` entry that defines the
 event, which is what an event swap needs. `hero` on a voice line is the event's
-`context_name`, currently `hero_<roster codename>` (`hero_atlas`), not the bare
-codename.
+`context_name` with its `hero_` prefix stripped (the game now writes `hero_atlas`), so
+it is the bare roster codename and `--hero atlas` matches.
 
 ## Foundry texture / icon index (`catalog texture`)
 
@@ -445,9 +454,11 @@ loc_dir, lang)` reads the codenames + availability flags from `scripts/heroes.vd
 (inside the pak) and resolves each `hero_<codename>` token against
 `citadel_gc_hero_names/citadel_gc_hero_names_<lang>.txt` (loose, located via
 `localization_dir_for_pak`), returning `HeroInfo { codename, name, selectable,
-in_development, disabled }`. On the live build (2026-09-29) that is 44 selectable / 63
-total. That build dropped `m_bPlayerSelectable`, so `selectable` falls back to "not
-disabled and not in development" when the flag is absent. The non-obvious mappings are
+in_development, disabled }`. On the live build (25841406, 2026-10-09) that is 41 selectable / 63
+total. Current builds replaced `m_bPlayerSelectable` with `m_eHeroDevelopmentState`:
+`selectable` is `EHeroDevState_Release` (PreRelease heroes such as Violet, Deadman
+Danny and Nurse Harrow are not), `DebugOnly` nodes are skipped, and nodes with no
+state need a positive `m_HeroID`. Legacy data still reads `m_bPlayerSelectable`. The non-obvious mappings are
 correct (`atlas`->Abrams, `forge`->McGinnis,
 `familiar`->Rem, `orion`->Grey Talon, `synth`->Pocket, `frank`->Victor). A missing
 localization tree degrades names to the codename (still returns the roster + flags).

@@ -14,7 +14,7 @@
 //! cost is an occasional needless rebuild if something touches the file's mtime
 //! without changing its bytes (a "verify game files" pass). A
 //! [`CACHE_SCHEMA_VERSION`] bump invalidates every cache when the on-disk shape
-//! changes.
+//! or the meaning of cached values changes.
 //!
 //! The high-level entry points are [`CatalogCache::voicelines`] and
 //! [`CatalogCache::textures`]: load-or-build-and-store in one call.
@@ -28,9 +28,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::catalog::{build_voiceline_index, VoiceLine};
 use crate::texture_catalog::{build_texture_index, TextureEntry};
 
-/// On-disk format version. Bump when the cached JSON shape changes so older
-/// caches are treated as a miss instead of mis-parsed.
-pub const CACHE_SCHEMA_VERSION: u32 = 2;
+/// On-disk format version. Bump when the cached JSON shape or value semantics
+/// change so older caches are rebuilt. Version 2 normalizes VO hero contexts;
+/// version 3 adds each row's `source` entry.
+pub const CACHE_SCHEMA_VERSION: u32 = 3;
 
 /// Cache-file stem for the voice-line index.
 const KIND_VOICELINE: &str = "voiceline";

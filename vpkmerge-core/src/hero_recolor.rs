@@ -3451,7 +3451,7 @@ mod tests {
             .texture_entries
             .iter()
             .any(|t| t.contains("unicorn_prismatic_shield_ground_warning")));
-        assert!(r.model_entries.is_empty());
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
         assert!(r
             .preview_texture
             .as_deref()
@@ -3478,8 +3478,8 @@ mod tests {
             r.material_entries.is_empty(),
             "no inferno_body (unmatching)"
         );
-        assert!(r.texture_entries.is_empty());
-        assert!(r.model_entries.is_empty());
+        assert!(r.texture_entries.is_empty(), "{:?}", r.texture_entries);
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
         assert!(r.preview_texture.is_none());
         assert!(recipe_for("INFERNO").is_some());
     }
@@ -3557,8 +3557,8 @@ mod tests {
                 .preview_texture
                 .unwrap_or_else(|| panic!("{code} has a preview texture"));
             assert!(r.texture_entries.contains(&preview));
-            assert!(r.material_entries.is_empty());
-            assert!(r.model_entries.is_empty());
+            assert!(r.material_entries.is_empty(), "{:?}", r.material_entries);
+            assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
             assert!(recipe_for(&code.to_uppercase()).is_some());
         }
     }
@@ -3586,8 +3586,8 @@ mod tests {
             .any(|t| t.contains("abrams_leap_ground_impact")));
         let preview = r.preview_texture.expect("abrams has a preview texture");
         assert!(r.texture_entries.contains(&preview));
-        assert!(r.material_entries.is_empty());
-        assert!(r.model_entries.is_empty());
+        assert!(r.material_entries.is_empty(), "{:?}", r.material_entries);
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
         assert!(recipe_for("ABRAMS").is_some());
     }
 
@@ -3651,7 +3651,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{code} has a preview texture"));
             assert!(r.texture_entries.contains(&preview));
             assert_eq!(r.material_entries.len(), material_count, "{code} materials");
-            assert!(r.model_entries.is_empty());
+            assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
             assert!(recipe_for(&code.to_uppercase()).is_some());
         }
     }
@@ -3733,8 +3733,8 @@ mod tests {
             .texture_entries
             .iter()
             .any(|t| t.contains("yamoto_shadow_shape_color")));
-        assert!(r.material_entries.is_empty());
-        assert!(r.model_entries.is_empty());
+        assert!(r.material_entries.is_empty(), "{:?}", r.material_entries);
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
         let preview = r.preview_texture.expect("yamato has a preview texture");
         assert!(r.texture_entries.contains(&preview));
         assert!(recipe_for("YAMATO").is_some());
@@ -3819,7 +3819,7 @@ mod tests {
             .material_entries
             .iter()
             .any(|m| m.ends_with("necro_gravestone.vmat_c")));
-        assert!(r.model_entries.is_empty());
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
     }
 
     #[test]

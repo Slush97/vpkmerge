@@ -763,6 +763,36 @@ pub fn set_model_material(vmdl_bytes: &[u8], new_material: &str) -> Result<Vec<u
     resource.rebuild_with_block(dc.data_block, &new_mdat)
 }
 
+/// Makes the embedded mesh `mesh_name` render at every LOD level and hides every
+/// other embedded mesh, by rewriting `DATA.m_refLODGroupMasks` in place.
+///
+/// A part replaced via [`replace_mesh_part`] only swaps that one mesh. When the
+/// model also ships lower LOD meshes (the soul container gained `_lod1.._lod3`),
+/// those still hold the stock geometry and stock material, so past the first LOD
+/// switch distance the engine draws the original prop instead of the import.
+pub fn collapse_lods_to_mesh(vmdl_bytes: &[u8], mesh_name: &str) -> Result<Vec<u8>, DecodeError> {
+    let (resource, embedded) = parse_embedded(vmdl_bytes)?;
+    let keep = embedded
+        .iter()
+        .position(|em| em.name == mesh_name)
+        .ok_or(DecodeError::Model("no embedded mesh with that name"))?;
+    let data = resource.data_block()?;
+    let masks = mesh::lod_group_masks(&kv3::decode(data)?)?;
+    let all = masks.iter().fold(0, |acc, m| acc | m);
+    let edits: Vec<(Vec<Seg>, i64)> = (0..masks.len())
+        .map(|i| {
+            let path = vec![Seg::Key("m_refLODGroupMasks".to_string()), Seg::Index(i)];
+            let value = if i == keep {
+                i64::try_from(all).unwrap_or(i64::MAX)
+            } else {
+                0
+            };
+            (path, value)
+        })
+        .collect();
+    resource.rebuild_with_data(&kv3::set_scalars(data, &edits)?)
+}
+
 /// One material's draw call when expanding a single-draw-call model into a
 /// multi-material one. The group owns a contiguous `[start_index, start_index +
 /// index_count)` slice of the model's single (already globally-rebased) index

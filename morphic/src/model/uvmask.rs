@@ -195,7 +195,9 @@ fn renderable_tris<'a>(
     let n = vb.element_count;
     let tris = prim
         .indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
         .filter(move |t| t.iter().all(|&i| i < n))
         .filter(move |&t| surface_area(vb, t).is_none_or(|a| a > 0.0));

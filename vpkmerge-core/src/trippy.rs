@@ -1260,7 +1260,7 @@ fn moire(u: f32, v: f32, phase: f32) -> [u8; 3] {
     let m2 = g(4.0, 9.0, p * 1.3) + g(5.0, 8.0, -p);
     let field = (m1 * m2) * 0.25 + 0.5;
     let hue = (field * 1.6 + 0.12 * m1 + phase).fract() * 360.0;
-    let val = (0.42 + 0.5 * ((field * 6.0).sin() * 0.5 + 0.5)).clamp(0.0, 1.0);
+    let val = (0.42 + f32::midpoint((field * 6.0).sin() * 0.5, 0.5)).clamp(0.0, 1.0);
     pack_rgb(hsv2rgb(hue, 0.95, val))
 }
 
@@ -1268,11 +1268,11 @@ fn kaleido(u: f32, v: f32, phase: f32) -> [u8; 3] {
     let g = |a: f32, b: f32| (TAU * (a * u + b * v)).cos();
     let k = 6.0;
     let mandala = (g(k, 0.0) + g(0.0, k) + 0.7 * g(k, k) + 0.7 * g(k, -k)) * 0.25;
-    let radial = ((TAU * u).cos() + (TAU * v).cos()) * 0.5;
+    let radial = f32::midpoint((TAU * u).cos(), (TAU * v).cos());
     let field = mandala * 0.5 + 0.5;
     let hue = (field + 0.35 * radial + phase).fract() * 360.0;
     let sat = (0.85 + 0.15 * radial).clamp(0.0, 1.0);
-    let val = (0.45 + 0.5 * (mandala * 0.5 + 0.5)).clamp(0.0, 1.0);
+    let val = (0.45 + f32::midpoint(mandala * 0.5, 0.5)).clamp(0.0, 1.0);
     pack_rgb(hsv2rgb(hue, sat, val))
 }
 
@@ -1650,7 +1650,7 @@ mod tests {
         // core must stay equally bright (only hue/sat may change). 4x4 image:
         // black border, one white pixel and one mid-grey pixel in the middle.
         let mut px = vec![0u8; 4 * 4 * 4];
-        for p in px.chunks_exact_mut(4) {
+        for p in px.as_chunks_mut::<4>().0 {
             p[3] = 255;
         }
         let white = (4 + 1) * 4; // pixel (1,1)
@@ -1671,7 +1671,13 @@ mod tests {
             let ImageData::Rgba8(orig) = &image.data else {
                 panic!("rgba8");
             };
-            for (i, (o, n)) in orig.chunks_exact(4).zip(out.chunks_exact(4)).enumerate() {
+            for (i, (o, n)) in orig
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(out.as_chunks::<4>().0)
+                .enumerate()
+            {
                 let omax = o[0].max(o[1]).max(o[2]);
                 let nmax = n[0].max(n[1]).max(n[2]);
                 assert!(
@@ -1688,7 +1694,9 @@ mod tests {
             panic!("rgba8");
         };
         assert!(
-            out.chunks_exact(4)
+            out.as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p[0].max(p[1]).max(p[2]) > 0 && p[..3] != [255, 255, 255]),
             "full-canvas paint should differ (sanity check)"
         );

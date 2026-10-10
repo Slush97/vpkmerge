@@ -1,6 +1,6 @@
 [package]
 name = "morphic"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "Pure-Rust Source 2 .vtex_c texture decoder. Algorithms adapted from ValveResourceFormat (MIT)."
 license = "MIT"

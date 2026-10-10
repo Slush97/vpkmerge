@@ -137,11 +137,13 @@ pub fn export_hero_model(
 }
 
 /// Opens the VPKs in resolution priority order: `vpk` first (a skin's overrides
-/// win), then the base pak.
+/// win), then the base pak. A vanilla export passes the base pak as both; it
+/// opens once, since parsing its directory is most of the open cost and a base
+/// lookup would only find the entries `vpk` already resolved.
 pub(crate) fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak::VPK>> {
     let mut vpks =
         vec![valve_pak::open(vpk).with_context(|| format!("opening {}", vpk.display()))?];
-    if let Some(base) = base {
+    if let Some(base) = base.filter(|&base| base != vpk) {
         vpks.push(valve_pak::open(base).with_context(|| format!("opening {}", base.display()))?);
     }
     Ok(vpks)

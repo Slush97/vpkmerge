@@ -26,6 +26,7 @@ fixtures/
   kv3/                    raw KV3 blocks + .kv3.json goldens (model exporter M1)
   meshopt/                raw MVTX/MIDX blocks + .meshopt.json goldens (M2)
   nm/                     whole .vnmclip_c resources for the NM pose codec
+  particle/               whole .vpcf_c resources for the repoint tests
   _local/                 gitignored, oracle-populated stress corpus
 ```
 
@@ -54,6 +55,14 @@ tagless `DOUBLE_ONE`s, exercising the recolor's re-encode promotion path.
 base `g_vColorTint` and a colored `g_vSelfIllumTint` (the skull/RIP/cracks glow),
 exercising the selective stamp that leaves the stone base neutral and recolors only
 the glow. None of these has a `*.material.json` golden.
+`material/haze_hair_cable.vmat_c` is a small plain **KV3 v4** material (over half of
+shipped particles are v4 too).
+
+The `particle/` tier holds whole `.vpcf_c` resources for `repoint_resource_refs`
+(`tests/repoint.rs`): `grenade_frag_fx` (v4; a texture and a child particle),
+`wraith_rapid_fire_cast_proj` (v4; a material), `wraith_rapid_fire_buff` (v5;
+three child particles) and `wraith_ult_range_indicator_projected` (v5; a
+material). Extracted unmodified from `citadel/pak01`.
 
 `kv3/hornet_model_meta.json` is a higher-level golden (not a raw block): the
 compact model summary the M3 mesh/skeleton decoder is diffed against, produced

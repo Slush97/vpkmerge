@@ -25,19 +25,20 @@
 //! is a later step; the composition here does not change when it does.
 
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use morphic::kv3::{Seg, Value};
 
 use crate::recolor::{set_color, Recolor};
+use crate::recolor_isolate::IsolationStats;
 
 const YAMATO_SHADOW_SHAPE_COLOR_TEXTURE: &str =
     "models/heroes_staging/yamato_v2/materials/yamoto_shadow_shape_color_psd_fe3c64a6.vtex_c";
-const YAMATO_SHADOW_STATUS_TEXTURES: &[&str] = &[
-    "materials/particle/abilities/yamato/yamato_shadow_redemption_complete_status.vtex_c",
-    "materials/particle/abilities/yamato/yamato_shadow_redemption_nokill_status.vtex_c",
-];
+// The `nokill` status map is not pinned: a neutral barrel creature's
+// self-explode status samples it too.
+const YAMATO_SHADOW_STATUS_TEXTURES: &[&str] =
+    &["materials/particle/abilities/yamato/yamato_shadow_redemption_complete_status.vtex_c"];
 
 /// The fixed set of base-game entries that carry one hero's ability-VFX color,
 /// grouped by the recolor mechanism each needs.
@@ -57,6 +58,15 @@ pub struct HeroRecolorRecipe {
     pub material_entries: Vec<String>,
     /// `.vmdl_c` entries whose color is baked into mesh vertex colors.
     pub model_entries: Vec<String>,
+    /// Entries (or path prefixes) that another hero, an item or a neutral also
+    /// renders. These are never edited in place: where the hero reaches one
+    /// through its own particles or pinned materials, the bake recolors a
+    /// hero-local copy and repoints that reference to it, so the original stays
+    /// vanilla for everyone else. Each gets the transform it would have had
+    /// (particle recolor, material stamp when also in `material_entries`,
+    /// texture recolor when also in `texture_entries`). `recolor-qa` computes
+    /// the required set and fails a recipe that bleeds.
+    pub shared_entries: Vec<String>,
     /// A representative color-bearing `.vtex_c` (one of `texture_entries`) to
     /// render as a fast, no-re-encode UI preview swatch (see
     /// [`recolor_hero_preview_png`]). Pick one that reads as the hero's main
@@ -70,7 +80,7 @@ pub struct HeroRecolorRecipe {
 #[must_use]
 pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
     let codename = codename.to_lowercase();
-    match codename.as_str() {
+    let recipe = match codename.as_str() {
         "bookworm" => Some(paige_recipe()),
         // Particle-only heroes: ability/weapon VFX carry color purely through
         // `.vpcf_c` color params (no color textures or baked vertex colors), so one
@@ -95,11 +105,8 @@ pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
         // placeholder), retinted by the in-place double patch. So her recipe adds one
         // texture + two materials on top of the particles.
         "necro" => Some(necro_recipe()),
-        // Infernus (`inferno`): particles + the fire textures the flames sample. The
-        // reference blue recolor does NOT touch `inferno_body.vmat_c` (the body tint
-        // is not what colors his fire); it recolors the particles + the fire ramp /
-        // burning / lava textures. We match that: no body material, recolor the
-        // vanilla fire textures in place. See [`inferno_recipe`].
+        // Infernus (`inferno`): particles plus his two additive body glow layers. See
+        // [`inferno_recipe`].
         "inferno" => Some(inferno_recipe()),
         "yamato" => Some(yamato_recipe()),
         // Paradox (`chrono`): ability VFX color is overwhelmingly particle-driven (the
@@ -110,6 +117,7 @@ pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
         "chrono" => Some(chrono_recipe()),
         "abrams" => Some(abrams_recipe()),
         "archer" => Some(archer_recipe()),
+        "chessmaster" => Some(chessmaster_recipe()),
         "digger" => Some(digger_recipe()),
         "doorman" => Some(doorman_recipe()),
         "drifter" => Some(drifter_recipe()),
@@ -129,15 +137,292 @@ pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
         "tengu" => Some(tengu_recipe()),
         "viper" => Some(viper_recipe()),
         "viscous" => Some(viscous_recipe()),
-        "warden" => Some(warden_recipe()),
         "werewolf" => Some(werewolf_recipe()),
         "unicorn" => Some(unicorn_recipe()),
-        "astro" | "gigawatt" | "hornet" | "mirage" | "punkgoat" | "shiv" | "vampirebat"
-        | "wraith" => Some(particle_only_recipe(&codename)),
+        "astro" => Some(astro_recipe()),
+        "gigawatt" => Some(gigawatt_recipe()),
+        "punkgoat" => Some(punkgoat_recipe()),
+        "vampirebat" => Some(vampirebat_recipe()),
+        "hornet" | "mirage" | "shiv" | "warden" | "wraith" => Some(particle_only_recipe(&codename)),
+        "baba" => Some(baba_recipe()),
+        "ratking" => Some(ratking_recipe()),
         "bebop" => Some(bebop_recipe()),
         _ => None,
-    }
+    };
+    recipe.map(|mut r| {
+        r.shared_entries = SHARED_ENTRIES
+            .iter()
+            .find(|(c, _)| *c == r.codename)
+            .map(|(_, entries)| entries.iter().map(|s| (*s).to_string()).collect())
+            .unwrap_or_default();
+        r
+    })
 }
+
+/// Entries a hero reaches that another hero, an item or a neutral also renders,
+/// so the bake copies and repoints them instead of editing in place (see
+/// [`HeroRecolorRecipe::shared_entries`]). Generated by `vpkmerge recolor-qa
+/// --suggest-shared`; regenerate after a game update.
+const SHARED_ENTRIES: &[(&str, &[&str])] = &[
+    (
+        "bookworm",
+        &[
+            "particles/abilities/bookworm/bookworm_aoe_cylinder.vpcf_c",
+            "particles/abilities/bookworm/bookworm_knockback.vpcf_c",
+        ],
+    ),
+    (
+        "inferno",
+        &[
+            "particles/abilities/inferno/inferno_afterburn_debuff",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy.vpcf_c",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy_embers.vpcf_c",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy_flash.vpcf_c",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy_slow_arrow.vpcf_c",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy_splash.vpcf_c",
+            "particles/abilities/inferno/inferno_flame_dash_tag_enemy_trail.vpcf_c",
+        ],
+    ),
+    (
+        "yamato",
+        &[
+            "particles/abilities/yamato/yamato_nightmare_cast_blast.vpcf_c",
+            "particles/abilities/yamato/yamato_nightmare_cast_blast_a.vpcf_c",
+            "particles/abilities/yamato/yamato_nightmare_cast_blast_c.vpcf_c",
+            "particles/abilities/yamato/yamato_nightmare_cast_blast_d.vpcf_c",
+        ],
+    ),
+    (
+        "chrono",
+        &[
+            "particles/abilities/chrono/chrono_time_bomb_projectile.vpcf_c",
+            "particles/abilities/chrono/chrono_time_bomb_projectile_trail_",
+        ],
+    ),
+    (
+        "abrams",
+        &[
+            "particles/abilities/abrams/abrams_charge_wall_impact.vpcf_c",
+            "particles/abilities/abrams/abrams_charge_wall_impact_directional_flash.vpcf_c",
+            "particles/abilities/abrams/abrams_charge_wall_impact_dust_",
+            "particles/abilities/abrams/abrams_charge_wall_impact_flash.vpcf_c",
+            "particles/abilities/abrams/abrams_charge_wall_impact_sparks.vpcf_c",
+            "particles/abilities/abrams/abrams_leap_immunity_",
+            "particles/abilities/bull/bull_charge_edge.vpcf_c",
+        ],
+    ),
+    (
+        "archer",
+        &[
+            "particles/abilities/archer/archer_guided_arrow_owl_trail_sparkle.vpcf_c",
+            "particles/abilities/archer/archer_guided_arrow_proj_trail.vpcf_c",
+            "particles/abilities/archer/archer_guided_arrow_proj_trail_left.vpcf_c",
+            "particles/abilities/archer/archer_guided_arrow_proj_trail_right.vpcf_c",
+            "particles/abilities/archer/archer_immobilize_trap_preview.vpcf_c",
+            "particles/abilities/archer/archer_immobilize_trap_preview_energy.vpcf_c",
+            "particles/abilities/archer/archer_immobilize_trap_preview_model",
+            "particles/abilities/archer/archer_power_jump_buff.vpcf_c",
+            "particles/abilities/archer/archer_power_jump_buff_energy.vpcf_c",
+            "particles/abilities/archer/archer_power_jump_buff_rings",
+            "particles/abilities/archer/archer_power_jump_buff_trail.vpcf_c",
+        ],
+    ),
+    ("astro", &["particles/abilities/astro/astro_lasso_chain"]),
+    (
+        "bebop",
+        &["particles/abilities/bebop/bebop_uppercut_impact_sparks.vpcf_c"],
+    ),
+    (
+        "drifter",
+        &[
+            "particles/abilities/drifter/drifter_claw_channel_lv",
+            "particles/abilities/drifter/drifter_claw_impact_lv",
+        ],
+    ),
+    (
+        "dynamo",
+        &[
+            "particles/abilities/dynamo/dynamo_void_sphere_preview.vpcf_c",
+            "particles/abilities/dynamo/dynamo_void_sphere_preview_beam.vpcf_c",
+            "particles/abilities/dynamo/dynamo_void_sphere_preview_light.vpcf_c",
+            "particles/abilities/dynamo/dynamo_void_sphere_preview_proj.vpcf_c",
+            "particles/abilities/dynamo/dynamo_void_sphere_preview_sun.vpcf_c",
+        ],
+    ),
+    (
+        "familiar",
+        &[
+            "particles/abilities/familiar/familiar_naptime_explode",
+            "particles/abilities/familiar/familiar_naptime_radius_indicator.vpcf_c",
+            "particles/abilities/familiar/familiar_naptime_radius_indicator_beam.vpcf_c",
+            "particles/abilities/familiar/familiar_naptime_radius_indicator_embers.vpcf_c",
+        ],
+    ),
+    (
+        "frank",
+        &[
+            "particles/abilities/frank/frank_jumpstart_buff.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_elec",
+            "particles/abilities/frank/frank_jumpstart_buff_light.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_pnt.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_smoke.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_sparks.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_trail.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_wave.vpcf_c",
+            "particles/abilities/frank/frank_jumpstart_buff_zap_",
+        ],
+    ),
+    (
+        "ghost",
+        &[
+            "particles/abilities/ghost/ghost_blood_bomb_explode",
+            "particles/abilities/ghost/ghost_blood_bomb_projectile.vpcf_c",
+            "particles/abilities/ghost/ghost_blood_bomb_projectile_glow.vpcf_c",
+            "particles/abilities/ghost/ghost_blood_bomb_projectile_trail.vpcf_c",
+            "particles/abilities/ghost/ghost_death_",
+            "particles/abilities/ghost/ghost_life_drain_cast_preview_fire.vpcf_c",
+            "particles/weapon_fx/ghost/ghost_",
+        ],
+    ),
+    (
+        "nano",
+        &[
+            "particles/abilities/nano/nano_cat_cast.vpcf_c",
+            "particles/abilities/nano/nano_ultimate_hit_burst.vpcf_c",
+            "particles/abilities/nano/nano_ultimate_hit_tgt.vpcf_c",
+            "particles/abilities/nano/nano_ultimate_target_debuff.vpcf_c",
+        ],
+    ),
+    (
+        "haze",
+        &[
+            "particles/abilities/haze/haze_invis_smoke_bomb.vpcf_c",
+            "particles/abilities/haze/haze_invis_smoke_bomb_flash.vpcf_c",
+            "particles/abilities/haze/haze_invis_smoke_bomb_ring.vpcf_c",
+            "particles/abilities/haze/haze_sleep_dagger_debuff.vpcf_c",
+            "particles/abilities/haze/haze_sleep_dagger_debuff_spiral",
+            "particles/abilities/haze/haze_sleep_dagger_debuff_z_motion.vpcf_c",
+            "particles/weapon_fx/haze/haze_muzzle_",
+            "particles/weapon_fx/haze/haze_tracer_impact.vpcf_c",
+            "particles/weapon_fx/haze/haze_tracer_impact_debris.vpcf_c",
+            "particles/weapon_fx/haze/haze_tracer_impact_detail.vpcf_c",
+            "particles/weapon_fx/haze/haze_tracer_impact_dust.vpcf_c",
+        ],
+    ),
+    (
+        "lash",
+        &["particles/abilities/lash/lash_flog_lifeleach_tgt_impact.vpcf_c"],
+    ),
+    (
+        "mirage",
+        &["particles/abilities/mirage/mirage_sand_phantom_deploy"],
+    ),
+    ("pocket", &["particles/abilities/pocket/pocket_damage_"]),
+    (
+        "priest",
+        &[
+            "particles/abilities/priest/priest_cone_aoe.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_embers.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_light",
+            "particles/abilities/priest/priest_cone_aoe_model.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_muzzle",
+            "particles/abilities/priest/priest_cone_aoe_projection.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_smoke.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_streaks.vpcf_c",
+            "particles/abilities/priest/priest_cone_aoe_trail_embers.vpcf_c",
+            "particles/abilities/priest/priest_snaptrap_root.vpcf_c",
+            "particles/abilities/priest/priest_snaptrap_root_base_beams.vpcf_c",
+            "particles/abilities/priest/priest_snaptrap_root_endcap.vpcf_c",
+            "particles/abilities/priest/priest_snaptrap_root_ground_projected.vpcf_c",
+        ],
+    ),
+    (
+        "ratking",
+        &[
+            "particles/abilities/ratking/ratking_minion_ambient.vpcf_c",
+            "particles/abilities/ratking/ratking_minion_ambient_emote.vpcf_c",
+            "particles/abilities/ratking/ratking_minion_ambient_eyes",
+            "particles/abilities/ratking/ratking_minion_ambient_trail.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff_mark.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff_model.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff_model_ambient.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff_model_endcap_flash.vpcf_c",
+            "particles/abilities/ratking/ratking_nibble_debuff_model_glow.vpcf_c",
+        ],
+    ),
+    (
+        "shiv",
+        &[
+            "particles/abilities/shiv/shiv_dash_dust.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_echo.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_pnt.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_start.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_tgt.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_tgt_icon.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_tgt_ring",
+            "particles/abilities/shiv/shiv_dash_track_trail.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_trail",
+            "particles/abilities/shiv/shiv_flash_",
+            "particles/abilities/shiv/shiv_thrown_shiv.vpcf_c",
+            "particles/abilities/shiv/shiv_thrown_shiv_endcap",
+            "particles/abilities/shiv/shiv_thrown_shiv_impact",
+            "particles/abilities/shiv/shiv_thrown_shiv_launch.vpcf_c",
+            "particles/abilities/shiv/shiv_thrown_shiv_model.vpcf_c",
+            "particles/abilities/shiv/shiv_thrown_shiv_trail",
+        ],
+    ),
+    (
+        "tengu",
+        &[
+            "particles/abilities/tengu/tengu_stone_form_ring.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_aoe.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_debris.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_dust_spear.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_hot_proj.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_light.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_model.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_proj.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_shake.vpcf_c",
+            "particles/abilities/tengu/tengu_stone_form_stomp_smoke.vpcf_c",
+            "particles/abilities/tengu/tengu_takeoff_",
+        ],
+    ),
+    (
+        "unicorn",
+        &[
+            "particles/abilities/unicorn/unicorn_prismatic_shield_explode_flares.vpcf_c",
+            "particles/abilities/unicorn/unicorn_prismatic_shield_explode_light.vpcf_c",
+            "particles/abilities/unicorn/unicorn_prismatic_shield_explode_shard",
+            "particles/abilities/unicorn/unicorn_prismatic_shield_silence_",
+        ],
+    ),
+    (
+        "gigawatt",
+        &["particles/abilities/gigawatt/gigawatt_voltage_drain_buff"],
+    ),
+    (
+        "vampirebat",
+        &["particles/abilities/vampirebat/vampirebat_lovebites_damage_body_lv.vpcf_c"],
+    ),
+    (
+        "warden",
+        &[
+            "particles/abilities/warden/warden_crowd_control_cast.vpcf_c",
+            "particles/abilities/warden/warden_crowd_control_cast_darken_proj.vpcf_c",
+            "particles/abilities/warden/warden_crowd_control_cast_embers.vpcf_c",
+            "particles/abilities/warden/warden_crowd_control_cast_flash.vpcf_c",
+            "particles/abilities/warden/warden_crowd_control_cast_light.vpcf_c",
+            "particles/abilities/warden/warden_crowd_control_cast_shock",
+            "particles/abilities/warden/warden_high_alert_buff_shield.vpcf_c",
+        ],
+    ),
+    (
+        "wraith",
+        &["particles/abilities/wraith/wraith_rapid_fire_buff_spiral.vpcf_c"],
+    ),
+];
 
 /// Hero codenames with built-in ability-VFX recolor recipes.
 #[must_use]
@@ -151,7 +436,9 @@ pub const fn pinned_hero_codenames() -> &'static [&'static str] {
         "abrams",
         "archer",
         "astro",
+        "baba",
         "bebop",
+        "chessmaster",
         "digger",
         "doorman",
         "drifter",
@@ -171,6 +458,7 @@ pub const fn pinned_hero_codenames() -> &'static [&'static str] {
         "pocket",
         "priest",
         "punkgoat",
+        "ratking",
         "shiv",
         "tengu",
         "unicorn",
@@ -208,14 +496,28 @@ fn paige_recipe() -> HeroRecolorRecipe {
             "models/heroes_wip/bookworm/materials/bookworm_sword_illustrated_color_psd_4eb22603.vtex_c",
             "models/heroes_wip/bookworm/materials/bookworm_stone_illustrated_color_psd_8ed29960.vtex_c",
             "models/heroes_wip/bookworm/materials/bookworm_dragon_color_tga_ed3d3b5.vtex_c",
-            "materials/models/particle/bookworm/neutral_black_dragon_color_psd_b8c8249f.vtex_c",
+            "models/heroes_wip/bookworm/materials/bookworm_dragon_vmat_g_tnprtransmissivecolor_70d941b.vtex_c",
+            // dash butterflies + the two cast books
+            "models/heroes_wip/bookworm/butterfly/bookworm_butterfly_color_psd_b4619bc6.vtex_c",
+            "models/heroes_wip/bookworm/materials/bookworm_book_color_psd_bd83eb89.vtex_c",
+            "models/heroes_wip/bookworm/materials/bookworm_book_color_dragon_psd_c3b5e08a.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        // Paige's ability color is all real textures + vertex colors, no tint
-        // constants.
-        material_entries: Vec::new(),
+        // The illustrated props and the dragon glow through green self-illum tints
+        // over their (pinned) albedos; without the stamp they render muddy.
+        material_entries: [
+            "materials/particle/abilities/bookworm/bookworm_projectile_self_illum.vmat_c",
+            "models/heroes_wip/bookworm/materials/bookworm_dragon.vmat_c",
+            "models/heroes_wip/bookworm/materials/bookworm_shield.vmat_c",
+            "models/heroes_wip/bookworm/materials/bookworm_stone.vmat_c",
+            "models/heroes_wip/bookworm/materials/bookworm_sword.vmat_c",
+            "models/heroes_wip/bookworm/materials/bookworm_sword_additive.vmat_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
         model_entries: [
             // the ult body that actually renders (found via the ult model particle)
             "models/particle/bookworm_horse_knight.vmdl_c",
@@ -225,6 +527,7 @@ fn paige_recipe() -> HeroRecolorRecipe {
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
+        shared_entries: Vec::new(),
         // The general ability effects color map: a large, clearly-chromatic
         // texture that reads as Paige's glow, so the UI swatch is representative.
         preview_texture: Some(
@@ -250,14 +553,18 @@ fn particle_only_recipe(codename: &str) -> HeroRecolorRecipe {
         material_entries: Vec::new(),
         model_entries: Vec::new(),
         // Particle-only: no color texture to render as a swatch.
+        shared_entries: Vec::new(),
         preview_texture: None,
     }
 }
 
-fn particles_plus_textures_recipe(
+/// The standard two particle roots plus pinned color textures and tint
+/// materials.
+fn standard_recipe(
     codename: &str,
     texture_entries: &[&str],
-    preview_texture: &str,
+    material_entries: &[&str],
+    preview_texture: Option<&str>,
 ) -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: codename.to_string(),
@@ -266,36 +573,53 @@ fn particles_plus_textures_recipe(
             format!("particles/weapon_fx/{codename}/"),
         ],
         texture_entries: texture_entries.iter().map(|s| (*s).to_string()).collect(),
-        material_entries: Vec::new(),
+        material_entries: material_entries.iter().map(|s| (*s).to_string()).collect(),
         model_entries: Vec::new(),
-        preview_texture: Some(preview_texture.to_string()),
+        shared_entries: Vec::new(),
+        preview_texture: preview_texture.map(str::to_string),
     }
 }
 
-/// Infernus (`inferno`): recolor his fire via the particle color params. This
-/// matches the reference blue recolor, which does NOT touch `inferno_body.vmat_c`
-/// (the body tint is not what colors his fire).
-///
-/// The reference also recolors the fire ramp / burning / lava textures, but it
-/// does so on hero-specific COPIES it repoints the particles to. The vanilla fire
-/// textures are SHARED across every fire effect in the game, so recoloring them in
-/// place would tint everyone's fire, not just Infernus's. Hero-isolated fire-texture
-/// recolor needs a rename+repoint step (recolor to a new path, edit the particle's
-/// texture reference) that is not built yet, so for now Infernus is recolored by
-/// particle params alone: his fire reads the picked hue but keeps the vanilla fire
-/// texture's luminance/shape.
+/// Infernus (`inferno`): particle color params plus the two additive glow layers
+/// of his live body model, `inferno_headglow` (the flame hair) and
+/// `inferno_armglow`. Their orange crust albedos and red NPR transmissive maps are
+/// hero-only and recolored in place, and the self-illum tints are stamped, so the
+/// tint multiplies a recolored albedo of the same hue instead of the vanilla
+/// orange. `inferno_body` stays vanilla (its tint does not color his fire). The
+/// fire ramp / burning textures the particles sample are shared game-wide, so the
+/// hue comes from the particle params alone.
 fn inferno_recipe() -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: "inferno".to_string(),
         particle_prefixes: vec![
             "particles/abilities/inferno/".to_string(),
             "particles/weapon_fx/inferno/".to_string(),
+            // The napalm debuff overlay. Its flame-dash sibling stays out: neutrals
+            // and the boss spawn that one too.
+            "particles/status_fx/status_fx_inferno_napalm_debuff.vpcf_c".to_string(),
         ],
-        texture_entries: Vec::new(),
-        material_entries: Vec::new(),
+        texture_entries: [
+            "models/heroes_staging/inferno_v4/materials/inferno_glow_png_c2e03ac5.vtex_c",
+            "models/heroes_staging/inferno_v4/materials/inferno_glow_psd_3c639d14.vtex_c",
+            "models/heroes_staging/inferno_v4/materials/inferno_armglow_vmat_g_tnprtransmissivecolor_df833b87.vtex_c",
+            "models/heroes_staging/inferno_v4/materials/inferno_headglow_vmat_g_tnprtransmissivecolor_783cf05a.vtex_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
+        material_entries: [
+            "models/heroes_staging/inferno_v4/materials/inferno_armglow.vmat_c",
+            "models/heroes_staging/inferno_v4/materials/inferno_headglow.vmat_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
         model_entries: Vec::new(),
-        // No representative color texture, so no preview swatch.
-        preview_texture: None,
+        shared_entries: Vec::new(),
+        preview_texture: Some(
+            "models/heroes_staging/inferno_v4/materials/inferno_glow_psd_3c639d14.vtex_c"
+                .to_string(),
+        ),
     }
 }
 
@@ -325,6 +649,7 @@ fn abrams_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/abrams/abrams_leap_ground_impact_hot_symbol_projected_vmat_g_tselfillum_670d93d.vtex_c"
                 .to_string(),
@@ -347,12 +672,20 @@ fn fencer_recipe() -> HeroRecolorRecipe {
             "materials/particle/projected/fencer_sigil_pentagram_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/fencer/fencer_ult_gradient_color_psd_51322651.vtex_c",
             "models/heroes_wip/fencer/materials/fencer_sword_color_tga_52ec8bfe.vtex_c",
+            // red gradient albedos of the ult mask FX and the reload sword materialize
+            "models/abilities/materials/fencer_mask_color_psd_466e30e0.vtex_c",
+            "models/abilities/materials/fencer_mask_color_psd_ebfbc521.vtex_c",
+            "models/heroes_wip/fencer/materials/fencer_sword_color_tga_70290e99.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        material_entries: Vec::new(),
+        material_entries: vec![
+            "materials/particle/abilities/fencer/fencer_mask_dissolve.vmat_c".to_string(),
+            "models/heroes_wip/fencer/materials/fencer_sword_dissolve_emissive.vmat_c".to_string(),
+        ],
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/fencer/fencer_ult_gradient_color_psd_51322651.vtex_c"
                 .to_string(),
@@ -373,12 +706,14 @@ fn ghost_recipe() -> HeroRecolorRecipe {
         texture_entries: [
             "models/heroes_staging/ghost/materials/ghost2_clothes_fx_prop_color_psd_b398de35.vtex_c",
             "models/heroes_staging/ghost/materials/ghost2_clothes_color_png_fc80b39a.vtex_c",
+            "materials/particle/abilities/ghost/ghost_health_swap_precast_proj_vmat_g_tselfillum_670d93d.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "models/heroes_staging/ghost/materials/ghost2_clothes_fx_prop_color_psd_b398de35.vtex_c"
                 .to_string(),
@@ -405,6 +740,7 @@ fn nano_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/nano/nano_ult_ground_dark_proj_vmat_g_tselfillum_670d93d.vtex_c"
                 .to_string(),
@@ -424,12 +760,15 @@ fn lash_recipe() -> HeroRecolorRecipe {
         ],
         texture_entries: [
             "materials/particle/cables/lash_cable_material_vmat_g_tcolor_8ca8af3e.vtex_c",
+            // Ground Strike's blue cone streak (a black-margin sprite sheet)
+            "materials/particle/abilities/lash/lash_ground_strike_scroll.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/cables/lash_cable_material_vmat_g_tcolor_8ca8af3e.vtex_c"
                 .to_string(),
@@ -446,6 +785,9 @@ fn mcginnis_recipe() -> HeroRecolorRecipe {
         particle_prefixes: vec![
             "particles/abilities/mcginnis/".to_string(),
             "particles/weapon_fx/mcginnis/".to_string(),
+            // reload FX spawned by her reload clips, under the `forge` codename
+            "particles/weapon_fx/forge/forge_reload_handle_charge.vpcf_c".to_string(),
+            "particles/weapon_fx/forge/forge_reload_sparks.vpcf_c".to_string(),
         ],
         texture_entries: [
             "materials/particle/abilities/mcginnis/mcginnis_turret_ambient_goo_vmat_g_tcolor_974c5f09.vtex_c",
@@ -456,6 +798,7 @@ fn mcginnis_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/mcginnis/mcginnis_turret_ambient_goo_vmat_g_tcolor_974c5f09.vtex_c"
                 .to_string(),
@@ -479,8 +822,13 @@ fn magician_recipe() -> HeroRecolorRecipe {
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        material_entries: Vec::new(),
+        // the bolt model's lavender tints and the Spectral Assistant turret's purple
+        material_entries: vec![
+            "materials/particle/abilities/magician/magician_bolt.vmat_c".to_string(),
+            "models/heroes_staging/magician/materials/magician_spectral_assistant.vmat_c".to_string(),
+        ],
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/projected/magician_hex_ground_projected_vmat_g_tselfillum_670d93d.vtex_c"
                 .to_string(),
@@ -488,40 +836,41 @@ fn magician_recipe() -> HeroRecolorRecipe {
     }
 }
 
-/// Pocket (`pocket`): particles plus hero-specific satchel, body, and magic
-/// missile color textures. The audit also found shared noise/default/Viscous
-/// textures; those stay untouched to avoid cross-hero bleed.
-///
-/// Ability-prop mesh albedos are pinned here too: Pocket's prop models (briefcase,
-/// AOE frog, deployable) carry NO `COLOR` vertex attribute, and their model-particle
-/// renderers are color-free, so neither the vertex-color nor the particle-tint axis
-/// reaches them. Painting the prop albedo is the only axis that does. The suitcase
-/// albedo lives under `models/heroes_staging/synth` (so a trippy-skin pass also
-/// catches it); the `models/abilities/*` props are skin-invisible and only covered
-/// here.
+/// Pocket (`pocket`): particles plus the barrage tracer glow (albedo + tint
+/// material), the Affliction `AoE` frog prop and the slime ground decal. The frog's
+/// model particle is color-free, so its albedo and transmissive maps are the only
+/// axis that reaches it. Left out: the satchel ring decal (neutral telegraphs draw
+/// the same material) and the suitcase / ethereal-body / deployable albedos
+/// (achromatic or never rendered in the 2026-10 build).
 fn pocket_recipe() -> HeroRecolorRecipe {
     HeroRecolorRecipe {
         codename: "pocket".to_string(),
         particle_prefixes: vec![
             "particles/abilities/pocket/".to_string(),
             "particles/weapon_fx/pocket/".to_string(),
+            // The satchel's hit children still live in the legacy synth dir.
+            "particles/abilities/synth/synth_pulse_hit_beam.vpcf_c".to_string(),
+            "particles/abilities/synth/synth_pulse_hit_tgt.vpcf_c".to_string(),
         ],
         texture_entries: [
-            "materials/particle/projected/pocket_satchel_projected_vmat_g_tselfillum_670d93d.vtex_c",
-            "models/heroes_staging/synth/materials/pocket_body_color_png_eb808d8a.vtex_c",
             "materials/particle/abilities/pocket/pocket_magic_missile_illum_vmat_g_tcolor_754e94bd.vtex_c",
-            // Ability-prop mesh albedos (no COLOR verts, color-free render particles).
-            "models/heroes_staging/synth/materials/pocket_suitcase_vmat_g_tcolor_e71e9d59.vtex_c",
-            "models/abilities/materials/pocket_frog_small_color_png_e2620619.vtex_c",
-            "models/abilities/materials/synth_deployable_color_psd_a57da819.vtex_c",
+            // The Affliction AoE frog prop: albedo + flat yellow transmissive.
+            "models/abilities/materials/pocket_frog_small_vmat_g_tcolor_be6f0aff.vtex_c",
+            "models/abilities/materials/pocket_frog_small_vmat_g_tnprtransmissivecolor_4d5e61a7.vtex_c",
+            // (the satchel ring decal is also drawn by neutral telegraphs)
+            "materials/particle/projected/pocket_slime_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        material_entries: Vec::new(),
+        material_entries: vec![
+            "materials/particle/abilities/pocket/pocket_magic_missile_illum.vmat_c".to_string(),
+            "materials/models/particle/pocket_affliction_erosion.vmat_c".to_string(),
+        ],
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
-            "materials/particle/projected/pocket_satchel_projected_vmat_g_tselfillum_670d93d.vtex_c"
+            "materials/particle/abilities/pocket/pocket_magic_missile_illum_vmat_g_tcolor_754e94bd.vtex_c"
                 .to_string(),
         ),
     }
@@ -532,33 +881,40 @@ fn pocket_recipe() -> HeroRecolorRecipe {
 /// particle tint alone makes those read as flat filled circles, so animated prism
 /// uses a projected-texture rainbow over the authored falloff.
 fn unicorn_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "unicorn",
         &[
             "materials/particle/abilities/unicorn/unicorn_prismatic_shield_ground_warning_projected_vmat_g_tselfillum_670d93d.vtex_c",
-            "materials/particle/projected/unicorn_beams_of_light_ground_projected_light_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/unicorn_flux_rainbow_ground_projected_light_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/unicorn_radiant_flare_ground_advance_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/unicorn_radiant_flare_ground_preview_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/unicorn_radiant_flare_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "models/abilities/materials/unicorn_star_dagger_color_png_e159bb53.vtex_c",
+            "models/abilities/materials/unicorn_star_dagger_vmat_g_tnprtransmissivecolor_6f45577b.vtex_c",
         ],
-        "materials/particle/projected/unicorn_radiant_flare_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[],
+        Some(
+            "materials/particle/projected/unicorn_radiant_flare_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
 /// Grey Talon (`archer`): particles plus the charged-shot gradient texture.
 fn archer_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "archer",
         &[
             "materials/particle/abilities/archer/archer_charged_shot_gradient_color_v2_psd_51e62704.vtex_c",
             "materials/particle/abilities/archer/archer_charged_shot_gradient_color_psd_17c02a47.vtex_c",
-            "materials/particle/abilities/archer_guided_arrow_explosion_sphere_vmat_g_tcolor_a84e2808.vtex_c",
-            "materials/models/particle/archer/archer_arrow_illum_vmat_g_tcolor_7d46cca1.vtex_c",
             "models/heroes_staging/archer/materials/archer_guided_arrow_color_psd_edd3d0f5.vtex_c",
-            "models/heroes_staging/archer/bird/materials/bird_color_psd_117d09e0.vtex_c",
+            "materials/particle/abilities/archer/archer_dreamcatcher_pattern_psd_68e6811a.vtex_c",
         ],
-        "materials/particle/abilities/archer/archer_charged_shot_gradient_color_v2_psd_51e62704.vtex_c",
+        &[
+            "materials/models/particle/archer_immobilize_trap_aura.vmat_c",
+        ],
+        Some(
+            "materials/particle/abilities/archer/archer_charged_shot_gradient_color_v2_psd_51e62704.vtex_c",
+        ),
     )
 }
 
@@ -566,35 +922,248 @@ fn archer_recipe() -> HeroRecolorRecipe {
 /// use bright round masks tinted by the particle color, so prism leaves those
 /// decal particles vanilla while recoloring the beam, sparks, and perimeter.
 fn bebop_recipe() -> HeroRecolorRecipe {
-    particle_only_recipe("bebop")
+    // The hook fist and sticky bomb shells glow through static self-illum tints;
+    // the bomb shell's 1x1 red albedo has to move with its tint.
+    standard_recipe(
+        "bebop",
+        &["models/heroes_staging/bebop/materials/bebop_sticky_bomb_glow_vmat_g_tcolor_c2575562.vtex_c"],
+        &[
+            "models/heroes_staging/bebop/materials/bebop_hand_projectile.vmat_c",
+            "models/heroes_staging/bebop/materials/bebop_sticky_bomb_glow.vmat_c",
+        ],
+        None,
+    )
 }
 
-/// Mo & Krill (`digger`): burrow/spin projected ground sigils.
+/// Solomon (`chessmaster`): teal and gold, mostly particle color. The dark-piece
+/// cooldown status sits under `status_fx` with a flat tint texture of its own. The
+/// projected ground sigils keep a flat green `g_tSelfIllum` placeholder, the teal
+/// shell and queen stomp sphere and the gold piece trim are static self-illum
+/// tints, and the spectral hand and knight buff shield glow through baked vertex
+/// color. The idle ambient (floating pieces and ring, spawned by the body model)
+/// rides the dir prefix and recolors too. The pieces' stone albedos and NPR
+/// transmissive constants, the body and the borrowed assets (Ivy's stomp, the
+/// shared `deployment_preview`, Silver's boot kick bubble) stay vanilla.
+fn chessmaster_recipe() -> HeroRecolorRecipe {
+    let mut r = standard_recipe(
+        "chessmaster",
+        &[
+            "materials/particle/abilities/chessmaster/chessmaster_move_piece_cooldown_color_tint.vtex_c",
+            "materials/particle/abilities/chessmaster/chessmaster_queen_cast_color_tint.vtex_c",
+            "materials/particle/abilities/chessmaster/chessmaster_queen_warning_cast_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/chessmaster_bishop_aura_ground_square_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/chessmaster_queen_stomp_ground_bright_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/chessmaster_queen_stomp_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/chessmaster_queen_stomp_post_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/chessmaster_square_board_edge_psd_853ade7.vtex_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_rookglow_vmat_g_tnprtransmissivecolor_c88597d0.vtex_c",
+        ],
+        &[
+            "models/heroes_wip/chessmaster/materials/chessmaster_bishop.vmat_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_chesspieces_fx.vmat_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_knight.vmat_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_queen.vmat_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_rook.vmat_c",
+            "models/heroes_wip/chessmaster/materials/chessmaster_rookglow.vmat_c",
+            "models/particle/materials/chessmaster_queen_stomp_impact_sphere.vmat_c",
+        ],
+        Some(
+            "materials/particle/projected/chessmaster_queen_stomp_ground_bright_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
+    );
+    r.particle_prefixes
+        .push("particles/status_fx/status_fx_chessmaster".to_string());
+    r.model_entries = [
+        "models/heroes_wip/chessmaster/chessmaster_hand.vmdl_c",
+        "models/heroes_wip/chessmaster/chessmaster_knightshield.vmdl_c",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    r
+}
+
+/// Holliday (`astro`): particles plus the Powder Keg barrel's rune glow, a static
+/// self-illum tint (the barrel's wood albedo is shared with her body).
+fn astro_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "astro",
+        &[],
+        &["models/abilities/materials/astro_barrelv2.vmat_c"],
+        None,
+    )
+}
+
+/// Rat King (`ratking`): his ability and weapon colors are particle params (warm
+/// red and orange constants), so the two particle roots carry most of the set.
+/// Outside them: the green self-illum ring of the ult-aura and grenade-blast ground
+/// decals, the pale sludge albedo of the planted flag's enemy-aura decal, the crown
+/// over buffed allies, and the glowing sewage of the planted diorama. His body, rat
+/// minions and props keep their surface colors; the ult anticipation circle is Lady
+/// Geist's blood bomb decal, so it stays vanilla.
+fn ratking_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "ratking",
+        &[
+            "materials/particle/abilities/ratking/ratking_standard_bearer_aura_caster_ground_projected_bright_psd_e4a346cc.vtex_c",
+            "materials/particle/abilities/ratking/ratking_standard_bearer_exploded_ground_color_psd_f71dffe9.vtex_c",
+            "models/heroes_wip/ratking/materials/ratking_crown_fx_vmat_g_tcolor_518041ec.vtex_c",
+            "models/heroes_wip/ratking/materials/ratking_crown_fx_vmat_g_tnprtransmissivecolor_ee835aa2.vtex_c",
+            "models/heroes_wip/ratking/materials/ratking_ult_diorama_sewage_vmat_g_tnprtransmissivecolor_1fff71fb.vtex_c",
+        ],
+        &[
+            "models/heroes_wip/ratking/materials/ratking_crown_fx.vmat_c",
+            "models/heroes_wip/ratking/materials/ratking_ult_diorama_sewage.vmat_c",
+        ],
+        Some(
+            "materials/particle/abilities/ratking/ratking_standard_bearer_aura_caster_ground_projected_bright_psd_e4a346cc.vtex_c",
+        ),
+    )
+}
+
+/// Baba (`baba`): her brew effects are particle-driven (the materials follow
+/// `$COLORTINT` / `$SELFILLUMTINT`), but two projected ground decals keep a green
+/// self-illum map under the particle tint (Hexing Brew's explosion ring, Bench
+/// Run's slam) and the Pigeon Assault pigeon is a purple additive model whose
+/// only color axis is its albedo. Left out: the lens glow and the body's
+/// self-illum gems (skin), the bench's bead glow (no live setter for
+/// `$baba_beads_self_illum`) and the arm effect (its particle is dead).
+fn baba_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "baba",
+        &[
+            "materials/particle/abilities/baba/baba_hexing_brew_explosion_ground_bright_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/abilities/baba/baba_bench_slam_impact_ground_bright_projected_psd_ead108de.vtex_c",
+            "models/heroes_wip/baba/materials/pigeon_effect_color_tga_f5ac1d89.vtex_c",
+        ],
+        &[],
+        Some("models/heroes_wip/baba/materials/pigeon_effect_color_tga_f5ac1d89.vtex_c"),
+    )
+}
+
+/// Seven (`gigawatt`): Power Surge's chain jump and the Storm Cloud status sit
+/// outside his particle dirs.
+fn gigawatt_recipe() -> HeroRecolorRecipe {
+    let mut r = particle_only_recipe("gigawatt");
+    r.particle_prefixes.extend([
+        "particles/abilities/gigawatt_chain_lightning".to_string(),
+        "particles/status_fx/gigawatt_status_storm_cloud".to_string(),
+    ]);
+    r
+}
+
+/// Billy (`punkgoat`): the tether chain, sigil nails and the profanity text over a
+/// tethered enemy take their color from material tints, not particles.
+fn punkgoat_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "punkgoat",
+        &[
+            "models/heroes_wip/punkgoat/materials/punkgoat_chain_vmat_g_tcolor_a9fad00e.vtex_c",
+            "models/heroes_wip/punkgoat/materials/anarchylogo_emissive_psd_793f527d.vtex_c",
+        ],
+        &[
+            "models/heroes_wip/punkgoat/materials/punkgoat_chain.vmat_c",
+            "models/heroes_wip/punkgoat/materials/punkgoat_profanity.vmat_c",
+        ],
+        None,
+    )
+}
+
+/// Mina (`vampirebat`): the blink / bat swarm bat prop is red through its
+/// material tints and a flat red albedo.
+fn vampirebat_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "vampirebat",
+        &[
+            "models/particle/materials/vampirebat_bat_vmat_g_tcolor_a29884ae.vtex_c",
+            "materials/particle/projected/vampirebat_blink_preview_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/vampirebat_steallife_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ],
+        &[
+            "models/particle/materials/vampirebat_bat.vmat_c",
+        ],
+        None,
+    )
+}
+
+/// Mo & Krill (`digger`): the burrow explosion ground sigil. The channel sigil's
+/// self-illum scale is a static 0, so its placeholder map never renders.
 fn digger_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "digger",
         &[
-            "materials/particle/abilities/digger/digger_burrow_channel_ground_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/digger/digger_burrow_explode_ground_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
-            "materials/particle/abilities/digger/digger_burrow_spin_ground_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
         ],
-        "materials/particle/abilities/digger/digger_burrow_explode_ground_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[],
+        Some(
+            "materials/particle/abilities/digger/digger_burrow_explode_ground_dark_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
+/// The Doorman: most of his orange is NOT in particles or textures. The doorway
+/// portals, luggage cart, bell, ult key and the key glow on his body are additive
+/// self-illum materials whose color is a `g_vColorTint1` / `g_vSelfIllumTint1`
+/// constant over grayscale gradients, so they are stamped as material entries.
+/// The bell's flat orange `g_tColor` is the one prop texture that carries chroma.
+///
+/// The exit door (`door_end` material group: `doorman_door_portal_blue`) and the
+/// allied cart (`doorman_luggagetrolley_friendly`) are blue in vanilla; they are
+/// stamped too because the particle pass already flattens their `_enddoor` /
+/// `_allied` particles onto the same hue. The placement previews
+/// (`doorman_door_preview{,_bad}`: valid blue / invalid red) stay vanilla so a red
+/// recolor can't read as "can't place here". The grenade debuff ground decal is
+/// left out too: Victor's revive and an item draw the same material. The orange (enemy-side) cart
+/// material `doorman_luggagetrolley` is left out because Solomon's
+/// `chessmaster_rook_buff_shield_model` renders it too.
+/// `doorman_hotel_victim_debuff_keyhole` looks magenta but is sampled as
+/// `MIX_BALPHA` (blue channel = alpha): data, not color.
 fn doorman_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
-        "doorman",
-        &["materials/particle/abilities/doorman/doorman_grenade_debuff_ground_projected_vmat_g_tselfillum_670d93d.vtex_c"],
-        "materials/particle/abilities/doorman/doorman_grenade_debuff_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
-    )
+    HeroRecolorRecipe {
+        codename: "doorman".to_string(),
+        particle_prefixes: vec![
+            "particles/abilities/doorman/".to_string(),
+            "particles/weapon_fx/doorman/".to_string(),
+            "particles/status_fx/status_fx_doorman".to_string(),
+        ],
+        texture_entries: [
+            "models/heroes_wip/doorman/materials/doorman_bell_vmat_g_tcolor_f7d92786.vtex_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
+        material_entries: [
+            "models/heroes_wip/doorman/materials/doorman_door_portal.vmat_c",
+            "models/heroes_wip/doorman/materials/doorman_door_portal_blue.vmat_c",
+            "models/heroes_wip/doorman/materials/doorman_gundoor_portal.vmat_c",
+            "models/heroes_wip/doorman/materials/doorman_luggagetrolley_friendly.vmat_c",
+            "models/heroes_wip/doorman/materials/doorman_bell.vmat_c",
+            "models/heroes_wip/doorman/materials/doorman_ult_key.vmat_c",
+            "models/heroes_wip/doorman_v2/materials/doorman_keyglow.vmat_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
+        model_entries: Vec::new(),
+        shared_entries: Vec::new(),
+        preview_texture: Some(
+            "models/heroes_wip/doorman/materials/doorman_bell_vmat_g_tcolor_f7d92786.vtex_c"
+                .to_string(),
+        ),
+    }
 }
 
 fn drifter_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "drifter",
-        &["materials/particle/projected/drifter_claw_ground_projected_vmat_g_tselfillum_670d93d.vtex_c"],
-        "materials/particle/projected/drifter_claw_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[
+            "materials/particle/projected/drifter_claw_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/abilities/drifter/drifter_stalker_victim_screen_eyes.vtex_c",
+        ],
+        &[],
+        Some(
+            "materials/particle/projected/drifter_claw_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
@@ -604,42 +1173,53 @@ fn dynamo_recipe() -> HeroRecolorRecipe {
         particle_prefixes: vec![
             "particles/abilities/dynamo/".to_string(),
             "particles/weapon_fx/dynamo/".to_string(),
-            "particles/dynamo/".to_string(),
             "particles/status_fx/status_fx_dynamo".to_string(),
+            // His Quantum Entanglement / Singularity targeting ring, still under the
+            // legacy `sumo` name. (`particles/dynamo/` is Bebop's sticky-bomb buff.)
+            "particles/abilities/sumo/sumo_singularity_preview_tgt".to_string(),
+            // His stomp, beside the ability dirs under the old `sumo` name.
+            "particles/abilities/sumo_stomp".to_string(),
         ],
+        // The void sphere symbols are grayscale (particle-tinted) and the sphere /
+        // heal-buff model tints follow particle expressions. The Singularity ripple
+        // and the tracer rocket still use `sumo` assets.
         texture_entries: [
-            "materials/particle/projected/dynamo_void_sphere_projected_ground_vmat_g_tselfillum_670d93d.vtex_c",
-            "materials/particle/abilities/dynamo/dynamo_void_sphere_marker_symbol_psd_73d6401e.vtex_c",
-            "materials/particle/abilities/dynamo/dynamo_void_sphere_planet_symbol.vtex_c",
-            "materials/particle/abilities/dynamo/dynamo_void_sphere_sun_halo_symbol.vtex_c",
-            "materials/particle/abilities/dynamo/dynamo_void_sphere_sun_symbol.vtex_c",
+            "materials/particle/abilities/sumo_singularity_ripple_vmat_g_tcolor_9f33a436.vtex_c",
+            "models/particle/materials/sumo_bullet_gradient_color_psd_c52e3bfb.vtex_c",
         ]
         .iter()
         .map(|s| (*s).to_string())
         .collect(),
-        material_entries: vec![
-            "materials/models/particle/dynamo_void_sphere_cyl.vmat_c".to_string(),
-            "materials/models/particle/dynamo_heal_buff_model.vmat_c".to_string(),
-        ],
+        material_entries: [
+            "materials/particle/abilities/sumo_singularity_ripple.vmat_c",
+            "materials/particle/abilities/sumo_singularity_ripple_boundary.vmat_c",
+            "models/particle/materials/sumo_rocket.vmat_c",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
-            "materials/particle/projected/dynamo_void_sphere_projected_ground_vmat_g_tselfillum_670d93d.vtex_c"
+            "materials/particle/abilities/sumo_singularity_ripple_vmat_g_tcolor_9f33a436.vtex_c"
                 .to_string(),
         ),
     }
 }
 
 fn familiar_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "familiar",
         &[
             "materials/particle/abilities/familiar/familiar_naptime_coneradius_intersection_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/familiar/familiar_pillow_explode_ground_bright_projected_vmat_g_tselfillum_670d93d.vtex_c",
-            "materials/particle/abilities/familiar/familiar_pillow_explode_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/familiar/familiar_spotlight_ground_edge_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/familiar/familiar_spotlight_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
         ],
-        "materials/particle/abilities/familiar/familiar_spotlight_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[],
+        Some(
+            "materials/particle/abilities/familiar/familiar_spotlight_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
@@ -662,8 +1242,8 @@ fn frank_recipe() -> HeroRecolorRecipe {
             "particles/abilities/frank/".to_string(),
             "particles/weapon_fx/frank/".to_string(),
         ],
+        // (frank_painaura_aoe_ground_projected is also Celeste's dagger target decal.)
         texture_entries: [
-            "materials/particle/abilities/frank/frank_painaura_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/frank/frank_painaura_model_fade_color_psd_807c6243.vtex_c",
             "materials/particle/abilities/frank/frank_revive_marker_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/frank_shock_miss_projected_bright_vmat_g_tselfillum_670d93d.vtex_c",
@@ -673,65 +1253,85 @@ fn frank_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
-            "materials/particle/abilities/frank/frank_painaura_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c"
+            "materials/particle/abilities/frank/frank_painaura_model_fade_color_psd_807c6243.vtex_c"
                 .to_string(),
         ),
     }
 }
 
 fn haze_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "haze",
-        &["materials/particle/abilities/haze/haze_tracer_self_illum_vmat_g_tcolor_52a5b2da.vtex_c"],
-        "materials/particle/abilities/haze/haze_tracer_self_illum_vmat_g_tcolor_52a5b2da.vtex_c",
+        &[
+            "materials/particle/abilities/haze/haze_tracer_self_illum_vmat_g_tcolor_52a5b2da.vtex_c",
+        ],
+        &[
+            "materials/particle/abilities/haze/haze_tracer_self_illum.vmat_c",
+        ],
+        Some(
+            "materials/particle/abilities/haze/haze_tracer_self_illum_vmat_g_tcolor_52a5b2da.vtex_c",
+        ),
     )
 }
 
 /// Kelvin: dome projections plus the ice-dome model color map. The generic
 /// `ice_surface` texture stays excluded because it is shared broadly.
 fn kelvin_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    // `kelvin_ice_dome_projected_psd_d86c1818` is the projected material's
+    // g_tNormalRoughness; a hue set on it bends the normals, so it stays out.
+    standard_recipe(
         "kelvin",
         &[
-            "materials/particle/projected/kelvin_ice_dome_projected_psd_d86c1818.vtex_c",
             "materials/particle/projected/kelvin_ice_dome_projected_psd_b5785889.vtex_c",
             "models/abilities/materials/ice_dome_color_psd_3a38e562.vtex_c",
         ],
-        "materials/particle/projected/kelvin_ice_dome_projected_psd_d86c1818.vtex_c",
+        &[],
+        Some("materials/particle/projected/kelvin_ice_dome_projected_psd_b5785889.vtex_c"),
     )
 }
 
 fn priest_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "priest",
         &[
             "materials/particle/abilities/priest/priest_flashbang_debuff_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
-            "materials/particle/abilities/priest/priest_snaptrap_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/priest_snaptrap_projectile_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
         ],
-        "materials/particle/abilities/priest/priest_snaptrap_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[],
+        Some(
+            "materials/particle/projected/priest_snaptrap_projectile_aoe_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
 /// Ivy (`tengu`): particle namespace is `tengu`, while two color-bearing ability
 /// assets still use Ivy-era paths.
 fn tengu_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "tengu",
         &[
             "materials/particle/cables/ivy_vine_cable_vmat_g_tcolor_9509ed42.vtex_c",
             "models/abilities/materials/ivy_entangling_thorns_vmat_g_tcolor_59ac0039.vtex_c",
+            "models/abilities/materials/ivy_entangling_thorns_vmat_g_tnprtransmissivecolor_4d5e61a7.vtex_c",
+            "models/abilities/materials/ivy_thornbomb_color_png_6ca9c4e1.vtex_c",
         ],
-        "models/abilities/materials/ivy_entangling_thorns_vmat_g_tcolor_59ac0039.vtex_c",
+        &[
+            "models/heroes_staging/tengu/tengu_v2/materials/tengu_dissolve_mat.vmat_c",
+        ],
+        Some(
+            "models/abilities/materials/ivy_entangling_thorns_vmat_g_tcolor_59ac0039.vtex_c",
+        ),
     )
 }
 
 fn viper_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "viper",
         &["materials/particle/abilities/viper/viper_petrify_symbol_ground_psd_a643967f.vtex_c"],
-        "materials/particle/abilities/viper/viper_petrify_symbol_ground_psd_a643967f.vtex_c",
+        &["materials/models/particle/viper_venom_blobs.vmat_c"],
+        Some("materials/particle/abilities/viper/viper_petrify_symbol_ground_psd_a643967f.vtex_c"),
     )
 }
 
@@ -745,17 +1345,16 @@ fn viscous_recipe() -> HeroRecolorRecipe {
         ],
         texture_entries: [
             "materials/models/particle/viscous_puddle_telegraph_vmat_g_tcolor_ac749641.vtex_c",
-            "materials/particle/abilities/viscous/viscous_detail_psd_a2817163.vtex_c",
+            // (viscous_detail_psd_a2817163 is shared with a neutral sludge creature.)
             "materials/particle/abilities/viscous/viscous_detail_psd_3c03ec04.vtex_c",
             "materials/particle/abilities/viscous/viscous_detail_psd_4414414e.vtex_c",
             "models/heroes_staging/viscous/materials/viscous_punch_preview_vmat_g_tcolor_32414205.vtex_c",
             "models/heroes_staging/viscous/materials/viscous_punch_vmat_g_tcolor_afc99362.vtex_c",
-            "models/heroes_staging/viscous/materials/viscous_fist_dissolve_vmat_g_tcolor_296284fc.vtex_c",
             "models/heroes_staging/viscous/materials/viscous_ball_vmat_g_tcolor_2c347bde.vtex_c",
+            "models/heroes_staging/viscous/materials/viscous_melee_anvil_vmat_g_tcolor_aff502e0.vtex_c",
             "models/abilities/materials/viscous_cube_color_png_81d0eb6a.vtex_c",
             "models/abilities/materials/viscous_cube_color_png_85c8b349.vtex_c",
             "models/abilities/materials/viscous_cube_color_png_daff99b9.vtex_c",
-            "models/abilities/materials/viscous_sphere_color_png_4de0c542.vtex_c",
             "models/abilities/materials/viscous_fist_color_psd_ab531623.vtex_c",
             "models/abilities/materials/viscous_fist_color_psd_d8e8086a.vtex_c",
         ]
@@ -765,12 +1364,21 @@ fn viscous_recipe() -> HeroRecolorRecipe {
         material_entries: vec![
             "models/abilities/materials/viscous_slime.vmat_c".to_string(),
             "models/abilities/materials/viscous_slime_blobs.vmat_c".to_string(),
-            "models/abilities/materials/viscous_cube.vmat_c".to_string(),
-            "models/heroes_staging/viscous/materials/viscous_punch.vmat_c".to_string(),
-            "models/heroes_staging/viscous/materials/viscous_fist_dissolve.vmat_c".to_string(),
             "models/heroes_staging/viscous/materials/viscous_ball.vmat_c".to_string(),
+            "materials/particle/abilities/viscous/viscous_goo_charge_projectile.vmat_c".to_string(),
+            "materials/particle/abilities/viscous/viscous_goo_projectile.vmat_c".to_string(),
+            "models/heroes_staging/viscous/materials/viscous_melee_anvil.vmat_c".to_string(),
+            // translucent goo / blob materials with a baked green g_vColorTint
+            "materials/models/particle/viscous_projectile_erode.vmat_c".to_string(),
+            "materials/models/particle/viscous_splash_erode.vmat_c".to_string(),
+            "materials/particle/abilities/viscous/viscous_base_projectile.vmat_c".to_string(),
+            "materials/particle/blobs/viscous_blob_transluscent.vmat_c".to_string(),
+            "materials/particle/blobs/viscous_debuff_blob.vmat_c".to_string(),
+            "materials/particle/blobs/viscous_sprinkler_blob.vmat_c".to_string(),
+            "materials/particle/projected/viscous_blob_projected.vmat_c".to_string(),
         ],
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/models/particle/viscous_puddle_telegraph_vmat_g_tcolor_ac749641.vtex_c"
                 .to_string(),
@@ -778,25 +1386,18 @@ fn viscous_recipe() -> HeroRecolorRecipe {
     }
 }
 
-/// Warden: include the ability shield scanline map, but not the body albedo that
-/// `warden_temp.vmat_c` references, since overriding it would recolor the skin.
-fn warden_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
-        "warden",
-        &["materials/models/particle/warden_tech_shield_scanline_color_psd_7e04e0b4.vtex_c"],
-        "materials/models/particle/warden_tech_shield_scanline_color_psd_7e04e0b4.vtex_c",
-    )
-}
-
 fn werewolf_recipe() -> HeroRecolorRecipe {
-    particles_plus_textures_recipe(
+    standard_recipe(
         "werewolf",
         &[
             "materials/particle/abilities/werewolf/werewolf_cripplingslash_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/werewolf_transform_bite_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/projected/werewolf_transform_crushing_leap_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
         ],
-        "materials/particle/abilities/werewolf/werewolf_cripplingslash_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        &[],
+        Some(
+            "materials/particle/abilities/werewolf/werewolf_cripplingslash_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+        ),
     )
 }
 
@@ -820,7 +1421,6 @@ fn yamato_recipe() -> HeroRecolorRecipe {
         texture_entries: [
             "materials/particle/projected/yamato_blade_dash_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
             "materials/particle/abilities/yamato/yamato_shadow_redemption_complete_status.vtex_c",
-            "materials/particle/abilities/yamato/yamato_shadow_redemption_nokill_status.vtex_c",
             YAMATO_SHADOW_SHAPE_COLOR_TEXTURE,
         ]
         .iter()
@@ -828,6 +1428,7 @@ fn yamato_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "materials/particle/abilities/yamato/yamato_shadow_redemption_complete_status.vtex_c"
                 .to_string(),
@@ -858,6 +1459,7 @@ fn chrono_recipe() -> HeroRecolorRecipe {
         .collect(),
         material_entries: Vec::new(),
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: Some(
             "models/heroes_staging/chrono/materials/chrono_fx_bubble04_color_psd_ee26af5c.vtex_c"
                 .to_string(),
@@ -894,14 +1496,12 @@ fn necro_recipe() -> HeroRecolorRecipe {
             // ult jar (jar of dread) + its glass
             "models/heroes_wip/necro/materials/necro_jar_of_dread_color_tga_7f34b26.vtex_c",
             "models/heroes_wip/necro/materials/necro_jar_glass_color_tga_c6d5a0ec.vtex_c",
-            // gravestone: faint-green albedo + the green transmissive glow (the
-            // standing model and the destruction fx reference it at two paths).
-            "models/heroes_wip/necro/materials/necro_gravestone_color_tga_8a0745c.vtex_c",
+            // gravestone: the green transmissive glow (the standing model and the
+            // destruction fx reference it at two paths; the albedo is grey).
             "models/heroes_wip/necro/materials/necro_gravestone_vmat_g_tnprtransmissivecolor_e8edad5e.vtex_c",
             "models/abilities/materials/necro_gravestone_destruction_vmat_g_tnprtransmissivecolor_e8edad5e.vtex_c",
-            // the raised soul-picker hand model (necro_hand): bony albedo + the green
-            // transmissive glow around it.
-            "models/heroes_wip/necro/materials/necro_hand_color_tga_b2300f7f.vtex_c",
+            // the green transmissive glow around the soul-picker hand (its bony
+            // albedo is grey and doubles as the weapon hand's skin).
             "models/heroes_wip/necro/materials/necro_hand_vmat_g_tnprtransmissivecolor_c987b5a.vtex_c",
         ]
         .iter()
@@ -915,18 +1515,14 @@ fn necro_recipe() -> HeroRecolorRecipe {
             "models/abilities/materials/necro_pickup_sphere.vmat_c".to_string(),
             "materials/particle/abilities/necro/necro_jar_glass.vmat_c".to_string(),
             "models/abilities/materials/necro_hands.vmat_c".to_string(),
-            // the green flame aura around the picker hand is self-illum (the
-            // selfillum texture is just a grayscale mask).
-            "models/heroes_wip/necro/materials/necro_flame_effect_hand.vmat_c".to_string(),
+            // the green flame aura is self-illum (the selfillum texture is just a
+            // grayscale mask).
             "models/heroes_wip/necro/materials/necro_flame_effect.vmat_c".to_string(),
-            // The flaming hand she HOLDS as a prop + its glow/aura: the soul-picker
-            // hand effect (its g_vColorTint is white but driven by a dynamic
-            // expression; we stamp the static value + its yellow g_vSelfIllumTint),
-            // the picker effect, and the additive radial-glow aura whose vanilla
-            // g_vColorTint is plain white (stamped via the re-encode promotion path).
+            // The soul-picker hand effect: its g_vColorTint is white but driven by a
+            // dynamic expression; the yellow g_vSelfIllumTint is static and stamps.
+            // (necro_flame_effect_hand, necro_picker_effect and picker_hand_glow went
+            // unreferenced in the 2026-10 build.)
             "models/heroes_wip/necro/materials/necro_picker_hand_effect.vmat_c".to_string(),
-            "models/heroes_wip/necro/materials/necro_picker_effect.vmat_c".to_string(),
-            "models/heroes_wip/necro/materials/picker_hand_glow.vmat_c".to_string(),
             // The gravestone's glowing skull / R.I.P. text / cracks: a g_vSelfIllumTint
             // (the necro yellow-green that reads as gold on the bright emissive),
             // masked by a grayscale selfillum texture. The standing stone and its
@@ -935,6 +1531,7 @@ fn necro_recipe() -> HeroRecolorRecipe {
             "models/abilities/materials/necro_gravestone_destruction.vmat_c".to_string(),
         ],
         model_entries: Vec::new(),
+        shared_entries: Vec::new(),
         preview_texture: None,
     }
 }
@@ -966,6 +1563,8 @@ pub struct HeroRecolorReport {
     pub models_recolored: usize,
     /// Vertices whose baked color changed across the recolored models.
     pub model_vertices: usize,
+    /// Shared entries written as hero-local copies instead of in place.
+    pub isolation: IsolationStats,
     /// Total entries packed into the addon.
     pub total_entries: usize,
 }
@@ -1016,6 +1615,8 @@ pub struct HeroPrismRecolorReport {
     pub color_gradient_loops: usize,
     /// Runtime color-cycle operators inserted for constant-color particles.
     pub color_cycle_operators: usize,
+    /// Shared entries written as hero-local copies instead of in place.
+    pub isolation: IsolationStats,
     /// Total entries packed into the addon.
     pub total_entries: usize,
 }
@@ -1084,7 +1685,7 @@ pub fn scan_hero_rainbow_support(
         )
     })?;
     let vpks = open_vpks(vpk.as_ref(), base)?;
-    let particle_entries = list_entries(&vpks, &recipe.particle_prefixes, ".vpcf_c");
+    let particle_entries = recipe_particle_entries(&vpks, &recipe);
 
     let mut report = HeroRainbowSupportReport {
         codename: recipe.codename.clone(),
@@ -1165,7 +1766,7 @@ pub fn recolor_hero_to_addon(
 
     // 1. Particles: every `.vpcf_c` under the recipe prefixes. Color params get
     //    retinted in place; the (many) color-free files are skipped.
-    let particle_entries = list_entries(&vpks, &recipe.particle_prefixes, ".vpcf_c");
+    let particle_entries = recipe_particle_entries(&vpks, &recipe);
     for entry in &particle_entries {
         let bytes = read_entry(&vpks, entry)
             .with_context(|| format!("reading particle {entry} (listed but unreadable)"))?;
@@ -1253,6 +1854,13 @@ pub fn recolor_hero_to_addon(
         );
     }
 
+    let (packed, isolation) = isolate_bake(
+        &vpks,
+        &recipe,
+        &particle_entries,
+        packed.into_iter().collect(),
+    )?;
+    report.isolation = isolation;
     let refs: Vec<(&str, &[u8])> = packed
         .iter()
         .map(|(p, b)| (p.as_str(), b.as_slice()))
@@ -1528,7 +2136,7 @@ pub fn prism_recolor_hero_to_addon_tuned(
         ..Default::default()
     };
 
-    let particle_entries = list_entries(&vpks, &recipe.particle_prefixes, ".vpcf_c");
+    let particle_entries = recipe_particle_entries(&vpks, &recipe);
     report.particles_total = particle_entries.len();
     for entry in &particle_entries {
         let bytes = read_entry(&vpks, entry)
@@ -1676,6 +2284,13 @@ pub fn prism_recolor_hero_to_addon_tuned(
         );
     }
 
+    let (packed, isolation) = isolate_bake(
+        &vpks,
+        &recipe,
+        &particle_entries,
+        packed.into_iter().collect(),
+    )?;
+    report.isolation = isolation;
     let refs: Vec<(&str, &[u8])> = packed
         .iter()
         .map(|(p, b)| (p.as_str(), b.as_slice()))
@@ -2131,7 +2746,7 @@ fn prism_texture_recolor_for(
     }
 }
 
-fn prism_recolor_texture_bytes(
+pub(crate) fn prism_recolor_texture_bytes(
     codename: &str,
     entry: &str,
     bytes: &[u8],
@@ -2172,20 +2787,12 @@ fn projected_texture_prism_profile(codename: &str, entry: &str) -> Option<Projec
         });
     }
     if codename == "frank"
-        && (e.contains("frank_painaura_aoe_ground_projected")
-            || e.contains("frank_revive_marker_ground_projected")
+        && (e.contains("frank_revive_marker_ground_projected")
             || e.contains("frank_shock_miss_projected_bright"))
     {
         return Some(ProjectedTexturePrism {
             value_scale: 0.88,
             radial_repeats: 2.0,
-            angular_repeats: 1.0,
-        });
-    }
-    if codename == "dynamo" && e.contains("dynamo_void_sphere_projected_ground") {
-        return Some(ProjectedTexturePrism {
-            value_scale: 0.95,
-            radial_repeats: 2.25,
             angular_repeats: 1.0,
         });
     }
@@ -2198,7 +2805,6 @@ fn projected_texture_prism_profile(codename: &str, entry: &str) -> Option<Projec
     }
     if codename == "unicorn"
         && (e.contains("unicorn_prismatic_shield_ground_warning_projected")
-            || e.contains("unicorn_beams_of_light_ground_projected_light")
             || e.contains("unicorn_flux_rainbow_ground_projected_light"))
     {
         return Some(ProjectedTexturePrism {
@@ -3034,31 +3640,36 @@ pub fn recolor_particle_bytes(vpcf_bytes: &[u8], recolor: Recolor) -> Result<Opt
     Ok(Some(new_bytes))
 }
 
-/// Recolor a material's `g_vColorTint*` / `g_vSelfIllumTint*` constants by
-/// **stamping** them with one absolute brand color (`recolor`'s hue at its
-/// saturation/value, via [`crate::recolor::stamp_rgb`]), returning the new bytes,
-/// or `None` if the material has no such tint param.
+/// Recolor a material's `g_vColorTint*` / `g_vSelfIllumTint*` constants (and, on a
+/// material that draws one, a chromatic `g_vSolidOutlineTint`) by **stamping** them
+/// with the brand hue (`recolor`'s hue at its saturation, via
+/// [`crate::recolor::stamp_rgb`]), returning the new bytes, or `None` if the
+/// material has no such tint param.
 ///
 /// The third color carrier (after particle params and color textures): an ability
 /// effect's color is a flat tint constant (an RGBA `f64` vector). The reference
-/// recolor mods stamp ONE brand color on the effect tints, including neutral white
+/// recolor mods stamp ONE brand hue on the effect tints, including neutral white
 /// ones (e.g. an additive glow's white `g_vColorTint`). A hue-only,
 /// saturation-preserving recolor can't colorize a white tint, so this stamps the
-/// absolute color instead. Which tints are stamped is decided by [`should_stamp_tint`]:
-/// the emissive `g_vSelfIllumTint` always, but a neutral base `g_vColorTint` on a
-/// solid (non-additive) material is left alone so the prop body stays its own color
-/// and only its glow recolors.
+/// absolute hue instead. Each param keeps its own brightness: the stamped HSV value
+/// is the source tint's max RGB component (times `recolor.value`), so a white tint
+/// becomes the full brand color but a deliberately dim one (a `(0.28, 0.16, 0.09)`
+/// glow under a large `g_flSelfIllumScale`) stays dim instead of blowing out. Which
+/// tints are stamped is decided by [`should_stamp_tint`]: the emissive
+/// `g_vSelfIllumTint` always, but a neutral base `g_vColorTint` on a solid
+/// (non-additive) material is left alone so the prop body stays its own color and
+/// only its glow recolors.
 ///
 /// Two write paths, chosen so the result is engine-loadable:
 /// - When every stamped channel is a stored `DOUBLE`, the change is a byte-faithful
 ///   in-place double patch ([`morphic::patch_kv3_resource_doubles`]), which also
-///   handles a blobbed material (re-emitted still compressed).
+///   handles a blobbed material (re-emitted still compressed). Every tint vector in
+///   the live pak is a typed `DOUBLE` array, so this is the path real materials take.
 /// - When a channel is a tagless `DOUBLE_ZERO`/`DOUBLE_ONE` (a neutral 0.0/1.0 with
-///   no stored bytes), it cannot be patched in place; the material is fully
-///   re-encoded ([`morphic::encode_kv3_resource`], which preserves the texture
-///   dependency blocks), promoting the channel to a real double. This fallback is
-///   only taken for a **non-blobbed** material: a re-encode emits blobs
-///   uncompressed, which the engine misreads.
+///   no stored bytes), it cannot be patched in place; the material is re-encoded
+///   with [`morphic::encode_kv3_resource_like`], which keeps Valve's wire shape,
+///   LZ4 and per-blob framing and promotes only the changed channel to a stored
+///   double.
 pub fn recolor_material_color_bytes(
     vmat_bytes: &[u8],
     recolor: Recolor,
@@ -3072,46 +3683,62 @@ pub fn recolor_material_color_bytes(
     {
         return Ok(None);
     }
-    let target = crate::recolor::stamp_rgb(recolor);
 
-    let edits = stamp_tint_edits(&value, target);
+    let edits = stamp_tint_edits(&value, recolor);
     if edits.is_empty() {
         return Ok(None);
     }
 
     // Byte-faithful in-place stamp (every channel is a stored double). Handles a
     // blobbed material via the compressed re-emit.
-    match morphic::patch_kv3_resource_doubles(vmat_bytes, &edits) {
-        Ok(new_bytes) => Ok(Some(new_bytes)),
-        // A neutral channel (tagless 0.0/1.0) has no stored bytes to patch, so the
-        // in-place patch reports it as "not found". Promote it by re-encoding the
-        // whole material -- but only when there is no blob section to mangle.
-        Err(_) if !morphic::kv3_resource_has_blobs(vmat_bytes).unwrap_or(true) => {
-            let mut tree = value;
-            stamp_tint_tree(&mut tree, target);
-            let new_bytes = morphic::encode_kv3_resource(vmat_bytes, &tree)
-                .map_err(|e| anyhow::anyhow!("re-encoding material to stamp tint: {e}"))?;
-            Ok(Some(new_bytes))
-        }
-        Err(e) => Err(anyhow::anyhow!("patching material color tint: {e}")),
+    if let Ok(new_bytes) = morphic::patch_kv3_resource_doubles(vmat_bytes, &edits) {
+        return Ok(Some(new_bytes));
     }
+
+    // A neutral channel (tagless 0.0/1.0) has no stored bytes to patch, so the
+    // in-place patch reports it as "not found". Promote it by re-encoding.
+    let mut tree = value;
+    stamp_tint_tree(&mut tree, recolor);
+    let new_bytes = morphic::encode_kv3_resource_like(vmat_bytes, &tree)
+        .map_err(|e| anyhow::anyhow!("re-encoding material to stamp tint: {e}"))?;
+    Ok(Some(new_bytes))
 }
 
-/// The set of in-place double edits to stamp `target` (linear 0..1 RGB) onto every
-/// stampable tint RGB channel that differs from it (see [`should_stamp_tint`]). A
-/// channel already equal to the target is skipped (no-op); alpha (index 3) is never
-/// touched.
-fn stamp_tint_edits(value: &Value, target: [f64; 3]) -> Vec<(Vec<Seg>, f64)> {
-    let mut edits = Vec::new();
+/// Every stampable tint param of a material (see [`should_stamp_tint`]) as
+/// `(index into m_vectorParams, linear RGB to stamp)`. Each target is the brand hue
+/// at that param's own brightness, its source max RGB component.
+fn stamp_targets(value: &Value, recolor: Recolor) -> Vec<(usize, [f64; 3])> {
     let additive = material_is_additive_or_unlit(value);
+    let solid_outline = material_flag_set(value, &["F_SOLID_COLOR_OUTLINE"]);
+    let Some(params) = value.get("m_vectorParams").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| should_stamp_tint(param, additive, solid_outline))
+        .filter_map(|(i, param)| {
+            let rgba = param.get("m_value").and_then(Value::as_array)?;
+            let brightness = rgba
+                .iter()
+                .take(3)
+                .filter_map(Value::as_f64)
+                .fold(0.0, f64::max);
+            Some((i, crate::recolor::stamp_rgb(recolor, brightness)))
+        })
+        .collect()
+}
+
+/// The set of in-place double edits to stamp every stampable tint RGB channel that
+/// differs from its target (see [`stamp_targets`]). A channel already equal to its
+/// target is skipped (no-op); alpha (index 3) is never touched.
+fn stamp_tint_edits(value: &Value, recolor: Recolor) -> Vec<(Vec<Seg>, f64)> {
+    let mut edits = Vec::new();
     let Some(params) = value.get("m_vectorParams").and_then(Value::as_array) else {
         return edits;
     };
-    for (i, param) in params.iter().enumerate() {
-        if !should_stamp_tint(param, additive) {
-            continue;
-        }
-        let Some(rgba) = param.get("m_value").and_then(Value::as_array) else {
+    for (i, target) in stamp_targets(value, recolor) {
+        let Some(rgba) = params[i].get("m_value").and_then(Value::as_array) else {
             continue;
         };
         for (k, &t) in target.iter().enumerate() {
@@ -3119,7 +3746,7 @@ fn stamp_tint_edits(value: &Value, target: [f64; 3]) -> Vec<(Vec<Seg>, f64)> {
                 continue;
             };
             if (orig - t).abs() <= f64::EPSILON {
-                continue; // already the brand color (e.g. a tint whose R is already 1.0)
+                continue; // already the target (e.g. a tint whose R is already 1.0)
             }
             edits.push((
                 vec![
@@ -3135,19 +3762,16 @@ fn stamp_tint_edits(value: &Value, target: [f64; 3]) -> Vec<(Vec<Seg>, f64)> {
     edits
 }
 
-/// Set the RGB of every stampable tint param's `m_value` to `target` directly in the
-/// decoded tree (the re-encode path, which can promote a tagless 0.0/1.0 to a real
-/// double).
-fn stamp_tint_tree(value: &mut Value, target: [f64; 3]) {
-    let additive = material_is_additive_or_unlit(value);
+/// Set the RGB of every stampable tint param's `m_value` to its target (see
+/// [`stamp_targets`]) directly in the decoded tree (the re-encode path, which can
+/// promote a tagless 0.0/1.0 to a real double).
+fn stamp_tint_tree(value: &mut Value, recolor: Recolor) {
+    let targets = stamp_targets(value, recolor);
     let Some(Value::Array(params)) = value.get_mut("m_vectorParams") else {
         return;
     };
-    for param in params.iter_mut() {
-        if !should_stamp_tint(param, additive) {
-            continue;
-        }
-        if let Some(Value::Array(rgba)) = param.get_mut("m_value") {
+    for (i, target) in targets {
+        if let Some(Value::Array(rgba)) = params[i].get_mut("m_value") {
             for (k, &t) in target.iter().enumerate() {
                 if let Some(ch) = rgba.get_mut(k) {
                     *ch = Value::Double(t);
@@ -3157,7 +3781,7 @@ fn stamp_tint_tree(value: &mut Value, target: [f64; 3]) {
     }
 }
 
-/// Whether a tint vector param should be stamped with the brand color.
+/// Whether a tint vector param should be stamped with the brand hue.
 ///
 /// `g_vSelfIllumTint*` (the emissive glow color) is always stamped. `g_vColorTint*`
 /// (the base/albedo tint) is stamped only when the material is additive/unlit (the
@@ -3165,37 +3789,45 @@ fn stamp_tint_tree(value: &mut Value, target: [f64; 3]) {
 /// carries a real color. A **neutral white/gray base on a solid material** is left
 /// alone, so a recolor tints the prop's GLOW (self-illum), not the whole prop: the
 /// gravestone stone keeps its vanilla color while its skull / R.I.P. / cracks glow
-/// recolors.
-fn should_stamp_tint(param: &Value, additive: bool) -> bool {
+/// recolors. `g_vSolidOutlineTint` is stamped only when the material draws a solid
+/// color outline (`F_SOLID_COLOR_OUTLINE`) and the outline has a real color, so a
+/// recolored prop does not keep a vanilla-orange rim while the usual neutral dark
+/// outline stays as authored.
+fn should_stamp_tint(param: &Value, additive: bool, solid_outline: bool) -> bool {
     let Some(name) = param.get("m_name").and_then(Value::as_str) else {
         return false;
     };
     if name.starts_with("g_vSelfIllumTint") {
         return true;
     }
-    if !name.starts_with("g_vColorTint") {
-        return false;
+    let colored = param
+        .get("m_value")
+        .and_then(Value::as_array)
+        .is_some_and(|rgba| !is_neutral_rgb(rgba));
+    if name == "g_vSolidOutlineTint" {
+        return solid_outline && colored;
     }
-    additive
-        || param
-            .get("m_value")
-            .and_then(Value::as_array)
-            .is_some_and(|rgba| !is_neutral_rgb(rgba))
+    name.starts_with("g_vColorTint") && (additive || colored)
 }
 
 /// A material flagged `F_ADDITIVE_BLEND` or `F_UNLIT` (an additive/unlit effect,
 /// where the base color tint is the visible color rather than a multiply over a
 /// solid albedo).
 fn material_is_additive_or_unlit(value: &Value) -> bool {
+    material_flag_set(value, &["F_ADDITIVE_BLEND", "F_UNLIT"])
+}
+
+/// Whether any of the named `m_intParams` shader flags is non-zero.
+fn material_flag_set(value: &Value, flags: &[&str]) -> bool {
     value
         .get("m_intParams")
         .and_then(Value::as_array)
         .is_some_and(|ints| {
             ints.iter().any(|p| {
-                matches!(
-                    p.get("m_name").and_then(Value::as_str),
-                    Some("F_ADDITIVE_BLEND" | "F_UNLIT")
-                ) && p.get("m_nValue").and_then(Value::as_int).unwrap_or(0) != 0
+                p.get("m_name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| flags.contains(&n))
+                    && p.get("m_nValue").and_then(Value::as_int).unwrap_or(0) != 0
             })
         })
 }
@@ -3412,6 +4044,56 @@ fn list_entries(vpks: &[valve_pak::VPK], prefixes: &[String], suffix: &str) -> V
     seen.into_iter().collect()
 }
 
+/// The particles a bake walks: everything under the recipe prefixes plus the
+/// shared particles listed outside them (those are only ever written as copies).
+pub(crate) fn recipe_particle_entries(
+    vpks: &[valve_pak::VPK],
+    recipe: &HeroRecolorRecipe,
+) -> Vec<String> {
+    let mut all = list_entries(vpks, &recipe.particle_prefixes, ".vpcf_c");
+    all.extend(list_entries(vpks, &recipe.shared_entries, ".vpcf_c"));
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// Moves a bake's changed shared entries to hero-local copies and repoints the
+/// hero's own particles and pinned materials at them (see [`crate::recolor_isolate`]).
+pub(crate) fn isolate_bake(
+    vpks: &[valve_pak::VPK],
+    recipe: &HeroRecolorRecipe,
+    particles: &[String],
+    packed: BTreeMap<String, Vec<u8>>,
+) -> Result<(BTreeMap<String, Vec<u8>>, IsolationStats)> {
+    let candidates: Vec<String> = particles
+        .iter()
+        .chain(&recipe.material_entries)
+        .cloned()
+        .collect();
+    crate::recolor_isolate::isolate(
+        recipe,
+        &candidates,
+        packed,
+        &|e| read_entry(vpks, e),
+        &resource_refs,
+        &|bytes, map| {
+            morphic::repoint_resource_refs(bytes, map)
+                .map(|(b, _)| b)
+                .map_err(|e| anyhow::anyhow!("repointing references: {e}"))
+        },
+    )
+}
+
+/// The compiled entries a resource's `RERL` names (`x.vpcf` -> `x.vpcf_c`).
+fn resource_refs(bytes: &[u8]) -> Vec<String> {
+    morphic::resource::Resource::parse(bytes)
+        .ok()
+        .and_then(|r| r.find_block(*b"RERL").map(morphic::resource::read_rerl))
+        .and_then(Result::ok)
+        .map(|refs| refs.into_iter().map(|(_, n)| format!("{n}_c")).collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3421,7 +4103,8 @@ mod tests {
         let r = recipe_for("bookworm").expect("paige recipe");
         assert_eq!(r.codename, "bookworm");
         assert_eq!(r.particle_prefixes.len(), 2);
-        assert_eq!(r.texture_entries.len(), 9);
+        assert_eq!(r.texture_entries.len(), 12);
+        assert_eq!(r.material_entries.len(), 6);
         assert_eq!(r.model_entries.len(), 2);
         // the preview swatch must be one of the recipe's real texture entries
         let preview = r.preview_texture.expect("paige has a preview texture");
@@ -3442,7 +4125,7 @@ mod tests {
                 "particles/weapon_fx/unicorn/"
             ]
         );
-        assert_eq!(r.texture_entries.len(), 6);
+        assert_eq!(r.texture_entries.len(), 7);
         assert!(r
             .texture_entries
             .iter()
@@ -3461,26 +4144,36 @@ mod tests {
     }
 
     #[test]
-    fn inferno_recipe_is_particle_only() {
-        // Infernus is recolored by particle params alone: matching the reference, we
-        // do NOT touch inferno_body (the body tint does not color his fire), and the
-        // fire textures are shared game-wide so they can't be recolored in place yet.
+    fn inferno_recipe_pins_the_body_glow_layers() {
+        // The flame hair and arm glow are separate additive materials on the live
+        // body model; inferno_body stays vanilla (its tint does not color his fire).
         let r = recipe_for("inferno").expect("inferno recipe");
         assert_eq!(r.codename, "inferno");
         assert_eq!(
             r.particle_prefixes,
             [
                 "particles/abilities/inferno/",
-                "particles/weapon_fx/inferno/"
+                "particles/weapon_fx/inferno/",
+                "particles/status_fx/status_fx_inferno_napalm_debuff.vpcf_c",
             ]
         );
-        assert!(
-            r.material_entries.is_empty(),
-            "no inferno_body (unmatching)"
+        assert_eq!(
+            r.material_entries,
+            [
+                "models/heroes_staging/inferno_v4/materials/inferno_armglow.vmat_c",
+                "models/heroes_staging/inferno_v4/materials/inferno_headglow.vmat_c",
+            ]
         );
-        assert!(r.texture_entries.is_empty(), "{:?}", r.texture_entries);
+        assert_eq!(r.texture_entries.len(), 4, "{:?}", r.texture_entries);
+        assert!(r
+            .texture_entries
+            .iter()
+            .all(|t| t.starts_with("models/heroes_staging/inferno_v4/materials/inferno_")));
         assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
-        assert!(r.preview_texture.is_none());
+        assert!(r
+            .preview_texture
+            .as_deref()
+            .is_some_and(|t| r.texture_entries.contains(&t.to_string())));
         assert!(recipe_for("INFERNO").is_some());
     }
 
@@ -3489,16 +4182,7 @@ mod tests {
         // Particle-only heroes have the standard two particle roots and no texture,
         // material, or model extras. Hue is supplied at recolor time, so the recipe
         // itself carries no color.
-        for code in [
-            "astro",
-            "gigawatt",
-            "hornet",
-            "mirage",
-            "punkgoat",
-            "shiv",
-            "vampirebat",
-            "wraith",
-        ] {
+        for code in ["hornet", "mirage", "shiv", "warden", "wraith"] {
             let r = recipe_for(code).unwrap_or_else(|| panic!("recipe for {code}"));
             assert_eq!(r.codename, code);
             assert_eq!(
@@ -3530,24 +4214,23 @@ mod tests {
         // `examples/recolor_assets.rs`. Each has the standard particle roots and
         // at least one hero-specific chromatic texture; shared/default textures
         // from the audit are deliberately excluded.
-        for (code, texture_count, required_marker) in [
-            ("fencer", 4, "fencer_ult_gradient_color"),
-            ("ghost", 2, "ghost2_clothes_fx_prop_color"),
-            ("nano", 2, "nano_ult_ground_dark_proj"),
-            ("lash", 1, "lash_cable_material"),
-            ("mcginnis", 2, "mcginnis_turret_ambient_goo"),
-            ("magician", 2, "magician_hex_ground_projected"),
-            ("pocket", 6, "pocket_satchel_projected"),
+        for (code, texture_count, material_count, required_marker) in [
+            ("fencer", 7, 2, "fencer_ult_gradient_color"),
+            ("ghost", 3, 0, "ghost2_clothes_fx_prop_color"),
+            ("nano", 2, 0, "nano_ult_ground_dark_proj"),
+            ("lash", 2, 0, "lash_cable_material"),
+            ("mcginnis", 2, 0, "mcginnis_turret_ambient_goo"),
+            ("magician", 2, 2, "magician_hex_ground_projected"),
+            ("pocket", 4, 2, "pocket_magic_missile_illum"),
         ] {
             let r = recipe_for(code).unwrap_or_else(|| panic!("recipe for {code}"));
             assert_eq!(r.codename, code);
-            assert_eq!(
-                r.particle_prefixes,
-                [
-                    format!("particles/abilities/{code}/"),
-                    format!("particles/weapon_fx/{code}/"),
-                ]
-            );
+            assert!(r
+                .particle_prefixes
+                .contains(&format!("particles/abilities/{code}/")));
+            assert!(r
+                .particle_prefixes
+                .contains(&format!("particles/weapon_fx/{code}/")));
             assert_eq!(r.texture_entries.len(), texture_count, "{code} textures");
             assert!(r
                 .texture_entries
@@ -3557,7 +4240,7 @@ mod tests {
                 .preview_texture
                 .unwrap_or_else(|| panic!("{code} has a preview texture"));
             assert!(r.texture_entries.contains(&preview));
-            assert!(r.material_entries.is_empty(), "{:?}", r.material_entries);
+            assert_eq!(r.material_entries.len(), material_count, "{code} materials");
             assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
             assert!(recipe_for(&code.to_uppercase()).is_some());
         }
@@ -3617,20 +4300,19 @@ mod tests {
         // hero-specific chromatic textures. Body albedos/shared defaults are
         // deliberately excluded from the counts.
         for (code, texture_count, material_count, required_marker) in [
-            ("archer", 6, 0, "archer_guided_arrow_color"),
-            ("digger", 3, 0, "digger_burrow_explode_ground"),
-            ("doorman", 1, 0, "doorman_grenade_debuff_ground"),
-            ("drifter", 1, 0, "drifter_claw_ground_projected"),
-            ("dynamo", 5, 2, "dynamo_void_sphere_projected"),
-            ("familiar", 5, 0, "familiar_spotlight_ground_projected"),
-            ("frank", 4, 0, "frank_painaura_aoe_ground"),
-            ("haze", 1, 0, "haze_tracer_self_illum"),
-            ("kelvin", 3, 0, "kelvin_ice_dome_projected"),
-            ("priest", 3, 0, "priest_snaptrap_ground"),
-            ("tengu", 2, 0, "ivy_entangling_thorns"),
-            ("viper", 1, 0, "viper_petrify_symbol"),
-            ("viscous", 14, 6, "viscous_ball_vmat_g_tcolor"),
-            ("warden", 1, 0, "warden_tech_shield_scanline"),
+            ("archer", 4, 1, "archer_guided_arrow_color"),
+            ("digger", 1, 0, "digger_burrow_explode_ground"),
+            ("doorman", 1, 7, "doorman_bell_vmat_g_tcolor"),
+            ("drifter", 2, 0, "drifter_claw_ground_projected"),
+            ("dynamo", 2, 3, "sumo_singularity_ripple"),
+            ("familiar", 4, 0, "familiar_spotlight_ground_projected"),
+            ("frank", 3, 0, "frank_painaura_model_fade_color"),
+            ("haze", 1, 1, "haze_tracer_self_illum"),
+            ("kelvin", 2, 0, "kelvin_ice_dome_projected"),
+            ("priest", 2, 0, "priest_snaptrap_projectile_aoe"),
+            ("tengu", 4, 1, "ivy_entangling_thorns"),
+            ("viper", 1, 1, "viper_petrify_symbol"),
+            ("viscous", 12, 13, "viscous_ball_vmat_g_tcolor"),
             ("werewolf", 3, 0, "werewolf_cripplingslash_ground"),
         ] {
             let r = recipe_for(code).unwrap_or_else(|| panic!("recipe for {code}"));
@@ -3716,7 +4398,7 @@ mod tests {
                 "particles/status_fx/status_fx_yamato",
             ]
         );
-        assert_eq!(r.texture_entries.len(), 4);
+        assert_eq!(r.texture_entries.len(), 3);
         assert!(r
             .texture_entries
             .iter()
@@ -3725,10 +4407,6 @@ mod tests {
             .texture_entries
             .iter()
             .any(|t| t.contains("shadow_redemption_complete_status")));
-        assert!(r
-            .texture_entries
-            .iter()
-            .any(|t| t.contains("shadow_redemption_nokill_status")));
         assert!(r
             .texture_entries
             .iter()
@@ -3801,12 +4479,12 @@ mod tests {
         assert!(r.texture_entries.iter().any(|t| t.contains("jar_of_dread")));
         assert_eq!(
             r.material_entries.len(),
-            10,
-            "pickup sphere + jar + necro_hands + 2 flame effects + picker hand effect + \
-             picker effect + glow aura + 2 gravestone (standing + destruction)"
+            7,
+            "pickup sphere + jar + necro_hands + flame effect + picker hand effect + \
+             2 gravestone (standing + destruction)"
         );
         assert!(r.material_entries.iter().all(|m| m.ends_with(".vmat_c")));
-        // the held flaming-hand prop + its aura + the gravestone glow are present
+        // the held flaming-hand prop + the gravestone glow are present
         assert!(r
             .material_entries
             .iter()
@@ -3814,12 +4492,38 @@ mod tests {
         assert!(r
             .material_entries
             .iter()
-            .any(|m| m.ends_with("picker_hand_glow.vmat_c")));
+            .any(|m| m.ends_with("necro_gravestone.vmat_c")));
+        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
+    }
+
+    #[test]
+    fn solomon_recipe_adds_status_particles_glow_materials_and_hand_models() {
+        let r = recipe_for("chessmaster").expect("chessmaster recipe");
+        assert_eq!(
+            r.particle_prefixes,
+            [
+                "particles/abilities/chessmaster/",
+                "particles/weapon_fx/chessmaster/",
+                "particles/status_fx/status_fx_chessmaster",
+            ]
+        );
+        assert_eq!(r.texture_entries.len(), 9);
+        assert_eq!(r.material_entries.len(), 7);
         assert!(r
             .material_entries
             .iter()
-            .any(|m| m.ends_with("necro_gravestone.vmat_c")));
-        assert!(r.model_entries.is_empty(), "{:?}", r.model_entries);
+            .any(|m| m.ends_with("chessmaster_queen_stomp_impact_sphere.vmat_c")));
+        assert_eq!(
+            r.model_entries,
+            [
+                "models/heroes_wip/chessmaster/chessmaster_hand.vmdl_c",
+                "models/heroes_wip/chessmaster/chessmaster_knightshield.vmdl_c",
+            ]
+        );
+        let preview = r
+            .preview_texture
+            .expect("chessmaster has a preview texture");
+        assert!(r.texture_entries.contains(&preview));
     }
 
     #[test]
@@ -4033,45 +4737,280 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn stamps_an_absolute_brand_color_on_neutral_and_blobbed_tints() {
-        // Hue 328 stamps a vivid pink: hsv(328,1,1) = (1.0, 0.0, 0.533...).
-        let recolor = Recolor::new(328.0, 1.0, 1.0);
-        let target = [1.0, 0.0, 0.533_333_3];
-        let close = |got: [f64; 3]| (0..3).all(|k| (got[k] - target[k]).abs() < 1e-5);
+    fn scaled(rgb: [f64; 3], v: f64) -> [f64; 3] {
+        rgb.map(|c| c * v)
+    }
 
-        // 1. A neutral WHITE tint (picker_hand_glow g_vColorTint = [1,1,1], stored
-        //    tagless) can't be patched in place, so it takes the re-encode promotion
-        //    path -- and still ends up the brand color.
-        let glow = recolor_material_color_bytes(&fixture("picker_hand_glow.vmat_c"), recolor)
+    fn max_rgb(rgb: [f64; 3]) -> f64 {
+        rgb[0].max(rgb[1]).max(rgb[2])
+    }
+
+    fn close(got: [f64; 3], want: [f64; 3]) -> bool {
+        (0..3).all(|k| (got[k] - want[k]).abs() < 1e-5)
+    }
+
+    /// `material` with the named `m_vectorParams` tint's RGB patched in place.
+    fn with_tint(material: &[u8], name: &str, rgb: [f64; 3]) -> Vec<u8> {
+        let tree = morphic::decode_kv3_resource(material).expect("decode material");
+        let params = tree
+            .get("m_vectorParams")
+            .and_then(Value::as_array)
+            .expect("m_vectorParams");
+        let i = params
+            .iter()
+            .position(|p| p.get("m_name").and_then(Value::as_str) == Some(name))
+            .unwrap_or_else(|| panic!("no {name}"));
+        let edits: Vec<_> = rgb
+            .iter()
+            .enumerate()
+            .map(|(k, &c)| {
+                (
+                    vec![
+                        Seg::Key("m_vectorParams".to_string()),
+                        Seg::Index(i),
+                        Seg::Key("m_value".to_string()),
+                        Seg::Index(k),
+                    ],
+                    c,
+                )
+            })
+            .collect();
+        morphic::patch_kv3_resource_doubles(material, &edits).expect("patch tint")
+    }
+
+    #[test]
+    fn stamps_the_brand_hue_at_each_tints_own_brightness() {
+        // Hue 328 at full value is a vivid pink: hsv(328,1,1) = (1.0, 0.0, 0.533...).
+        let recolor = Recolor::new(328.0, 1.0, 1.0);
+        let full = [1.0, 0.0, 0.533_333_3];
+        let want = |source: &[u8], name: &str| scaled(full, max_rgb(tint_rgb(source, name)));
+
+        // 1. A neutral WHITE tint (picker_hand_glow g_vColorTint = [1,1,1]) has value
+        //    1, so it ends up the full brand color.
+        let source = fixture("picker_hand_glow.vmat_c");
+        let glow = recolor_material_color_bytes(&source, recolor)
             .expect("stamp glow")
             .expect("glow has a tint");
         assert!(
-            close(tint_rgb(&glow, "g_vColorTint1")),
+            close(tint_rgb(&glow, "g_vColorTint1"), full),
             "white aura stamped pink"
         );
 
         // 2. A blobbed material with colored tints (necro_hands) stamps in place and
-        //    stays a compressed, blobbed, engine-loadable block.
-        let hands = recolor_material_color_bytes(&fixture("necro_hands.vmat_c"), recolor)
+        //    stays a compressed, blobbed, engine-loadable block. Its tints are
+        //    (0.84, 0.95, 0.15) and (1.0, 0.88, 0.13), so the pink is dimmed to 0.95
+        //    and 1.0 of full.
+        let source = fixture("necro_hands.vmat_c");
+        let hands = recolor_material_color_bytes(&source, recolor)
             .expect("stamp hands")
             .expect("hands has a tint");
-        assert!(close(tint_rgb(&hands, "g_vColorTint1")));
-        assert!(close(tint_rgb(&hands, "g_vSelfIllumTint1")));
+        assert!(close(
+            tint_rgb(&hands, "g_vColorTint1"),
+            want(&source, "g_vColorTint1")
+        ));
+        assert!(close(
+            tint_rgb(&hands, "g_vSelfIllumTint1"),
+            want(&source, "g_vSelfIllumTint1")
+        ));
+        assert!(max_rgb(tint_rgb(&hands, "g_vColorTint1")) < 0.96);
         assert!(
             morphic::kv3_resource_has_blobs(&hands).unwrap(),
             "necro_hands stays blobbed (in-place stamp, not flattened)"
         );
 
         // 3. The two-blob held-hand material (its g_vColorTint is white-but-stored,
-        //    its g_vSelfIllumTint colored) stamps in place too, after the blob-frame
-        //    reader fix lets it decode at all.
+        //    its g_vSelfIllumTint (1.0, 0.95, 0.0) full value) stamps in place too,
+        //    after the blob-frame reader fix lets it decode at all.
         let held =
             recolor_material_color_bytes(&fixture("necro_picker_hand_effect.vmat_c"), recolor)
                 .expect("stamp held hand")
                 .expect("held hand has a tint");
-        assert!(close(tint_rgb(&held, "g_vColorTint1")));
-        assert!(close(tint_rgb(&held, "g_vSelfIllumTint1")));
+        assert!(close(tint_rgb(&held, "g_vColorTint1"), full));
+        assert!(close(tint_rgb(&held, "g_vSelfIllumTint1"), full));
+    }
+
+    #[test]
+    fn a_dim_tint_stays_dim() {
+        // A deliberately dim glow (the Rat King sewage is (0.28, 0.16, 0.09) under a
+        // 7.5x self-illum scale) must not be stamped to full value, or it renders
+        // several times brighter than vanilla.
+        let source = with_tint(
+            &fixture("picker_hand_glow.vmat_c"),
+            "g_vColorTint1",
+            [0.28, 0.16, 0.09],
+        );
+        let full = [0.666_666_7, 0.0, 1.0]; // hsv(280, 1, 1)
+        let stamped = recolor_material_color_bytes(&source, Recolor::new(280.0, 1.0, 1.0))
+            .expect("stamp")
+            .expect("has a tint");
+        assert!(close(
+            tint_rgb(&stamped, "g_vColorTint1"),
+            scaled(full, 0.28)
+        ));
+
+        // A neutral gray keeps its brightness too, and `recolor.value` scales it.
+        let gray = with_tint(&source, "g_vColorTint1", [0.5, 0.5, 0.5]);
+        let stamped = recolor_material_color_bytes(&gray, Recolor::new(280.0, 1.0, 0.5))
+            .expect("stamp")
+            .expect("has a tint");
+        assert!(close(
+            tint_rgb(&stamped, "g_vColorTint1"),
+            scaled(full, 0.25)
+        ));
+
+        // A brightness lift never takes a normal tint past 1.0.
+        let white = fixture("picker_hand_glow.vmat_c");
+        let stamped = recolor_material_color_bytes(&white, Recolor::new(280.0, 1.0, 2.0))
+            .expect("stamp")
+            .expect("has a tint");
+        assert!(close(tint_rgb(&stamped, "g_vColorTint1"), full));
+    }
+
+    fn blobs_of(value: &Value, out: &mut Vec<Vec<u8>>) {
+        match value {
+            Value::Binary(b) => out.push(b.clone()),
+            Value::Array(items) => items.iter().for_each(|v| blobs_of(v, out)),
+            Value::Object(members) => members.iter().for_each(|(_, v)| blobs_of(v, out)),
+            _ => {}
+        }
+    }
+
+    fn tint_members(
+        root: &mut morphic::kv3::Node,
+    ) -> impl Iterator<Item = &mut Vec<(String, morphic::kv3::Node)>> {
+        use morphic::kv3::Val;
+        let Val::Object(root) = &mut root.val else {
+            panic!("material root is an object");
+        };
+        let Val::Typed { items, .. } = &mut root
+            .iter_mut()
+            .find(|(k, _)| k == "m_vectorParams")
+            .expect("m_vectorParams")
+            .1
+            .val
+        else {
+            panic!("m_vectorParams is a typed object array");
+        };
+        items.iter_mut().filter_map(|item| match item {
+            Val::Object(members)
+                if members.iter().any(|(k, n)| {
+                    k == "m_name"
+                        && matches!(&n.val, Val::String(s)
+                            if s.starts_with("g_vColorTint") || s.starts_with("g_vSelfIllumTint"))
+                }) =>
+            {
+                Some(members)
+            }
+            _ => None,
+        })
+    }
+
+    /// The wire tags of the named tint's lanes, in order.
+    fn lane_tags(material: &[u8], name: &str) -> Vec<u8> {
+        use morphic::kv3::Val;
+        let data = morphic::kv3_resource_data_block(material).expect("data block");
+        let mut doc = morphic::kv3::decode_lossless(&data).expect("lossless decode");
+        let members = tint_members(&mut doc.root)
+            .find(|m| {
+                m.iter()
+                    .any(|(_, n)| matches!(&n.val, Val::String(s) if s == name))
+            })
+            .unwrap_or_else(|| panic!("no {name}"));
+        match &members.iter().find(|(k, _)| k == "m_value").unwrap().1.val {
+            Val::Array(lanes) => lanes.iter().map(|n| n.tag).collect(),
+            other => panic!("{name} is not a generic array: {other:?}"),
+        }
+    }
+
+    /// `material` with every stampable tint vector rewritten as a generic array
+    /// whose 0.0 / 1.0 lanes are tagless `DOUBLE_ZERO` / `DOUBLE_ONE` nodes. No
+    /// shipped material has such lanes (they are all typed double arrays), so this
+    /// builds the shape the in-place double patch cannot write.
+    #[allow(clippy::float_cmp)]
+    fn with_tagless_tints(material: &[u8]) -> Vec<u8> {
+        use morphic::kv3::{Node, Val};
+        let data = morphic::kv3_resource_data_block(material).expect("data block");
+        let mut doc = morphic::kv3::decode_lossless(&data).expect("lossless decode");
+        for members in tint_members(&mut doc.root) {
+            let value = &mut members.iter_mut().find(|(k, _)| k == "m_value").unwrap().1;
+            let Val::Typed { items, .. } = &value.val else {
+                panic!("tint is a typed double array");
+            };
+            let lanes = items
+                .iter()
+                .map(|lane| match lane {
+                    Val::F64(d) if *d == 0.0 => Node {
+                        tag: 17,
+                        flag: None,
+                        val: Val::Implied,
+                    },
+                    Val::F64(d) if *d == 1.0 => Node {
+                        tag: 18,
+                        flag: None,
+                        val: Val::Implied,
+                    },
+                    Val::F64(d) => Node {
+                        tag: 5,
+                        flag: None,
+                        val: Val::F64(*d),
+                    },
+                    other => panic!("tint lane is a stored double: {other:?}"),
+                })
+                .collect();
+            *value = Node {
+                tag: 8,
+                flag: None,
+                val: Val::Array(lanes),
+            };
+        }
+        let new_data = morphic::kv3::encode_v5(&doc).expect("encode v5");
+        morphic::replace_resource_data_block(material, &new_data).expect("rebuild resource")
+    }
+
+    #[test]
+    fn stamps_a_blobbed_material_with_tagless_tint_lanes_and_keeps_its_blobs() {
+        // necro_picker_hand_effect is blobbed (two dynamic-expression blobs) with a
+        // white base tint. With tagless lanes the in-place double patch cannot stamp
+        // it; the v5 re-encode must, without touching the blobs, and each param still
+        // gets its own brightness (the base tint is full value, the glow is dimmed).
+        let dim = with_tint(
+            &fixture("necro_picker_hand_effect.vmat_c"),
+            "g_vSelfIllumTint1",
+            [0.28, 0.16, 0.09],
+        );
+        let source = with_tagless_tints(&dim);
+        assert_eq!(lane_tags(&source, "g_vColorTint1"), [18, 18, 18, 17]);
+        let recolor = Recolor::new(328.0, 1.0, 1.0);
+        let full = [1.0, 0.0, 0.533_333_3];
+
+        let stamped = recolor_material_color_bytes(&source, recolor)
+            .expect("stamp")
+            .expect("has a tint");
+
+        // 1.0 and 0.0 stay tagless, 0.533 becomes a stored double.
+        assert_eq!(lane_tags(&stamped, "g_vColorTint1"), [18, 17, 5, 17]);
+        assert!(close(tint_rgb(&stamped, "g_vColorTint1"), full));
+        assert!(close(
+            tint_rgb(&stamped, "g_vSelfIllumTint1"),
+            scaled(full, 0.28)
+        ));
+        let mut expected = morphic::decode_kv3_resource(&source).expect("decode source");
+        stamp_tint_tree(&mut expected, recolor);
+        let got = morphic::decode_kv3_resource(&stamped).expect("decode stamped");
+        assert_eq!(got, expected, "only the tint lanes changed");
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        blobs_of(&expected, &mut before);
+        blobs_of(&got, &mut after);
+        assert_eq!(before.len(), 2);
+        assert_eq!(before, after, "every blob byte survives");
+
+        let block = morphic::kv3_resource_data_block(&stamped).expect("data block");
+        let word = |at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
+        assert_eq!(word(0), 0x4B56_3305, "still KV3 v5");
+        assert_eq!(word(20), 1, "still LZ4");
+        assert_eq!(word(56), 2, "same blob count");
+        assert_eq!(word(48), word(72) + word(80), "sizeUncompressedTotal");
+        assert_eq!(word(52), word(76) + word(84), "sizeCompressedTotal");
     }
 
     #[test]
@@ -4081,7 +5020,9 @@ mod tests {
         // (skull / R.I.P. / cracks). Stamping must leave the stone base its own color
         // and only recolor the glow, so a recolor doesn't paint the whole tombstone.
         let recolor = Recolor::new(205.0, 0.6, 1.0); // sky blue
-        let stamped = recolor_material_color_bytes(&fixture("necro_gravestone.vmat_c"), recolor)
+        let full = [0.4, 0.75, 1.0]; // hsv(205, 0.6, 1.0)
+        let source = fixture("necro_gravestone.vmat_c");
+        let stamped = recolor_material_color_bytes(&source, recolor)
             .expect("stamp gravestone")
             .expect("gravestone has a tint");
 
@@ -4091,10 +5032,29 @@ mod tests {
             "stone base g_vColorTint stays white, got {base:?}"
         );
         let glow = tint_rgb(&stamped, "g_vSelfIllumTint1");
-        let target = [0.4, 0.75, 1.0]; // hsv(205, 0.6, 1.0)
+        let want = scaled(full, max_rgb(tint_rgb(&source, "g_vSelfIllumTint1")));
         assert!(
-            (0..3).all(|k| (glow[k] - target[k]).abs() < 1e-5),
-            "glow self-illum stamped to the brand color, got {glow:?}"
+            close(glow, want),
+            "glow self-illum stamped to the brand color at its own brightness, got {glow:?}"
         );
+
+        // The solid outline is a dark green here, so it follows the glow, dimmed.
+        let outline = tint_rgb(&stamped, "g_vSolidOutlineTint");
+        let want = scaled(full, max_rgb(tint_rgb(&source, "g_vSolidOutlineTint")));
+        assert!(
+            close(outline, want),
+            "colored outline stamped, got {outline:?}"
+        );
+        assert!(max_rgb(outline) < 0.13, "outline stays dark");
+
+        // A neutral outline is left as authored.
+        let gray = with_tint(&source, "g_vSolidOutlineTint", [0.1, 0.1, 0.1]);
+        let stamped = recolor_material_color_bytes(&gray, recolor)
+            .expect("stamp")
+            .expect("has a tint");
+        assert!(close(
+            tint_rgb(&stamped, "g_vSolidOutlineTint"),
+            [0.1, 0.1, 0.1]
+        ));
     }
 }

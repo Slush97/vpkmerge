@@ -487,22 +487,23 @@ fn redirect_interned_strings(
 }
 
 /// Sets `STRING` fields by path, **adding** any target string that is not already
-/// interned in the KV3 v5 string table (the structural cousin of [`set_strings`],
+/// interned in the KV3 string table (the structural cousin of [`set_strings`],
 /// which can only redirect to an already-present value).
 ///
 /// Each distinct, non-empty target string absent from the table is appended via
-/// [`append_strings_v5`] (which rebuilds the aux buffer byte-faithfully and fixes
-/// the header sizes); then the field redirect is applied by [`set_strings`] exactly
-/// as usual. The decoded tree is unchanged except at the targeted fields, so the
-/// engine's particle loader accepts the result just like the existing in-place
-/// patches. This is the lever for true animated VFX: pointing a gradient's
-/// `m_FloatInterp/m_nType` at `PF_TYPE_COLLECTION_AGE` and `m_nInputMode` at
-/// `PF_INPUT_MODE_LOOPED` even when those enum strings were not already present.
+/// `append_strings_v5` or `append_strings_v4` (which rebuild the table
+/// byte-faithfully and fix the header sizes); then the field redirect is applied
+/// by [`set_strings`] exactly as usual. The decoded tree is unchanged except at
+/// the targeted fields, so the engine's particle loader accepts the result just
+/// like the existing in-place patches. This is the lever for true animated VFX:
+/// pointing a gradient's `m_FloatInterp/m_nType` at `PF_TYPE_COLLECTION_AGE` and
+/// `m_nInputMode` at `PF_INPUT_MODE_LOOPED` even when those enum strings were not
+/// already present.
 ///
-/// Only v5 supports the append; a v4 block falls back to [`set_strings`] (which
-/// succeeds only if every target is already interned, else errors so the caller can
-/// skip that entry). Errors if the block is not v4/v5, or for the usual
-/// missing/ambiguous/not-a-string path failures from [`set_strings`].
+/// v4 and v5 both append, and a blobbed LZ4 v5 block stays compressed. A blobbed
+/// v4 block is refused (see [`rewrap_uncompressed`]). Errors if the block is not
+/// v4/v5, or for the usual missing/ambiguous/not-a-string path failures from
+/// [`set_strings`].
 pub fn set_strings_adding(
     block: &[u8],
     edits: &[(Vec<Seg>, String)],

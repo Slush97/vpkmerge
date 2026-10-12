@@ -1,11 +1,14 @@
 //! Source 2 resource container: header + block table.
 //!
-//! See [`header`] for the binary layout. We only need DATA for texture
-//! inspect; RERL/REDI/NTRO are skipped over by ignoring those block entries.
+//! See [`header`] for the binary layout. Texture inspect only needs DATA; the
+//! external reference list (`RERL`) has its own codec, [`read_rerl`] and
+//! [`write_rerl`].
 
 mod header;
+mod rerl;
 
 pub use header::{Block, Resource};
+pub use rerl::{read_rerl, resource_id, write_rerl};
 
 use crate::error::DecodeError;
 
@@ -56,18 +59,28 @@ impl<'a> Resource<'a> {
         block_index: usize,
         new_payload: &[u8],
     ) -> Result<Vec<u8>, DecodeError> {
+        self.rebuild_with_blocks(&[(block_index, new_payload)])
+    }
+
+    /// [`Resource::rebuild_with_block`] for several blocks at once: each
+    /// `(declaration index, payload)` in `replacements` swaps that block, every
+    /// other block is copied byte-for-byte.
+    pub fn rebuild_with_blocks(
+        &self,
+        replacements: &[(usize, &[u8])],
+    ) -> Result<Vec<u8>, DecodeError> {
         let raw = self.raw();
         let blocks = self.blocks();
         let block_count = blocks.len();
-        if block_index >= block_count {
+        if replacements.iter().any(|(i, _)| *i >= block_count) {
             return Err(DecodeError::BadResource("block index out of range"));
         }
         let resource_version = u16::from_le_bytes([raw[6], raw[7]]);
 
-        // Resolve each block's payload bytes (the target swapped, others copied).
+        // Resolve each block's payload bytes (the targets swapped, others copied).
         let mut payloads: Vec<&[u8]> = Vec::with_capacity(block_count);
         for (i, b) in blocks.iter().enumerate() {
-            if i == block_index {
+            if let Some((_, new_payload)) = replacements.iter().find(|(r, _)| *r == i) {
                 payloads.push(new_payload);
             } else {
                 let start = b.offset as usize;
@@ -255,6 +268,26 @@ mod tests {
         assert_eq!(res2.get_block_by_index(0).unwrap(), &[1u8, 2, 3, 4]);
         assert_eq!(res2.get_block_by_index(1).unwrap(), new_mid.as_slice());
         assert_eq!(res2.get_block_by_index(2).unwrap(), &[7u8, 7, 7]);
+    }
+
+    #[test]
+    fn rebuild_with_blocks_swaps_several_and_preserves_the_rest() {
+        let bytes = build_resource(&[
+            (*b"AAAA", &[1u8, 2, 3, 4]),
+            (*b"MVTX", &[9u8; 8]),
+            (*b"CCCC", &[7u8, 7, 7]),
+        ]);
+        let res = Resource::parse(&bytes).expect("parse synthetic");
+
+        let (first, last) = (vec![0xABu8; 40], vec![5u8]);
+        let rebuilt = res
+            .rebuild_with_blocks(&[(0, &first), (2, &last)])
+            .expect("rebuild");
+
+        let res2 = Resource::parse(&rebuilt).expect("reparse rebuilt");
+        assert_eq!(res2.get_block_by_index(0).unwrap(), first.as_slice());
+        assert_eq!(res2.get_block_by_index(1).unwrap(), &[9u8; 8]);
+        assert_eq!(res2.get_block_by_index(2).unwrap(), last.as_slice());
     }
 
     #[test]

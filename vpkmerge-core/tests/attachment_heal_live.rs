@@ -96,9 +96,9 @@ fn heals_a_reframed_live_hero_model() {
     assert!(reports[0].stale.iter().any(|n| n == "standing_pivot"));
 
     let healed_path = dir.path().join("healed_dir.vpk");
-    let healed = healer.heal(&stale, &healed_path).unwrap();
-    assert_eq!(healed.len(), 1);
-    assert!(healed[0].blocks > 0);
+    let models = healer.heal(&stale, &healed_path).unwrap();
+    assert_eq!(models.len(), 1);
+    assert!(models[0].blocks > 0);
     let reports = healer.check(&healed_path).unwrap();
     assert_eq!(reports[0].status, AttachmentStatus::Current);
     assert_eq!(

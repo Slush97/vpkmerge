@@ -490,23 +490,23 @@ mod tests {
         // 10 degrees of yaw: sin(5deg), cos(5deg).
         let tweak = [0.0, 0.0, 0.087_156, 0.996_195];
         let modded = [att(0, "aim", ROOT_BONE, [0.0, 0.0, 60.0], tweak)];
-        assert!(stale_in(&modded, &game).is_empty());
+        assert_eq!(stale_in(&modded, &game), Vec::<String>::new());
     }
 
     #[test]
     fn other_parents_are_ignored() {
         let game = base(&[att(0, "palm_R", "hand_R", [1.0, 0.0, 0.0], IDENTITY)]);
         let modded = [att(0, "palm_R", "hand_R", [1.0, 0.0, 0.0], OLD_FRAME)];
-        assert!(stale_in(&modded, &game).is_empty());
-        assert!(float_edits(&modded, &game).is_empty());
+        assert_eq!(stale_in(&modded, &game), Vec::<String>::new());
+        assert_eq!(float_edits(&modded, &game), Vec::<(Vec<Seg>, f32)>::new());
     }
 
     #[test]
     fn reparented_attachment_is_left_alone() {
         let game = base(&[att(0, "aim", ROOT_BONE, [0.0, 0.0, 55.0], IDENTITY)]);
         let modded = [att(0, "aim", "spine_2", [0.0, 0.0, 55.0], OLD_FRAME)];
-        assert!(stale_in(&modded, &game).is_empty());
-        assert!(float_edits(&modded, &game).is_empty());
+        assert_eq!(stale_in(&modded, &game), Vec::<String>::new());
+        assert_eq!(float_edits(&modded, &game), Vec::<(Vec<Seg>, f32)>::new());
     }
 
     #[test]

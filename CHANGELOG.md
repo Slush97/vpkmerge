@@ -1,16 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.22.0
 
-New `attachments` command for hero model swaps broken by Deadlock's camera change. The update re-framed every attachment parented to `root_motion` (camera pivots, aim, zipline, lean), so a swap compiled before it puts the camera in the wrong place.
+New `attachments` command for hero model swaps broken by Deadlock's camera change. The update re-framed every attachment parented to `root_motion` (camera pivots, aim, zipline, lean), so a swap compiled before it puts the camera in the wrong place (#57).
+
+### CLI (`vpkmerge` 0.22)
 
 - `attachments check --base pak01_dir.vpk MOD_dir.vpk... [--json]` flags each model whose `root_motion` attachments are rotated more than 30 degrees from the game's. JSON shape and error handling match `vdata-check`.
 - `attachments heal --base pak01_dir.vpk MOD_dir.vpk --output OUT_dir.vpk` copies the game's offsets and rotations onto those attachments in place and repacks the VPK with every other entry unchanged. Writes nothing when there is nothing to heal.
 - Fix: KV3 now reads node types 22 (`INT8`), 26 and 27 (`UINT32_ZERO`/`UINT32_ONE`). Current game models use them, and every decode of their mesh blocks failed with `unknown KV3 node type: 26`.
 
-### Library (`vpkmerge-core`)
+### Library (`morphic` 0.11.1, `vpkmerge-core` 0.22)
 
-- `AttachmentHealer`, `AttachmentReport`, `AttachmentStatus`, `HealedModel`, `STALE_DEGREES`.
+- `vpkmerge_core::AttachmentHealer`, `AttachmentReport`, `AttachmentStatus`, `HealedModel`, `STALE_DEGREES`.
+- `morphic::kv3` decodes the three new node types, and `set_floats`/`set_scalars`/`set_strings` step over them.
 
 ## v0.21.1
 

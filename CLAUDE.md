@@ -126,6 +126,32 @@ so one bad file never hides the rest of a batch (Grimoire relies on this). Text 
 exits non-zero if any mod failed to open. Live test: `tests/vdata_check_live.rs`, gated
 on `DEADLOCK_PAK`.
 
+## Stale model attachments (`attachments`)
+
+A Deadlock update re-framed every attachment parented to `root_motion` (camera pivots,
+`aim`, `root_aim`, `zipline`, `lean`, `far_01`, ...). On werewolf, `standing_pivot` went
+from offset `[0, 94, 0]` at angles `(-90, -90, 0)` to `[0, 0, 94]` at `(0, 0, 0)`. The
+skeleton's `root_motion` bind pose is unchanged; attachments on other bones are
+unchanged. A hero model swap compiled before that carries the old values in every mesh
+`MDAT` block and breaks the hero's camera.
+
+`AttachmentHealer::check(mod)` (in `attachment_heal.rs`) compares each `.vmdl_c` the
+mod ships with the game's model at the same path: `stale` when any attachment both
+sides parent to `root_motion` is rotated more than `STALE_DEGREES` (30) from the
+game's (the re-frame is 90 to 120 degrees), else `current`; `not-in-game`,
+`unaffected` (the game's model has no `root_motion` attachments: props, abilities),
+`undecodable`. `heal(mod, out)` copies the game's offsets and rotations onto every
+shared `root_motion` attachment of each stale model with `kv3::set_floats` (in place,
+MDAT rewrapped uncompressed, nothing re-encoded), then repacks through
+`embed_metadata` so every other entry is untouched. It writes nothing when no model is
+stale. It cannot add attachments the mod lacks, and a mod-only model with no
+same-path game model is skipped.
+
+CLI: `vpkmerge attachments check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--json]`
+(same JSON shape and error contract as `vdata-check`) and
+`vpkmerge attachments heal --base <pak01_dir.vpk> <MOD_dir.vpk> --output <OUT_dir.vpk> [--json]`.
+Live test: `tests/attachment_heal_live.rs`, gated on `DEADLOCK_PAK`.
+
 ## CI
 
 GitHub Actions on push to `main` and PRs:

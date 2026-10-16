@@ -67,6 +67,11 @@ pub use localization::{
 pub mod vdata_check;
 pub use vdata_check::{check_vdata, VdataChecker, VdataReport, VdataStatus};
 
+pub mod attachment_heal;
+pub use attachment_heal::{
+    AttachmentHealer, AttachmentReport, AttachmentStatus, HealedModel, STALE_DEGREES,
+};
+
 pub mod cubemap;
 pub use cubemap::{export_cubemap_hdr, CubemapFaceReport, CUBEMAP_FACE_NAMES};
 

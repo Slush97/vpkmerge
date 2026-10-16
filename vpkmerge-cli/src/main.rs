@@ -127,6 +127,13 @@ enum Command {
     /// each mod's copies against the game's pak and reports missing fields.
     VdataCheck(VdataCheckCmd),
 
+    /// Detect and heal model swaps built before Deadlock re-framed the
+    /// `root_motion` attachments (camera pivots, aim, zipline, lean). Such a
+    /// model breaks the hero's camera in game. `check` compares each mod's
+    /// models against the game's; `heal` copies the game's attachment offsets
+    /// and rotations onto the stale ones in place and repacks the VPK.
+    Attachments(AttachmentsCmd),
+
     /// Style hero material shader parameters (`.vmat_c`): gemstone sheen, glass,
     /// solid-ink NPR outlines, unlit, or full-PBR flips, via presets or raw
     /// `--set-*` edits packed into an addon VPK. `--list` surveys the targeted
@@ -1209,6 +1216,57 @@ struct VdataCheckCmd {
 }
 
 #[derive(Args)]
+struct AttachmentsCmd {
+    #[command(subcommand)]
+    action: AttachmentsAction,
+}
+
+#[derive(Subcommand)]
+enum AttachmentsAction {
+    /// Report each mod model's `root_motion` attachments against the game's.
+    Check(AttachmentsCheckArgs),
+
+    /// Rewrite the stale models' `root_motion` attachments with the game's and
+    /// write the patched VPK to `--output`, every other entry unchanged. Writes
+    /// nothing when no model is stale.
+    Heal(AttachmentsHealArgs),
+}
+
+#[derive(Args)]
+struct AttachmentsCheckArgs {
+    /// The game's `citadel/pak01_dir.vpk`.
+    #[arg(long, value_name = "VPK")]
+    base: PathBuf,
+
+    /// Mod VPKs to check (`*_dir.vpk`).
+    #[arg(required = true)]
+    mods: Vec<PathBuf>,
+
+    /// Emit a machine-readable JSON array instead of text. A mod that fails to
+    /// open gets an `error` field and does not fail the run.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct AttachmentsHealArgs {
+    /// The game's `citadel/pak01_dir.vpk`.
+    #[arg(long, value_name = "VPK")]
+    base: PathBuf,
+
+    /// Mod VPK to heal (`*_dir.vpk`).
+    input: PathBuf,
+
+    /// Patched VPK path. Must differ from the input.
+    #[arg(long, value_name = "VPK")]
+    output: PathBuf,
+
+    /// Print the healed models as JSON instead of text.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 struct VmatCmd {
     /// VPK to read materials from (a skin VPK, or the base pak itself).
     #[arg(long, value_name = "VPK")]
@@ -1870,6 +1928,10 @@ fn main() -> Result<()> {
         Some(Command::TrippyPreview(args)) => run_trippy_preview(&args),
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
         Some(Command::VdataCheck(args)) => run_vdata_check(&args),
+        Some(Command::Attachments(args)) => match &args.action {
+            AttachmentsAction::Check(a) => run_attachments_check(a),
+            AttachmentsAction::Heal(a) => run_attachments_heal(a),
+        },
         Some(Command::Vmat(args)) => run_vmat(&args),
         Some(Command::Icon(args)) => run_icon(&args),
         Some(Command::Soundswap(args)) => run_soundswap(&args),
@@ -5052,6 +5114,107 @@ fn print_vdata_paths(label: &str, paths: &[String], limit: usize) {
             paths.len() - shown
         );
     }
+}
+
+fn run_attachments_check(args: &AttachmentsCheckArgs) -> Result<()> {
+    use vpkmerge_core::{AttachmentHealer, AttachmentStatus};
+
+    let mut healer = AttachmentHealer::new(&args.base);
+    let mut json_out = Vec::new();
+    let mut failed = 0usize;
+    let mut stale_mods = 0usize;
+    for path in &args.mods {
+        let name = path.display().to_string();
+        if !args.json {
+            println!("{name}");
+        }
+        let reports = match healer.check(path) {
+            Ok(r) => r,
+            Err(e) => {
+                failed += 1;
+                if args.json {
+                    json_out.push(serde_json::json!({ "mod": name, "error": format!("{e:#}") }));
+                } else {
+                    println!("  error: {e:#}");
+                }
+                continue;
+            }
+        };
+        if reports.iter().any(|r| r.status == AttachmentStatus::Stale) {
+            stale_mods += 1;
+        }
+        if args.json {
+            json_out.push(serde_json::json!({ "mod": name, "reports": reports }));
+            continue;
+        }
+        if reports.is_empty() {
+            println!("  no .vmdl_c entries");
+        }
+        for r in &reports {
+            match r.status {
+                AttachmentStatus::Stale => {
+                    println!("  {}  stale: {}", r.entry, r.stale.join(", "));
+                }
+                AttachmentStatus::Current => println!("  {}  current", r.entry),
+                AttachmentStatus::NotInGame => {
+                    println!("  {}  not in game: nothing to compare", r.entry);
+                }
+                AttachmentStatus::Unaffected => {
+                    println!("  {}  unaffected: no root_motion attachments", r.entry);
+                }
+                AttachmentStatus::Undecodable => println!(
+                    "  {}  undecodable: {}",
+                    r.entry,
+                    r.error.as_deref().unwrap_or("unknown error")
+                ),
+            }
+        }
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_out).context("serializing JSON")?
+        );
+    }
+    eprintln!(
+        "{stale_mods} of {} mods ship stale model attachments",
+        args.mods.len()
+    );
+    if failed > 0 {
+        if args.json {
+            eprintln!("{failed} mod(s) failed to open; see their \"error\" fields");
+        } else {
+            anyhow::bail!("{failed} mod(s) failed to open");
+        }
+    }
+    Ok(())
+}
+
+fn run_attachments_heal(args: &AttachmentsHealArgs) -> Result<()> {
+    let healed = vpkmerge_core::AttachmentHealer::new(&args.base)
+        .heal(&args.input, &args.output)
+        .with_context(|| format!("healing {}", args.input.display()))?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&healed).context("serializing JSON")?
+        );
+        return Ok(());
+    }
+    if healed.is_empty() {
+        println!("nothing to heal: no stale models, wrote nothing");
+        return Ok(());
+    }
+    for model in &healed {
+        println!(
+            "  {}  {} attachments across {} MDAT blocks",
+            model.entry,
+            model.attachments.len(),
+            model.blocks
+        );
+    }
+    println!("wrote {}", args.output.display());
+    Ok(())
 }
 
 fn run_rainbow_scan(args: &RainbowScanCmd) -> Result<()> {

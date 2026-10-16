@@ -1186,9 +1186,9 @@ impl<'a> InsertWalk<'a> {
             INT32 | UINT32 | FLOAT | STRING => self.main[B4].pos += 4,
             INT64 | UINT64 | DOUBLE => self.main[B8].pos += 8,
             INT16 | UINT16 => self.main[B2].pos += 2,
-            INT32_AS_BYTE | BOOLEAN => self.main[B1].pos += 1,
+            INT8 | INT32_AS_BYTE | BOOLEAN => self.main[B1].pos += 1,
             NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO
-            | DOUBLE_ONE | BINARY_BLOB => {}
+            | DOUBLE_ONE | UINT32_ZERO | UINT32_ONE | BINARY_BLOB => {}
             ARRAY => {
                 let count_offset = self.main[B4].at();
                 let n = self.lane_u32(B4)? as usize;
@@ -1876,6 +1876,10 @@ fn fit_scalar(value: i64, datatype: u8) -> Result<Vec<u8>, DecodeError> {
     use node::*;
     let too_big = || DecodeError::Kv3("scalar value does not fit the field's on-disk width");
     Ok(match datatype {
+        INT8 => i8::try_from(value)
+            .map_err(|_| too_big())?
+            .to_le_bytes()
+            .to_vec(),
         INT32_AS_BYTE => vec![u8::try_from(value).map_err(|_| too_big())?],
         INT16 => i16::try_from(value)
             .map_err(|_| too_big())?
@@ -2158,7 +2162,7 @@ impl<'a> PathWalk<'a> {
                 self.record(B2, datatype);
                 self.main[B2].pos += 2;
             }
-            INT32_AS_BYTE => {
+            INT8 | INT32_AS_BYTE => {
                 self.record(B1, datatype);
                 self.main[B1].pos += 1;
             }
@@ -2170,7 +2174,7 @@ impl<'a> PathWalk<'a> {
             // the separate blob region the reader pulls from), so it advances no
             // cursor here, like the tagless constants.
             NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO
-            | DOUBLE_ONE | BINARY_BLOB => {}
+            | DOUBLE_ONE | UINT32_ZERO | UINT32_ONE | BINARY_BLOB => {}
             ARRAY => {
                 let n = self.lane_u32(B4)?;
                 for i in 0..n {
@@ -2550,8 +2554,8 @@ impl<'a> Walk<'a> {
                 }
                 self.main[B2].pos += 2;
             }
-            INT32_AS_BYTE | BOOLEAN => {
-                if record && datatype == INT32_AS_BYTE {
+            INT8 | INT32_AS_BYTE | BOOLEAN => {
+                if record && matches!(datatype, INT8 | INT32_AS_BYTE) {
                     self.patches.push((self.main[B1].at(), 1));
                 }
                 self.main[B1].pos += 1;
@@ -2560,7 +2564,7 @@ impl<'a> Walk<'a> {
                 self.main[B4].pos += 4;
             }
             NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO
-            | DOUBLE_ONE => {}
+            | DOUBLE_ONE | UINT32_ZERO | UINT32_ONE => {}
             ARRAY => {
                 let n = self.lane_u32(B4)?;
                 for i in 0..n {
@@ -3316,5 +3320,89 @@ mod tests {
             new_tree, expect,
             "v4 array insert should add exactly one element and preserve the rest"
         );
+    }
+
+    fn obj(pairs: &[(&str, Value)]) -> Value {
+        Value::Object(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// A v4 block using the node types current game models carry: `z`/`o` as
+    /// tagless `UINT32_ZERO`/`UINT32_ONE`, `b` as `INT8` (-2), between plain
+    /// strings. The encoder emits none of them, so it encodes tagless int 0/1 in
+    /// their place and rewrites the type bytes. `INT8` also needs its byte in the
+    /// 1-byte lane, which opens the body and pushes the 4-byte lane to offset 4.
+    fn block_with_new_node_types() -> Vec<u8> {
+        let tree = obj(&[
+            ("z", Value::Int(0)),
+            ("o", Value::Int(1)),
+            ("b", Value::Int(0)),
+            ("s", Value::String("a".into())),
+            ("t", Value::String("b".into())),
+        ]);
+        let mut v4 = crate::kv3::encode(&tree, &crate::kv3::Format([0; 16]));
+        let (types_end, header) = (v4.len() - 4, 72);
+        let types = &mut v4[types_end - 6..types_end];
+        assert_eq!(
+            types,
+            [
+                node::OBJECT,
+                node::INT64_ZERO,
+                node::INT64_ONE,
+                node::INT64_ZERO,
+                node::STRING,
+                node::STRING
+            ]
+        );
+        types[1] = node::UINT32_ZERO;
+        types[2] = node::UINT32_ONE;
+        types[3] = node::INT8;
+
+        // The 4-byte lane is 36 bytes, so the encoder padded it by 4 to reach the
+        // 8-aligned strings. Moved to offset 4 it ends 8-aligned: drop that pad,
+        // and put the INT8 byte plus 3 alignment bytes up front. Size unchanged.
+        let b4_len = u32_at(&v4, 32).unwrap() as usize * 4;
+        assert_eq!(
+            (b4_len % 8, u32_at(&v4, 36).unwrap()),
+            (4, 0),
+            "36-byte b4, no b8"
+        );
+        let pad = header + b4_len;
+        assert_eq!(&v4[pad..pad + 4], [0; 4]);
+        v4.drain(pad..pad + 4);
+        v4.splice(header..header, [0xFE, 0, 0, 0]);
+        v4[28..32].copy_from_slice(&1u32.to_le_bytes());
+        v4
+    }
+
+    #[test]
+    fn decodes_uint32_zero_one_and_int8_nodes() {
+        let tree = crate::kv3::decode(&block_with_new_node_types()).unwrap();
+        assert_eq!(
+            tree,
+            obj(&[
+                ("z", Value::UInt(0)),
+                ("o", Value::UInt(1)),
+                ("b", Value::Int(-2)),
+                ("s", Value::String("a".into())),
+                ("t", Value::String("b".into())),
+            ])
+        );
+    }
+
+    #[test]
+    fn patch_walks_step_over_uint32_zero_one_and_int8_nodes() {
+        let block = block_with_new_node_types();
+        let renamed = set_strings(&block, &[(vec![Seg::Key("t".into())], "a".into())]).unwrap();
+        let rescaled = set_scalars(&renamed, &[(vec![Seg::Key("b".into())], -5)]).unwrap();
+        let tree = crate::kv3::decode(&rescaled).unwrap();
+        assert_eq!(tree.get("t"), Some(&Value::String("a".into())));
+        assert_eq!(tree.get("b"), Some(&Value::Int(-5)));
+        assert_eq!(tree.get("o"), Some(&Value::UInt(1)));
+        assert!(set_scalars(&block, &[(vec![Seg::Key("b".into())], 200)]).is_err());
     }
 }

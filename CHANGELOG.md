@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+New `attachments` command for hero model swaps broken by Deadlock's camera change. The update re-framed every attachment parented to `root_motion` (camera pivots, aim, zipline, lean), so a swap compiled before it puts the camera in the wrong place.
+
+- `attachments check --base pak01_dir.vpk MOD_dir.vpk... [--json]` flags each model whose `root_motion` attachments are rotated more than 30 degrees from the game's. JSON shape and error handling match `vdata-check`.
+- `attachments heal --base pak01_dir.vpk MOD_dir.vpk --output OUT_dir.vpk` copies the game's offsets and rotations onto those attachments in place and repacks the VPK with every other entry unchanged. Writes nothing when there is nothing to heal.
+- Fix: KV3 now reads node types 22 (`INT8`), 26 and 27 (`UINT32_ZERO`/`UINT32_ONE`). Current game models use them, and every decode of their mesh blocks failed with `unknown KV3 node type: 26`.
+
+### Library (`vpkmerge-core`)
+
+- `AttachmentHealer`, `AttachmentReport`, `AttachmentStatus`, `HealedModel`, `STALE_DEGREES`.
+
 ## v0.21.1
 
 Fix: the sound and hero catalogs work again on current Deadlock builds. Valve's recent data changes broke three things Grimoire's Foundry tab relies on. Contributed by @oldreceipt (#55).

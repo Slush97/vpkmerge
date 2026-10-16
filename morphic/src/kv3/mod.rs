@@ -51,9 +51,12 @@ pub(crate) mod node {
     pub const FLOAT: u8 = 19;
     pub const INT16: u8 = 20;
     pub const UINT16: u8 = 21;
+    pub const INT8: u8 = 22;
     pub const INT32_AS_BYTE: u8 = 23;
     pub const ARRAY_TYPE_BYTE_LENGTH: u8 = 24;
     pub const ARRAY_TYPE_AUXILIARY_BUFFER: u8 = 25;
+    pub const UINT32_ZERO: u8 = 26;
+    pub const UINT32_ONE: u8 = 27;
 }
 
 /// The 16-byte KV3 format GUID from the payload header. It names the schema

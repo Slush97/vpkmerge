@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.23.0
+
+New `compatibility` command for mods broken by game updates. It fills in the game data and names a mod is missing and updates skeleton layouts it can verify, keeping every value the mod already sets. Contributed by @oldreceipt (#61).
+
+### CLI (`vpkmerge` 0.23)
+
+- `compatibility check --base pak01_dir.vpk MOD_dir.vpk... [--json]` lists, per mod, the repairs it can make (`repairable`) and the differences it leaves alone (`unsupported`, with a reason). An empty report means no supported repair was found, not that the mod is fully compatible.
+- `compatibility heal --base pak01_dir.vpk MOD_dir.vpk --output OUT_dir.vpk [--json]` writes those repairs to a new VPK with every other entry unchanged, and verifies each packed entry before returning. Writes nothing when there is nothing to repair.
+- Repairs cover missing ability/hero object fields, missing localization tokens, equivalent sampling skeleton layouts and absent animation bindings on modern models. Larger pose or hierarchy changes, custom masks, authored clips and unknown schemas are declined.
+- `--animation-overrides` (both subcommands) declines rig repairs, for when other enabled mods ship skeletons, graphs or clips.
+
+### Library (`morphic` 0.11.3, `vpkmerge-core` 0.23)
+
+- `vpkmerge_core::CompatibilityRepairer`, `CompatibilityReport`, `RepairStatus`.
+- `morphic::kv3::decode_flagged`/`encode_flagged` and `ValueFlags` keep each node's semantic resource flag through structural edits.
+- `morphic::kv3` reads pre-versioned VKV3 (raw, LZ4 and Valve block compression) and refuses legacy semantic flags it can't convert.
+
 ## v0.22.1
 
 ### CLI (`vpkmerge` 0.22.1)

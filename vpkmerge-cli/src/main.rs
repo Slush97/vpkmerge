@@ -5381,6 +5381,33 @@ fn predicate_matches(pred: &PathPredicate, path: &str) -> bool {
     }
 }
 
+fn run_compatibility(args: CompatibilityCmd) -> Result<()> {
+    use vpkmerge_core::CompatibilityRepairer;
+    match args.action {
+        CompatibilityAction::Check(args) => {
+            let mut repairer = CompatibilityRepairer::new(&args.base)?;
+            let mut results = Vec::new();
+            for input in args.mods {
+                let row = match repairer.check(&input, args.animation_overrides) {
+                    Ok(reports) => serde_json::json!({"mod": input, "reports": reports}),
+                    Err(error) => serde_json::json!({"mod": input, "error": format!("{error:#}")}),
+                };
+                results.push(row);
+            }
+            println!("{}", serde_json::to_string(&results)?);
+        }
+        CompatibilityAction::Heal(args) => {
+            let reports = CompatibilityRepairer::new(&args.base)?.heal(
+                &args.input,
+                &args.output,
+                args.animation_overrides,
+            )?;
+            println!("{}", serde_json::to_string(&reports)?);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5541,31 +5568,4 @@ mod tests {
             "got: {summary}"
         );
     }
-}
-
-fn run_compatibility(args: CompatibilityCmd) -> Result<()> {
-    use vpkmerge_core::CompatibilityRepairer;
-    match args.action {
-        CompatibilityAction::Check(args) => {
-            let mut repairer = CompatibilityRepairer::new(&args.base)?;
-            let mut results = Vec::new();
-            for input in args.mods {
-                let row = match repairer.check(&input, args.animation_overrides) {
-                    Ok(reports) => serde_json::json!({"mod": input, "reports": reports}),
-                    Err(error) => serde_json::json!({"mod": input, "error": format!("{error:#}")}),
-                };
-                results.push(row);
-            }
-            println!("{}", serde_json::to_string(&results)?);
-        }
-        CompatibilityAction::Heal(args) => {
-            let reports = CompatibilityRepairer::new(&args.base)?.heal(
-                &args.input,
-                &args.output,
-                args.animation_overrides,
-            )?;
-            println!("{}", serde_json::to_string(&reports)?);
-        }
-    }
-    Ok(())
 }

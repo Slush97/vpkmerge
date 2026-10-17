@@ -6,11 +6,11 @@
 //!
 //! Values are emitted with widened tags (`Int` -> `INT64`, `Double` -> `DOUBLE`,
 //! `Array` -> generic `ARRAY`), which KV3 consumers coerce transparently. Value
-//! flags are not modelled, so none are written.
+//! flags are retained when using `encode_flagged`.
 
 use super::node;
 use super::types::Value;
-use super::Format;
+use super::{Format, Seg, ValueFlags};
 use std::collections::HashMap;
 
 const MAGIC_V4: u32 = 0x4B56_3304;
@@ -29,6 +29,7 @@ struct Ser {
     types: Vec<u8>,
     blobs: Vec<u8>,
     blob_lengths: Vec<i32>,
+    pending_flag: u8,
 }
 
 impl Ser {
@@ -46,21 +47,28 @@ impl Ser {
     }
 
     fn write_type(&mut self, t: u8) {
-        // No flags are modelled, so the high bit is never set.
-        self.types.push(t);
+        let flag = std::mem::take(&mut self.pending_flag);
+        self.types.push(if flag == 0 { t } else { t | 0x80 });
+        if flag != 0 {
+            self.types.push(flag);
+        }
     }
 }
 
 /// Encode a [`Value`] tree to a binary KV3 v4 (uncompressed) DATA payload.
 #[must_use]
 pub(super) fn encode(value: &Value, format: &Format) -> Vec<u8> {
+    encode_flagged(value, format, &ValueFlags::new())
+}
+
+pub(super) fn encode_flagged(value: &Value, format: &Format, flags: &ValueFlags) -> Vec<u8> {
     let mut ctx = Ser::default();
 
     // First 4-byte slot is the string count (back-patched once interning is
     // done). VRF writes a placeholder here.
     ctx.b4.extend_from_slice(&0u32.to_le_bytes());
 
-    write_value(value, &mut ctx);
+    write_value(value, &mut ctx, flags, &mut Vec::new());
 
     let string_count = u32::try_from(ctx.strings.len()).expect("string table overflow");
     ctx.b4[0..4].copy_from_slice(&string_count.to_le_bytes());
@@ -157,8 +165,9 @@ fn write_data(ctx: &mut Ser) -> (Vec<u8>, u32) {
 // `*d == 0.0` / `*d == 1.0` are deliberate exact comparisons: they pick the
 // compact DOUBLE_ZERO/DOUBLE_ONE tags, matching the reference encoder.
 #[allow(clippy::wildcard_imports, clippy::float_cmp)]
-fn write_value(value: &Value, ctx: &mut Ser) {
+fn write_value(value: &Value, ctx: &mut Ser, flags: &ValueFlags, path: &mut Vec<Seg>) {
     use node::*;
+    ctx.pending_flag = flags.get(path).copied().unwrap_or(0);
     match value {
         Value::Bool(b) => ctx.write_type(if *b { BOOLEAN_TRUE } else { BOOLEAN_FALSE }),
         Value::Int(i) => match i {
@@ -199,8 +208,10 @@ fn write_value(value: &Value, ctx: &mut Ser) {
             ctx.write_type(ARRAY);
             let n = u32::try_from(items.len()).expect("array too large");
             ctx.b4.extend_from_slice(&n.to_le_bytes());
-            for item in items {
-                write_value(item, ctx);
+            for (i, item) in items.iter().enumerate() {
+                path.push(Seg::Index(i));
+                write_value(item, ctx, flags, path);
+                path.pop();
             }
         }
         Value::Object(pairs) => {
@@ -210,7 +221,9 @@ fn write_value(value: &Value, ctx: &mut Ser) {
             for (key, v) in pairs {
                 let id = ctx.string_id(key);
                 ctx.b4.extend_from_slice(&id.to_le_bytes());
-                write_value(v, ctx);
+                path.push(Seg::Key(key.clone()));
+                write_value(v, ctx, flags, path);
+                path.pop();
             }
         }
     }

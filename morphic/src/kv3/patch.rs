@@ -299,6 +299,103 @@ pub fn set_floats(block: &[u8], edits: &[(Vec<Seg>, f32)]) -> Result<Vec<u8>, De
     Ok(out)
 }
 
+/// Sets real-number fields located by KV3 path, in place, whichever width each
+/// one is stored at: a `FLOAT` takes the value rounded to f32, a `DOUBLE` takes
+/// it as is, and a tagless `DOUBLE_ZERO`/`DOUBLE_ONE` (no stored bytes; the value
+/// is the type id) flips between the two. The same field can be stored either
+/// way: the game's hero models keep attachment vectors as f32, while models
+/// built with other tools carry f64. Like [`set_doubles`], a blobbed LZ4 v5 block
+/// is patched on a decompressed copy and re-emitted compressed; anything else is
+/// re-wrapped uncompressed, every byte but the edited values preserved.
+///
+/// Errors if the block is not v4/v5, if any path is missing / not a real number
+/// / ambiguous, or if a tagless field would need a value other than 0.0 or 1.0
+/// (giving it stored bytes is a structural edit). A typed array whose subtype
+/// is tagless shares that one type byte between its elements, so none of them
+/// can change.
+pub fn set_reals(block: &[u8], edits: &[(Vec<Seg>, f64)]) -> Result<Vec<u8>, DecodeError> {
+    let blobbed = is_blobbed_lz4_v5(block);
+    let mut out = if blobbed {
+        decompress_v5_working(block)?
+    } else {
+        rewrap_uncompressed(block)?
+    };
+    let version = u32_at(&out, 0)? & 0xFF;
+    let min_header = if version == 5 { 120 } else { 72 };
+    if out.len() < min_header || (version != 4 && version != 5) {
+        return Err(DecodeError::Kv3("real patch requires KV3 v4 or v5"));
+    }
+
+    let targets: Vec<&[Seg]> = edits.iter().map(|(p, _)| p.as_slice()).collect();
+    let (floats, doubles, tagless) = {
+        let mut w = PathWalk::new(&out, &targets)?;
+        let root = w.read_type()?;
+        w.value(root)?;
+        (w.float_hits, w.double_hits, w.double_type_hits)
+    };
+
+    for i in 0..edits.len() {
+        let n = floats.iter().filter(|h| h.edit == i).count()
+            + doubles.iter().filter(|h| h.edit == i).count()
+            + tagless.iter().filter(|h| h.edit == i).count();
+        match n {
+            1 => {}
+            0 => {
+                return Err(DecodeError::Kv3(
+                    "real patch path not found or not a float/double",
+                ))
+            }
+            _ => {
+                return Err(DecodeError::Kv3(
+                    "real patch path is ambiguous (matched more than one field)",
+                ))
+            }
+        }
+    }
+
+    for h in &floats {
+        #[allow(clippy::cast_possible_truncation)]
+        let bytes = (edits[h.edit].1 as f32).to_le_bytes();
+        out.get_mut(h.offset..h.offset + 4)
+            .ok_or(DecodeError::Kv3("real patch offset out of range"))?
+            .copy_from_slice(&bytes);
+    }
+    for h in &doubles {
+        out.get_mut(h.offset..h.offset + 8)
+            .ok_or(DecodeError::Kv3("real patch offset out of range"))?
+            .copy_from_slice(&edits[h.edit].1.to_le_bytes());
+    }
+    for h in &tagless {
+        let b = out
+            .get_mut(h.offset)
+            .ok_or(DecodeError::Kv3("real patch offset out of range"))?;
+        let want = match edits[h.edit].1 {
+            0.0 => node::DOUBLE_ZERO,
+            1.0 => node::DOUBLE_ONE,
+            _ => {
+                return Err(DecodeError::Kv3(
+                    "tagless double field can only be set to 0.0 or 1.0 in place",
+                ))
+            }
+        };
+        if *b & 0x3F == want {
+            continue;
+        }
+        if h.shared {
+            return Err(DecodeError::Kv3(
+                "tagless typed-array element cannot change without its siblings",
+            ));
+        }
+        *b = (*b & 0xC0) | want;
+    }
+
+    if blobbed {
+        reassemble_blobbed_v5(block, &out)
+    } else {
+        Ok(out)
+    }
+}
+
 /// Sets `STRING` fields located by KV3 path by redirecting the field's string id
 /// to another string already present in the same KV3 string table.
 ///
@@ -1948,6 +2045,15 @@ struct IntTypeHit {
     offset: usize,
 }
 
+/// A located tagless real (`DOUBLE_ZERO` / `DOUBLE_ONE`), for [`set_reals`]: the
+/// real sibling of [`IntTypeHit`]. `offset` is the type byte. `shared` marks a
+/// typed-array subtype, whose one type byte stands for every element.
+struct DoubleTypeHit {
+    edit: usize,
+    offset: usize,
+    shared: bool,
+}
+
 /// Path-tracking sibling of [`Walk`]: walks the value tree (sharing [`lanes`]),
 /// maintaining the current KV3 path, and records each integer scalar whose path
 /// equals one of `targets`. Used by [`set_scalars`].
@@ -1967,6 +2073,7 @@ struct PathWalk<'a> {
     int_type_hits: Vec<IntTypeHit>,
     bool_hits: Vec<BoolHit>,
     double_hits: Vec<Hit>,
+    double_type_hits: Vec<DoubleTypeHit>,
     float_hits: Vec<Hit>,
     string_hits: Vec<Hit>,
 }
@@ -1989,6 +2096,7 @@ impl<'a> PathWalk<'a> {
             int_type_hits: Vec::new(),
             bool_hits: Vec::new(),
             double_hits: Vec::new(),
+            double_type_hits: Vec::new(),
             float_hits: Vec::new(),
             string_hits: Vec::new(),
         })
@@ -2067,6 +2175,21 @@ impl<'a> PathWalk<'a> {
         }
     }
 
+    /// Records a tagless real (`DOUBLE_ZERO`/`DOUBLE_ONE`) as a hit if its path
+    /// matches a target. `type_off` is the absolute offset of its type byte.
+    fn record_double_type(&mut self, datatype: u8, type_off: usize, shared: bool) {
+        if datatype != node::DOUBLE_ZERO && datatype != node::DOUBLE_ONE {
+            return;
+        }
+        if let Some(edit) = self.targets.iter().position(|t| self.path.as_slice() == *t) {
+            self.double_type_hits.push(DoubleTypeHit {
+                edit,
+                offset: type_off,
+                shared,
+            });
+        }
+    }
+
     /// Records a value-encoded bool (`BOOLEAN` + a 0/1 b1 byte) as a hit if its
     /// path matches a target. `value_off` is the absolute offset of the b1 byte.
     fn record_bool_value(&mut self, value_off: usize) {
@@ -2134,7 +2257,7 @@ impl<'a> PathWalk<'a> {
 
     /// Walks one value, advancing every cursor exactly as the reader does and
     /// pushing/popping `path` on each descent, recording matching scalars.
-    #[allow(clippy::wildcard_imports)] // node constants, mirroring reader::read_value
+    #[allow(clippy::wildcard_imports, clippy::too_many_lines)] // node constants, mirroring reader::read_value
     fn value(&mut self, datatype: u8) -> Result<(), DecodeError> {
         use node::*;
         match datatype {
@@ -2183,34 +2306,41 @@ impl<'a> PathWalk<'a> {
                     self.path.push(Seg::Index(i as usize));
                     self.record_bool_type(t, type_off);
                     self.record_int_type(t, type_off);
+                    self.record_double_type(t, type_off, false);
                     self.value(t)?;
                     self.path.pop();
                 }
             }
             ARRAY_TYPED => {
                 let n = self.lane_u32(B4)?;
+                let sub_off = self.types.at();
                 let sub = self.read_type()?;
                 for i in 0..n {
                     self.path.push(Seg::Index(i as usize));
+                    self.record_double_type(sub, sub_off, true);
                     self.value(sub)?;
                     self.path.pop();
                 }
             }
             ARRAY_TYPE_BYTE_LENGTH => {
                 let n = u32::from(self.lane_u8(B1)?);
+                let sub_off = self.types.at();
                 let sub = self.read_type()?;
                 for i in 0..n {
                     self.path.push(Seg::Index(i as usize));
+                    self.record_double_type(sub, sub_off, true);
                     self.value(sub)?;
                     self.path.pop();
                 }
             }
             ARRAY_TYPE_AUXILIARY_BUFFER => {
                 let n = u32::from(self.lane_u8(B1)?);
+                let sub_off = self.types.at();
                 let sub = self.read_type()?;
                 std::mem::swap(&mut self.main, &mut self.aux);
                 for i in 0..n {
                     self.path.push(Seg::Index(i as usize));
+                    self.record_double_type(sub, sub_off, true);
                     self.value(sub)?;
                     self.path.pop();
                 }
@@ -2231,6 +2361,7 @@ impl<'a> PathWalk<'a> {
                     self.path.push(Seg::Key(self.key(id).to_string()));
                     self.record_bool_type(vt, type_off);
                     self.record_int_type(vt, type_off);
+                    self.record_double_type(vt, type_off, false);
                     self.value(vt)?;
                     self.path.pop();
                 }
@@ -3404,5 +3535,107 @@ mod tests {
         assert_eq!(tree.get("b"), Some(&Value::Int(-5)));
         assert_eq!(tree.get("o"), Some(&Value::UInt(1)));
         assert!(set_scalars(&block, &[(vec![Seg::Key("b".into())], 200)]).is_err());
+    }
+
+    fn reals(values: &[f64]) -> Value {
+        Value::Array(values.iter().copied().map(Value::Double).collect())
+    }
+
+    fn v_at(i: usize) -> Vec<Seg> {
+        vec![Seg::Key("v".into()), Seg::Index(i)]
+    }
+
+    /// A v4 block whose array `v` holds one real of each encoding, in order:
+    /// `FLOAT` (94.5), `DOUBLE` (0.1), tagless `DOUBLE_ZERO`, tagless `DOUBLE_ONE`.
+    /// The insert encoder picks the narrowest exact tag for each value.
+    fn block_with_every_real_encoding() -> Vec<u8> {
+        let tree = obj(&[("v", reals(&[])), ("k", Value::String("kept".into()))]);
+        let mut block = crate::kv3::encode(&tree, &crate::kv3::Format([0; 16]));
+        for (i, x) in [94.5, 0.1, 0.0, 1.0].into_iter().enumerate() {
+            block =
+                insert_array_element_adding(&block, &[Seg::Key("v".into())], i, &Value::Double(x))
+                    .unwrap();
+        }
+        block
+    }
+
+    #[test]
+    fn set_reals_writes_each_encoding_in_place() {
+        let block = block_with_every_real_encoding();
+        let float = |b: &[u8], i| set_floats(b, &[(v_at(i), 1.0)]).is_ok();
+        let double = |b: &[u8], i| set_doubles(b, &[(v_at(i), 1.0)]).is_ok();
+        assert!(float(&block, 0) && double(&block, 1) && !double(&block, 2));
+
+        let edits: Vec<(Vec<Seg>, f64)> = [7.25, 2.000_000_000_1, 1.0, 0.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (v_at(i), x))
+            .collect();
+        let patched = set_reals(&block, &edits).unwrap();
+        assert_eq!(patched.len(), block.len(), "no field changed width");
+        assert_eq!(
+            crate::kv3::decode(&patched).unwrap(),
+            obj(&[
+                ("v", reals(&[7.25, 2.000_000_000_1, 1.0, 0.0])),
+                ("k", Value::String("kept".into())),
+            ])
+        );
+        let changed = block.iter().zip(&patched).filter(|(a, b)| a != b).count();
+        assert!(changed <= 4 + 8 + 1 + 1, "{changed} bytes changed");
+        assert!(float(&patched, 0) && double(&patched, 1), "widths kept");
+    }
+
+    fn refusal(block: &[u8], path: Vec<Seg>, value: f64) -> String {
+        set_reals(block, &[(path, value)]).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn set_reals_refuses_what_it_cannot_write_in_place() {
+        let block = block_with_every_real_encoding();
+        assert!(refusal(&block, v_at(2), 3.0).contains("0.0 or 1.0"));
+        assert!(refusal(&block, v_at(4), 1.0).contains("not found"));
+        assert!(refusal(&block, vec![Seg::Key("k".into())], 1.0).contains("not found"));
+        // Writing the value a tagless field already holds needs no bytes.
+        assert_eq!(
+            crate::kv3::decode(&set_reals(&block, &[(v_at(3), 1.0)]).unwrap()).unwrap(),
+            crate::kv3::decode(&block).unwrap()
+        );
+    }
+
+    /// `v` as a typed array of three tagless zeros: one `DOUBLE_ZERO` subtype
+    /// byte stands for every element. Built from the untyped encoding by turning
+    /// `ARRAY` into `ARRAY_TYPED` and dropping the two repeated element tags.
+    fn block_with_tagless_typed_array() -> Vec<u8> {
+        let tree = obj(&[("v", reals(&[0.0, 0.0, 0.0]))]);
+        let mut v4 = crate::kv3::encode(&tree, &crate::kv3::Format([0; 16]));
+        let types_end = v4.len() - 4;
+        let types = types_end - 5..types_end;
+        assert_eq!(
+            v4[types.clone()],
+            [
+                node::OBJECT,
+                node::ARRAY,
+                node::DOUBLE_ZERO,
+                node::DOUBLE_ZERO,
+                node::DOUBLE_ZERO
+            ]
+        );
+        v4[types.start + 1] = node::ARRAY_TYPED;
+        v4.drain(types.end - 2..types.end);
+        for o in [40, 48, 52] {
+            let shrunk = u32_at(&v4, o).unwrap() - 2;
+            v4[o..o + 4].copy_from_slice(&shrunk.to_le_bytes());
+        }
+        v4
+    }
+
+    #[test]
+    fn set_reals_never_changes_a_shared_tagless_subtype() {
+        let block = block_with_tagless_typed_array();
+        let before = crate::kv3::decode(&block).unwrap();
+        assert_eq!(before, obj(&[("v", reals(&[0.0, 0.0, 0.0]))]));
+        let same = set_reals(&block, &[(v_at(1), 0.0)]).unwrap();
+        assert_eq!(crate::kv3::decode(&same).unwrap(), before);
+        assert!(refusal(&block, v_at(1), 1.0).contains("siblings"));
     }
 }

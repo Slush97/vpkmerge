@@ -141,16 +141,23 @@ sides parent to `root_motion` is rotated more than `STALE_DEGREES` (30) from the
 game's (the re-frame is 90 to 120 degrees), else `current`; `not-in-game`,
 `unaffected` (the game's model has no `root_motion` attachments: props, abilities),
 `undecodable`. `heal(mod, out)` copies the game's offsets and rotations onto every
-shared `root_motion` attachment of each stale model with `kv3::set_floats` (in place,
+shared `root_motion` attachment of each stale model with `kv3::set_reals` (in place,
 MDAT rewrapped uncompressed, nothing re-encoded), then repacks through
 `embed_metadata` so every other entry is untouched. It writes nothing when no model is
 stale. It cannot add attachments the mod lacks, and a mod-only model with no
-same-path game model is skipped.
+same-path game model is skipped. `set_reals` writes each component at the width the
+mod stores it: the game's models use `FLOAT`, some community builds `DOUBLE`
+(After School Mina), and a tagless `DOUBLE_ZERO`/`DOUBLE_ONE` is flipped between the
+two. A tagless component that needs any other value fails the heal, naming the
+attachment: giving it stored bytes is a structural edit, and main has no lossless
+KV3 encoder to fall back on.
 
 CLI: `vpkmerge attachments check --base <pak01_dir.vpk> <MOD_dir.vpk>... [--json]`
 (same JSON shape and error contract as `vdata-check`) and
 `vpkmerge attachments heal --base <pak01_dir.vpk> <MOD_dir.vpk> --output <OUT_dir.vpk> [--json]`.
-Live test: `tests/attachment_heal_live.rs`, gated on `DEADLOCK_PAK`.
+Live test: `tests/attachment_heal_live.rs`, gated on `DEADLOCK_PAK`; set
+`ATTACHMENT_HEAL_MOD` to a real stale mod to also heal it and check that only its
+`root_motion` vectors changed.
 
 ## CI
 

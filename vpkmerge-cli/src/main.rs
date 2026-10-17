@@ -134,7 +134,7 @@ enum Command {
     /// and rotations onto the stale ones in place and repacks the VPK.
     Attachments(AttachmentsCmd),
 
-    /// Restore missing game data, localization and verified animation interfaces.
+    /// Restore missing game data, localization, sound bindings and verified animation interfaces.
     Compatibility(CompatibilityCmd),
 
     /// Style hero material shader parameters (`.vmat_c`): gemstone sheen, glass,

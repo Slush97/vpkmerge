@@ -2153,3 +2153,6 @@ mod tests {
         Ok(())
     }
 }
+
+pub mod compatibility;
+pub use compatibility::{CompatibilityRepairer, CompatibilityReport, RepairStatus};

@@ -134,6 +134,9 @@ enum Command {
     /// and rotations onto the stale ones in place and repacks the VPK.
     Attachments(AttachmentsCmd),
 
+    /// Restore missing game data, localization and verified animation interfaces.
+    Compatibility(CompatibilityCmd),
+
     /// Style hero material shader parameters (`.vmat_c`): gemstone sheen, glass,
     /// solid-ink NPR outlines, unlit, or full-PBR flips, via presets or raw
     /// `--set-*` edits packed into an addon VPK. `--list` surveys the targeted
@@ -1216,6 +1219,46 @@ struct VdataCheckCmd {
 }
 
 #[derive(Args)]
+struct CompatibilityCmd {
+    #[command(subcommand)]
+    action: CompatibilityAction,
+}
+
+#[derive(Subcommand)]
+enum CompatibilityAction {
+    /// Preview verified repairs and unsupported differences without writing.
+    Check(CompatibilityCheckArgs),
+    /// Write verified repairs to a new VPK, retaining every unrelated entry.
+    Heal(CompatibilityHealArgs),
+}
+
+#[derive(Args)]
+struct CompatibilityCheckArgs {
+    #[arg(long)]
+    base: PathBuf,
+    #[arg(required = true)]
+    mods: Vec<PathBuf>,
+    /// Other enabled mods override animation resources. Decline rig repairs.
+    #[arg(long)]
+    animation_overrides: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct CompatibilityHealArgs {
+    #[arg(long)]
+    base: PathBuf,
+    input: PathBuf,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long)]
+    animation_overrides: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 struct AttachmentsCmd {
     #[command(subcommand)]
     action: AttachmentsAction,
@@ -1928,6 +1971,7 @@ fn main() -> Result<()> {
         Some(Command::TrippyPreview(args)) => run_trippy_preview(&args),
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
         Some(Command::VdataCheck(args)) => run_vdata_check(&args),
+        Some(Command::Compatibility(args)) => run_compatibility(args),
         Some(Command::Attachments(args)) => match &args.action {
             AttachmentsAction::Check(a) => run_attachments_check(a),
             AttachmentsAction::Heal(a) => run_attachments_heal(a),
@@ -5335,6 +5379,33 @@ fn predicate_matches(pred: &PathPredicate, path: &str) -> bool {
     match pred {
         PathPredicate::AnyPrefix(prefixes) => prefixes.iter().any(|p| path.starts_with(p)),
     }
+}
+
+fn run_compatibility(args: CompatibilityCmd) -> Result<()> {
+    use vpkmerge_core::CompatibilityRepairer;
+    match args.action {
+        CompatibilityAction::Check(args) => {
+            let mut repairer = CompatibilityRepairer::new(&args.base)?;
+            let mut results = Vec::new();
+            for input in args.mods {
+                let row = match repairer.check(&input, args.animation_overrides) {
+                    Ok(reports) => serde_json::json!({"mod": input, "reports": reports}),
+                    Err(error) => serde_json::json!({"mod": input, "error": format!("{error:#}")}),
+                };
+                results.push(row);
+            }
+            println!("{}", serde_json::to_string(&results)?);
+        }
+        CompatibilityAction::Heal(args) => {
+            let reports = CompatibilityRepairer::new(&args.base)?.heal(
+                &args.input,
+                &args.output,
+                args.animation_overrides,
+            )?;
+            println!("{}", serde_json::to_string(&reports)?);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -72,7 +72,7 @@ pub fn neutralize_draw_calls(
 }
 
 /// One step of a KV3 path: an object member key or an array element index.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Seg {
     /// Descend into the object member with this name.
     Key(String),

@@ -12,6 +12,7 @@
 //! Layout and algorithms are ported from `ValveResourceFormat` (MIT); see the
 //! `reader` and `writer` submodules.
 
+mod legacy;
 mod patch;
 mod reader;
 mod rewrap;
@@ -77,7 +78,15 @@ impl Format {
             });
         }
         let mut guid = [0u8; 16];
-        guid.copy_from_slice(&data[4..20]);
+        let start = if data[..4] == [0x56, 0x4b, 0x56, 0x03] {
+            20
+        } else {
+            4
+        };
+        guid.copy_from_slice(
+            data.get(start..start + 16)
+                .ok_or(DecodeError::Kv3("Truncated format GUID"))?,
+        );
         Ok(Self(guid))
     }
 }
@@ -92,4 +101,19 @@ pub fn decode(data: &[u8]) -> Result<Value, DecodeError> {
 #[must_use]
 pub fn encode(value: &Value, format: &Format) -> Vec<u8> {
     writer::encode(value, format)
+}
+
+/// Semantic KV3 flags by object/array path. Resource references must retain these
+/// even when structural edits change the layout of the type stream.
+pub type ValueFlags = std::collections::BTreeMap<Vec<Seg>, u8>;
+
+/// Decode values and their semantic flags, including flags inherited by typed-array items.
+pub fn decode_flagged(data: &[u8]) -> Result<(Value, ValueFlags), DecodeError> {
+    reader::decode_flagged(data)
+}
+
+/// Encode a structural edit while retaining each surviving value's semantic flag.
+#[must_use]
+pub fn encode_flagged(value: &Value, format: &Format, flags: &ValueFlags) -> Vec<u8> {
+    writer::encode_flagged(value, format, flags)
 }

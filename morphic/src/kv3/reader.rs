@@ -18,11 +18,11 @@
     clippy::cast_sign_loss
 )]
 
-use super::node;
 use super::types::Value;
+use super::{node, Seg, ValueFlags};
 use crate::error::DecodeError;
 
-/// Legacy pre-versioned VKV3 magic (0x03 'V' 'K' 'V'). Unsupported.
+/// Legacy pre-versioned VKV3 magic, dispatched to the interleaved wire reader.
 const MAGIC_LEGACY: u32 = 0x0356_4B56;
 /// High 24 bits shared by all versioned magics: 'V' 'K' '3' little-endian with
 /// the version in the low byte (`05 33 56 4B` = v5).
@@ -33,10 +33,15 @@ const LZ4_FRAME_SIZE: u16 = 16384;
 /// Decode a binary KV3 DATA payload into a [`Value`] tree.
 #[allow(clippy::too_many_lines)]
 pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
+    decode_flagged(data).map(|(value, _)| value)
+}
+
+#[allow(clippy::too_many_lines)]
+pub(super) fn decode_flagged(data: &[u8]) -> Result<(Value, ValueFlags), DecodeError> {
     let mut h = Cursor::new(data);
     let magic = h.u32()?;
     if magic == MAGIC_LEGACY {
-        return Err(DecodeError::UnsupportedKv3(magic));
+        return super::legacy::decode(data);
     }
     let version = magic & 0xFF;
     if magic & 0xFFFF_FF00 != MAGIC_BASE || !(1..=5).contains(&version) {
@@ -211,8 +216,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
         ctx
     };
 
-    let (root_type, _flag) = read_type(&mut ctx)?;
-    read_value(&mut ctx, root_type)
+    let (root_type, flag) = read_type(&mut ctx)?;
+    let mut flags = ValueFlags::new();
+    let value = read_value(&mut ctx, root_type, flag, &mut Vec::new(), &mut flags)?;
+    Ok((value, flags))
 }
 
 #[derive(Default, Clone, Copy)]
@@ -566,9 +573,18 @@ fn read_type(ctx: &mut Ctx) -> Result<(u8, u8), DecodeError> {
     Ok((databyte, flag))
 }
 
-#[allow(clippy::wildcard_imports)]
-fn read_value(ctx: &mut Ctx, datatype: u8) -> Result<Value, DecodeError> {
+#[allow(clippy::wildcard_imports, clippy::too_many_lines)]
+fn read_value(
+    ctx: &mut Ctx,
+    datatype: u8,
+    flag: u8,
+    path: &mut Vec<Seg>,
+    flags: &mut ValueFlags,
+) -> Result<Value, DecodeError> {
     use node::*;
+    if flag != 0 {
+        flags.insert(path.clone(), flag);
+    }
     match datatype {
         NULL => Ok(Value::Null),
         BOOLEAN_TRUE => Ok(Value::Bool(true)),
@@ -597,9 +613,11 @@ fn read_value(ctx: &mut Ctx, datatype: u8) -> Result<Value, DecodeError> {
         ARRAY => {
             let n = ctx.main.b4.u32()?;
             let mut items = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                let (t, _f) = read_type(ctx)?;
-                items.push(read_value(ctx, t)?);
+            for i in 0..n {
+                let (t, f) = read_type(ctx)?;
+                path.push(Seg::Index(i as usize));
+                items.push(read_value(ctx, t, f, path, flags)?);
+                path.pop();
             }
             Ok(Value::Array(items))
         }
@@ -609,21 +627,26 @@ fn read_value(ctx: &mut Ctx, datatype: u8) -> Result<Value, DecodeError> {
             } else {
                 ctx.main.b4.u32()?
             };
-            let (sub, _f) = read_type(ctx)?;
+            let (sub, f) = read_type(ctx)?;
             let mut items = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                items.push(read_value(ctx, sub)?);
+            for i in 0..n {
+                path.push(Seg::Index(i as usize));
+                items.push(read_value(ctx, sub, f, path, flags)?);
+                path.pop();
             }
             Ok(Value::Array(items))
         }
         ARRAY_TYPE_AUXILIARY_BUFFER => {
             let n = u32::from(ctx.main.b1.u8()?);
-            let (sub, _f) = read_type(ctx)?;
+            let (sub, f) = read_type(ctx)?;
             std::mem::swap(&mut ctx.main, &mut ctx.aux);
             let mut items = Vec::with_capacity(n as usize);
             let mut err = None;
-            for _ in 0..n {
-                match read_value(ctx, sub) {
+            for i in 0..n {
+                path.push(Seg::Index(i as usize));
+                let item = read_value(ctx, sub, f, path, flags);
+                path.pop();
+                match item {
                     Ok(v) => items.push(v),
                     Err(e) => {
                         err = Some(e);
@@ -645,10 +668,13 @@ fn read_value(ctx: &mut Ctx, datatype: u8) -> Result<Value, DecodeError> {
             };
             let mut pairs = Vec::with_capacity(n as usize);
             for _ in 0..n {
-                let (vt, _f) = read_type(ctx)?;
+                let (vt, f) = read_type(ctx)?;
                 let id = ctx.main.b4.u32()? as i32;
                 let name = lookup_string(ctx, id)?;
-                pairs.push((name, read_value(ctx, vt)?));
+                path.push(Seg::Key(name.clone()));
+                let value = read_value(ctx, vt, f, path, flags)?;
+                path.pop();
+                pairs.push((name, value));
             }
             Ok(Value::Object(pairs))
         }

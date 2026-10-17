@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.22.1
 
-- Fix: `attachments heal` failed with `float patch path not found or not a float` on models that store attachment vectors as `DOUBLE` instead of `FLOAT` (e.g. After School Mina). It now writes each component at the width the mod stores it.
+### CLI (`vpkmerge` 0.22.1)
 
-### Library (`morphic`)
+- Fix: `attachments heal` failed with `float patch path not found or not a float` on models that store attachment vectors as `DOUBLE` instead of `FLOAT` (e.g. After School Mina). It now writes each component at the width the mod stores it (#59).
+
+### Library (`morphic` 0.11.2, `vpkmerge-core` 0.22.1)
 
 - `morphic::kv3::set_reals` patches real-number fields in place at their stored width: `FLOAT`, `DOUBLE`, or a tagless `DOUBLE_ZERO`/`DOUBLE_ONE` flipped between the two.
 

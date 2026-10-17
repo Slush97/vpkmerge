@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix: `attachments heal` failed with `float patch path not found or not a float` on models that store attachment vectors as `DOUBLE` instead of `FLOAT` (e.g. After School Mina). It now writes each component at the width the mod stores it.
+
+### Library (`morphic`)
+
+- `morphic::kv3::set_reals` patches real-number fields in place at their stored width: `FLOAT`, `DOUBLE`, or a tagless `DOUBLE_ZERO`/`DOUBLE_ONE` flipped between the two.
+
 ## v0.22.0
 
 New `attachments` command for hero model swaps broken by Deadlock's camera change. The update re-framed every attachment parented to `root_motion` (camera pivots, aim, zipline, lean), so a swap compiled before it puts the camera in the wrong place (#57).

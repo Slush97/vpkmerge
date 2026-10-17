@@ -319,9 +319,8 @@ fn rotation_gap_degrees(a: &[f64], b: &[f64]) -> Option<f64> {
     Some(2.0 * dot.abs().min(1.0).acos().to_degrees())
 }
 
-/// Patch every `MDAT` block of a stale model. Each block gets the game's
-/// offsets and rotations for every attachment both sides parent to
-/// `root_motion`, written over the existing floats in place.
+/// Patch every `MDAT` block of a stale model (each LOD mesh carries its own
+/// copy of the attachments).
 fn heal_model(
     entry: &str,
     model: &[u8],
@@ -341,20 +340,16 @@ fn heal_model(
     for index in mdat_indices {
         let res = Resource::parse(&out)?;
         let raw = res.get_block_by_index(index).context("MDAT out of range")?;
-        let Some(atts) = attachments(&morphic::kv3::decode(raw)?) else {
+        let Some((patched, healed)) =
+            heal_block(raw, base).with_context(|| format!("patching MDAT block {index}"))?
+        else {
             continue;
         };
-        let edits = float_edits(&atts, base);
-        if edits.is_empty() {
-            continue;
-        }
-        for a in atts.iter().filter(|a| shared(a, base).is_some()) {
-            if !names.contains(&a.name) {
-                names.push(a.name.clone());
+        for name in healed {
+            if !names.contains(&name) {
+                names.push(name);
             }
         }
-        let patched = morphic::kv3::set_floats(raw, &edits)
-            .with_context(|| format!("patching MDAT block {index}"))?;
         out = res.rebuild_with_block(index, &patched)?;
         blocks += 1;
     }
@@ -368,31 +363,56 @@ fn heal_model(
     ))
 }
 
-/// Float writes copying the game's offset and rotation components onto every
-/// shared `root_motion` attachment, influence by influence.
-#[allow(clippy::cast_possible_truncation)]
-fn float_edits(atts: &[Attachment], base: &HashMap<String, Attachment>) -> Vec<(Vec<Seg>, f32)> {
+/// Write the game's offsets and rotations over every attachment of one `MDAT`
+/// KV3 block that both sides parent to `root_motion`, in place at whatever width
+/// the mod stores them (`kv3::set_reals`). Returns the patched block and the
+/// healed names, or `None` when the block has no such attachment.
+fn heal_block(
+    raw: &[u8],
+    base: &HashMap<String, Attachment>,
+) -> Result<Option<(Vec<u8>, Vec<String>)>> {
+    let Some(atts) = attachments(&morphic::kv3::decode(raw)?) else {
+        return Ok(None);
+    };
+    let mut block: Option<Vec<u8>> = None;
+    let mut names = Vec::new();
+    for a in &atts {
+        let Some(game) = shared(a, base) else {
+            continue;
+        };
+        let edits = attachment_edits(a, game);
+        if edits.is_empty() {
+            continue;
+        }
+        let patched = morphic::kv3::set_reals(block.as_deref().unwrap_or(raw), &edits)
+            .with_context(|| format!("attachment {}", a.name))?;
+        block = Some(patched);
+        names.push(a.name.clone());
+    }
+    Ok(block.map(|b| (b, names)))
+}
+
+/// Writes copying the game's offset and rotation components onto the mod's
+/// attachment, influence by influence, at the mod's index.
+fn attachment_edits(ours: &Attachment, game: &Attachment) -> Vec<(Vec<Seg>, f64)> {
     let mut edits = Vec::new();
-    for a in atts {
-        let Some(b) = shared(a, base) else { continue };
-        for (field, ours, theirs) in [
-            ("m_vInfluenceOffsets", &a.offsets, &b.offsets),
-            ("m_vInfluenceRotations", &a.rotations, &b.rotations),
-        ] {
-            for (j, (mine, game)) in ours.iter().zip(theirs).enumerate() {
-                for (c, value) in game.iter().enumerate().take(mine.len()) {
-                    edits.push((
-                        vec![
-                            Seg::Key("m_attachments".into()),
-                            Seg::Index(a.index),
-                            Seg::Key("value".into()),
-                            Seg::Key(field.into()),
-                            Seg::Index(j),
-                            Seg::Index(c),
-                        ],
-                        *value as f32,
-                    ));
-                }
+    for (field, mod_vectors, game_vectors) in [
+        ("m_vInfluenceOffsets", &ours.offsets, &game.offsets),
+        ("m_vInfluenceRotations", &ours.rotations, &game.rotations),
+    ] {
+        for (j, (mine, theirs)) in mod_vectors.iter().zip(game_vectors).enumerate() {
+            for (c, value) in theirs.iter().enumerate().take(mine.len()) {
+                edits.push((
+                    vec![
+                        Seg::Key("m_attachments".into()),
+                        Seg::Index(ours.index),
+                        Seg::Key("value".into()),
+                        Seg::Key(field.into()),
+                        Seg::Index(j),
+                        Seg::Index(c),
+                    ],
+                    *value,
+                ));
             }
         }
     }
@@ -498,7 +518,7 @@ mod tests {
         let game = base(&[att(0, "palm_R", "hand_R", [1.0, 0.0, 0.0], IDENTITY)]);
         let modded = [att(0, "palm_R", "hand_R", [1.0, 0.0, 0.0], OLD_FRAME)];
         assert_eq!(stale_in(&modded, &game), Vec::<String>::new());
-        assert_eq!(float_edits(&modded, &game), Vec::<(Vec<Seg>, f32)>::new());
+        assert!(heal_block(&double_block(&modded), &game).unwrap().is_none());
     }
 
     #[test]
@@ -506,26 +526,188 @@ mod tests {
         let game = base(&[att(0, "aim", ROOT_BONE, [0.0, 0.0, 55.0], IDENTITY)]);
         let modded = [att(0, "aim", "spine_2", [0.0, 0.0, 55.0], OLD_FRAME)];
         assert_eq!(stale_in(&modded, &game), Vec::<String>::new());
-        assert_eq!(float_edits(&modded, &game), Vec::<(Vec<Seg>, f32)>::new());
+        assert!(heal_block(&double_block(&modded), &game).unwrap().is_none());
     }
 
     #[test]
     fn edits_copy_offsets_and_rotations_at_mod_index() {
-        let game = base(&[att(
-            9,
+        let game = att(9, "standing_pivot", ROOT_BONE, [0.0, 0.0, 94.0], IDENTITY);
+        let modded = att(1, "standing_pivot", ROOT_BONE, [0.0, 94.0, 0.0], OLD_FRAME);
+        let edits = attachment_edits(&modded, &game);
+        assert_eq!(edits.len(), 7);
+        assert!(edits.iter().all(|(path, _)| path[1] == Seg::Index(1)));
+        let values: Vec<f64> = edits.iter().map(|(_, v)| *v).collect();
+        assert_eq!(values, [0.0, 0.0, 94.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    fn reals(values: &[f64]) -> Value {
+        Value::Array(values.iter().copied().map(Value::Double).collect())
+    }
+
+    /// An `MDAT`-shaped tree holding `atts` (their `index` must match their
+    /// position) plus one unrelated field.
+    fn mdat(atts: &[Attachment]) -> Value {
+        let vectors = |vs: &[Vec<f64>]| Value::Array(vs.iter().map(|v| reals(v)).collect());
+        let list = atts
+            .iter()
+            .map(|a| {
+                let value = Value::Object(vec![
+                    (
+                        "m_influenceNames".into(),
+                        Value::Array(vec![Value::String(a.parent.clone())]),
+                    ),
+                    ("m_vInfluenceOffsets".into(), vectors(&a.offsets)),
+                    ("m_vInfluenceRotations".into(), vectors(&a.rotations)),
+                ]);
+                Value::Object(vec![
+                    ("key".into(), Value::String(a.name.clone())),
+                    ("value".into(), value),
+                ])
+            })
+            .collect();
+        Value::Object(vec![
+            ("m_name".into(), Value::String("kept".into())),
+            ("m_attachments".into(), Value::Array(list)),
+        ])
+    }
+
+    /// Every component a real `DOUBLE`, except 0 and 1, which morphic's encoder
+    /// writes as the tagless `DOUBLE_ZERO`/`DOUBLE_ONE`.
+    fn double_block(atts: &[Attachment]) -> Vec<u8> {
+        morphic::kv3::encode(&mdat(atts), &morphic::kv3::Format([0; 16]))
+    }
+
+    /// Every component a real `FLOAT` (the values must be f32-exact and not 0
+    /// or 1): the insert encoder picks the narrowest exact tag.
+    fn float_block(atts: &[Attachment]) -> Vec<u8> {
+        let hollow: Vec<Attachment> = atts
+            .iter()
+            .map(|a| Attachment {
+                offsets: vec![Vec::new(); a.offsets.len()],
+                rotations: vec![Vec::new(); a.rotations.len()],
+                ..a.clone()
+            })
+            .collect();
+        let mut block = double_block(&hollow);
+        for a in atts {
+            for (field, vecs) in [
+                ("m_vInfluenceOffsets", &a.offsets),
+                ("m_vInfluenceRotations", &a.rotations),
+            ] {
+                for (j, v) in vecs.iter().enumerate() {
+                    let path = component(a.index, field, j, 0)[..5].to_vec();
+                    for (c, x) in v.iter().enumerate() {
+                        block = morphic::kv3::insert_array_element_adding(
+                            &block,
+                            &path,
+                            c,
+                            &Value::Double(*x),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+        block
+    }
+
+    fn component(index: usize, field: &str, j: usize, c: usize) -> Vec<Seg> {
+        vec![
+            Seg::Key("m_attachments".into()),
+            Seg::Index(index),
+            Seg::Key("value".into()),
+            Seg::Key(field.into()),
+            Seg::Index(j),
+            Seg::Index(c),
+        ]
+    }
+
+    fn game_pivot() -> HashMap<String, Attachment> {
+        base(&[att(
+            7,
             "standing_pivot",
             ROOT_BONE,
             [0.0, 0.0, 94.0],
             IDENTITY,
-        )]);
+        )])
+    }
+
+    /// Heals `block` against [`game_pivot`] and checks the result decodes to
+    /// `modded` with the pivot carrying the game's values, at the same size.
+    fn assert_heals(block: &[u8], modded: &[Attachment]) {
+        let (healed, names) = heal_block(block, &game_pivot()).unwrap().unwrap();
+        assert_eq!(names, ["standing_pivot"]);
+        assert_eq!(healed.len(), block.len(), "patched in place");
+        let mut want = modded.to_vec();
+        want[1].offsets = vec![vec![0.0, 0.0, 94.0]];
+        want[1].rotations = vec![IDENTITY.to_vec()];
+        assert_eq!(morphic::kv3::decode(&healed).unwrap(), mdat(&want));
+    }
+
+    #[test]
+    fn heals_f32_attachments_in_place() {
         let modded = [
-            att(0, "head_fx", "head", [0.0; 3], IDENTITY),
+            att(0, "head_fx", "head", [1.5, 2.5, 3.5], OLD_FRAME),
+            att(1, "standing_pivot", ROOT_BONE, [2.5, 94.0, -3.0], OLD_FRAME),
+        ];
+        let block = float_block(&modded);
+        let path = component(1, "m_vInfluenceOffsets", 0, 0);
+        assert!(morphic::kv3::set_floats(&block, &[(path, 0.0)]).is_ok());
+        assert_heals(&block, &modded);
+    }
+
+    #[test]
+    fn heals_f64_attachments_in_place() {
+        let modded = [
+            att(0, "head_fx", "head", [1.5, 2.5, 3.5], OLD_FRAME),
+            att(1, "standing_pivot", ROOT_BONE, [2.5, 94.0, -3.0], OLD_FRAME),
+        ];
+        let block = double_block(&modded);
+        let path = component(1, "m_vInfluenceOffsets", 0, 0);
+        assert!(morphic::kv3::set_floats(&block, &[(path.clone(), 0.0)]).is_err());
+        assert!(morphic::kv3::set_doubles(&block, &[(path, 0.0)]).is_ok());
+        assert_heals(&block, &modded);
+    }
+
+    #[test]
+    fn heals_tagless_zero_and_one_by_flipping_them() {
+        // Offsets: tagless 0, a real double, tagless 1. Rotation: all tagless.
+        let modded = [
+            att(0, "head_fx", "head", [1.5, 2.5, 3.5], OLD_FRAME),
+            att(
+                1,
+                "standing_pivot",
+                ROOT_BONE,
+                [0.0, 7.5, 1.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ),
+        ];
+        let game = base(&[att(
+            7,
+            "standing_pivot",
+            ROOT_BONE,
+            [1.0, 0.0, 0.0],
+            IDENTITY,
+        )]);
+        let block = double_block(&modded);
+        let (healed, _) = heal_block(&block, &game).unwrap().unwrap();
+        assert_eq!(healed.len(), block.len(), "patched in place");
+        let mut want = modded.to_vec();
+        want[1].offsets = vec![vec![1.0, 0.0, 0.0]];
+        want[1].rotations = vec![IDENTITY.to_vec()];
+        assert_eq!(morphic::kv3::decode(&healed).unwrap(), mdat(&want));
+    }
+
+    #[test]
+    fn tagless_component_needing_stored_bytes_fails_loudly() {
+        // The pivot's z offset is a tagless 0 that would have to become 94.
+        let modded = [
+            att(0, "head_fx", "head", [1.5, 2.5, 3.5], OLD_FRAME),
             att(1, "standing_pivot", ROOT_BONE, [0.0, 94.0, 0.0], OLD_FRAME),
         ];
-        let edits = float_edits(&modded, &game);
-        assert_eq!(edits.len(), 7);
-        assert!(edits.iter().all(|(path, _)| path[1] == Seg::Index(1)));
-        let values: Vec<f32> = edits.iter().map(|(_, v)| *v).collect();
-        assert_eq!(values, [0.0, 0.0, 94.0, 0.0, 0.0, 0.0, 1.0]);
+        let err = heal_block(&double_block(&modded), &game_pivot()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("standing_pivot"), "{msg}");
+        assert!(msg.contains("0.0 or 1.0"), "{msg}");
     }
 }

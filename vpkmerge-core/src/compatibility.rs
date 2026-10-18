@@ -12,6 +12,7 @@ type RepairPlan = (Vec<CompatibilityReport>, BTreeMap<String, Vec<u8>>);
 
 mod localization;
 mod skeleton;
+mod sounds;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -231,61 +232,72 @@ impl CompatibilityRepairer {
             let Some(base) = self.game_bytes(&entry)? else {
                 continue;
             };
-            let source = pak.get_file(&entry)?.read_all()?;
+            let mut source = pak.get_file(&entry)?.read_all()?;
             if source == base {
                 continue;
             }
-            let result: Result<Option<(Vec<u8>, usize)>> = (|| {
-                if kind == "localization" {
-                    return localization::repair(&source, &base);
-                }
-                let mut old = Document::read(&source)?;
-                let current = Document::read(&base)?;
-                if kind == "data" {
-                    let count = fill_missing(
-                        &mut old.value,
-                        &current.value,
-                        &mut Vec::new(),
-                        &mut old.flags,
-                        &current.flags,
-                    );
-                    return if count == 0 {
-                        Ok(None)
-                    } else {
-                        Ok(Some((old.write(&source)?, count)))
-                    };
-                }
-                skeleton::repair(
-                    &entry,
-                    &source,
-                    &base,
-                    old,
-                    &current,
-                    own_animations
-                        || animation_overrides
-                        || (entry.ends_with(".vmdl_c") && own_skeletons),
-                    self,
-                )
-            })();
-            match result {
-                Ok(Some((bytes, changes))) => {
-                    edits.insert(entry.clone(), bytes);
-                    reports.push(CompatibilityReport {
-                        entry,
+            let kinds: &[&str] = if entry.ends_with(".vmdl_c") {
+                &["sounds", "skeleton"]
+            } else {
+                std::slice::from_ref(&kind)
+            };
+            for &kind in kinds {
+                let result: Result<Option<(Vec<u8>, usize)>> = (|| {
+                    if kind == "localization" {
+                        return localization::repair(&source, &base);
+                    }
+                    if kind == "sounds" {
+                        return sounds::repair(&source, &base, self);
+                    }
+                    let mut old = Document::read(&source)?;
+                    let current = Document::read(&base)?;
+                    if kind == "data" {
+                        let count = fill_missing(
+                            &mut old.value,
+                            &current.value,
+                            &mut Vec::new(),
+                            &mut old.flags,
+                            &current.flags,
+                        );
+                        return if count == 0 {
+                            Ok(None)
+                        } else {
+                            Ok(Some((old.write(&source)?, count)))
+                        };
+                    }
+                    skeleton::repair(
+                        &entry,
+                        &source,
+                        &base,
+                        old,
+                        &current,
+                        own_animations
+                            || animation_overrides
+                            || (entry.ends_with(".vmdl_c") && own_skeletons),
+                        self,
+                    )
+                })();
+                match result {
+                    Ok(Some((bytes, changes))) => {
+                        source = bytes;
+                        edits.insert(entry.clone(), source.clone());
+                        reports.push(CompatibilityReport {
+                            entry: entry.clone(),
+                            kind: kind.into(),
+                            status: RepairStatus::Repairable,
+                            changes,
+                            detail: String::new(),
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => reports.push(CompatibilityReport {
+                        entry: entry.clone(),
                         kind: kind.into(),
-                        status: RepairStatus::Repairable,
-                        changes,
-                        detail: String::new(),
-                    });
+                        status: RepairStatus::Unsupported,
+                        changes: 0,
+                        detail: format!("{error:#}"),
+                    }),
                 }
-                Ok(None) => {}
-                Err(error) => reports.push(CompatibilityReport {
-                    entry,
-                    kind: kind.into(),
-                    status: RepairStatus::Unsupported,
-                    changes: 0,
-                    detail: format!("{error:#}"),
-                }),
             }
         }
         Ok((reports, edits))

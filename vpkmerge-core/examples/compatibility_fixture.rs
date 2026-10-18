@@ -41,6 +41,25 @@ fn main() -> Result<()> {
         *value.get_mut(field).context("current bindings")? = Value::Array(vec![]);
         flags.retain(|path, _| !path.starts_with(&[Seg::Key(field.into())]));
     }
+    let text = value
+        .get_mut("m_modelInfo")
+        .and_then(|v| v.get_mut("m_keyValueText"))
+        .context("Model metadata")?;
+    let mut metadata = text.as_str().context("Model metadata text")?.to_owned();
+    let start = metadata
+        .find("\tTaggedSoundSettings_t")
+        .context("Sound binding")?;
+    let end = start + metadata[start..].find("\n\t}").context("Sound block end")? + 4;
+    for reference in metadata[start..end].split("resource:\"").skip(1) {
+        let path = reference.split('"').next().context("Tagged-sound path")?;
+        let compiled = format!("{path}_c");
+        base.insert(
+            compiled.clone(),
+            vpkmerge_core::read_vpk_entry(&game, &compiled),
+        );
+    }
+    metadata.replace_range(start..end, "");
+    *text = Value::String(metadata);
     let old_model = replace(&model, &value, &flags)?;
     let mut files: Vec<_> = base
         .into_iter()

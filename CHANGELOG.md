@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.23.1
+
+### CLI (`vpkmerge` 0.23.1)
+
+- `compatibility` restores missing footstep and movement sound bindings. Older skins can lack the model's `TaggedSoundSettings_t` block, which leaves animation-tagged footsteps unbound. `check` reports these as `sounds` and `heal` copies the block from the installed model, keeping any sound settings the mod already sets (even an empty block). Sound and skeleton repairs combine on one model. Contributed by @oldreceipt (#63).
+
 ## v0.23.0
 
 New `compatibility` command for mods broken by game updates. It fills in the game data and names a mod is missing and updates skeleton layouts it can verify, keeping every value the mod already sets. Contributed by @oldreceipt (#61).

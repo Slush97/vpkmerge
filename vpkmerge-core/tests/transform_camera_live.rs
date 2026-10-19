@@ -75,7 +75,7 @@ fn legacy_model(bytes: &[u8], stock: &[u8]) -> Vec<u8> {
                 } else {
                     let [x, y, z, w] = [values[0], values[1], values[2], values[3]];
                     vec![
-                        (x - w - z + y) * 0.5,
+                        (x + y - z - w) * 0.5,
                         (y + z - w - x) * 0.5,
                         (z - y + x - w) * 0.5,
                         (w + x + y + z) * 0.5,

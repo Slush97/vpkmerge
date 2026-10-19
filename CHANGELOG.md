@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.23.2
+
+### CLI (`vpkmerge` 0.23.2)
+
+- `attachments` repairs Calico's cat form and Silver's wolf form cameras. `check` now also flags models an earlier repair left incomplete: missing cat-camera attachments and settings, or legacy wolf camera poses Valve no longer ships. `heal` restores the cat-camera data and converts the old wolf poses to current root coordinates, keeping authored camera settings and every other VPK entry. Repeat repairs change nothing. Contributed by @oldreceipt (#65).
+
 ## v0.23.1
 
 ### CLI (`vpkmerge` 0.23.1)

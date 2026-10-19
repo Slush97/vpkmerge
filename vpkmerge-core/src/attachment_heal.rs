@@ -760,7 +760,7 @@ mod tests {
             let updated = camera::reframe_extra(&old, &game).unwrap();
             assert_eq!(updated.offsets[0], [25.0, -50.0, height]);
             assert!(camera::reframe_extra(&updated, &game).is_none());
-            assert!(stale_in(&[updated], &game).is_empty());
+            assert_eq!(stale_in(&[updated], &game), [] as [String; 0]);
         }
     }
 
@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(issues, ["standing_pivot", "near_00", camera::SETTINGS]);
         let (healed, report) = heal_model("cat.vmdl_c", &source, &template).unwrap();
         assert_eq!(report.attachments, issues);
-        assert!(model_issues(&healed, &template).unwrap().is_empty());
+        assert_eq!(model_issues(&healed, &template).unwrap(), [] as [String; 0]);
         let after = Resource::parse(&healed).unwrap();
         assert_eq!(before.find_block(*b"MVTX"), after.find_block(*b"MVTX"));
         let old_mesh = morphic::kv3::decode(before.find_block(*b"MDAT").unwrap()).unwrap();
@@ -883,7 +883,7 @@ mod tests {
             [camera::SETTINGS]
         );
         let (healed, _) = heal_model("cat.vmdl_c", &partial, &template).unwrap();
-        assert!(model_issues(&healed, &template).unwrap().is_empty());
+        assert_eq!(model_issues(&healed, &template).unwrap(), [] as [String; 0]);
         assert!(template.camera.restore_settings(&stock).unwrap().is_none());
     }
 }

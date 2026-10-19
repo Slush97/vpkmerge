@@ -68,6 +68,7 @@ pub mod vdata_check;
 pub use vdata_check::{check_vdata, VdataChecker, VdataReport, VdataStatus};
 
 pub mod attachment_heal;
+mod model_metadata;
 pub use attachment_heal::{
     AttachmentHealer, AttachmentReport, AttachmentStatus, HealedModel, STALE_DEGREES,
 };

@@ -9,9 +9,10 @@
 //! values in every mesh's `MDAT` block, and the hero's camera breaks in game.
 //!
 //! [`AttachmentHealer::check`] compares those attachments with the game's copy
-//! of the same model. [`AttachmentHealer::heal`] writes the game's offsets and
-//! rotations over them in place (nothing else in the model is re-encoded) and
-//! repacks the VPK with every other entry unchanged.
+//! of the same model. [`AttachmentHealer::heal`] updates existing vectors in
+//! place, restores absent camera attachments and settings, and converts legacy
+//! extra camera poses that no longer have a same-name game counterpart. Every
+//! other VPK entry is repacked unchanged.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,8 @@ use anyhow::{Context, Result};
 use morphic::kv3::{Seg, Value};
 use morphic::resource::Resource;
 use serde::Serialize;
+
+mod camera;
 
 const ROOT_BONE: &str = "root_motion";
 
@@ -32,10 +35,9 @@ pub const STALE_DEGREES: f64 = 30.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AttachmentStatus {
-    /// Every `root_motion` attachment both copies have points the way the game's does.
+    /// Camera inputs are complete and use the current attachment frame.
     Current,
-    /// At least one `root_motion` attachment is rotated well away from the
-    /// game's: the model predates the re-frame. [`AttachmentHealer::heal`] fixes it.
+    /// An attachment uses the old frame, or required camera inputs are absent.
     Stale,
     /// The game ships no model at this path. Nothing to compare.
     NotInGame,
@@ -52,8 +54,8 @@ pub struct AttachmentReport {
     /// VPK entry path, e.g. `models/heroes_wip/werewolf/werewolf.vmdl_c`.
     pub entry: String,
     pub status: AttachmentStatus,
-    /// Attachments rotated more than [`STALE_DEGREES`] away from the game's, in
-    /// the mod's order.
+    /// Outdated or missing attachment names, plus `CitadelCameraSettings_t` when
+    /// the required settings block is absent.
     pub stale: Vec<String>,
     /// Error text for [`AttachmentStatus::Undecodable`], prefixed `mod: ` or `game: `.
     pub error: Option<String>,
@@ -81,7 +83,7 @@ impl AttachmentReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct HealedModel {
     pub entry: String,
-    /// Attachments whose offsets and rotations now match the game's.
+    /// Updated or restored camera inputs.
     pub attachments: Vec<String>,
     /// `MDAT` blocks patched (each LOD mesh carries its own copy).
     pub blocks: usize,
@@ -99,8 +101,13 @@ struct Attachment {
 
 enum BaseModel {
     Missing,
-    Attachments(HashMap<String, Attachment>),
+    Attachments(GameModel),
     Error(String),
+}
+
+struct GameModel {
+    root: HashMap<String, Attachment>,
+    camera: camera::Template,
 }
 
 /// Checks and heals mods against one game pak. The pak is opened the first
@@ -199,13 +206,13 @@ impl AttachmentHealer {
             let report = match base_model(base, &mut self.models, &entry) {
                 BaseModel::Missing => AttachmentReport::new(&entry, AttachmentStatus::NotInGame),
                 BaseModel::Error(e) => AttachmentReport::undecodable(&entry, format!("game: {e}")),
-                BaseModel::Attachments(atts) if atts.is_empty() => {
+                BaseModel::Attachments(atts) if atts.root.is_empty() => {
                     AttachmentReport::new(&entry, AttachmentStatus::Unaffected)
                 }
                 BaseModel::Attachments(atts) => {
                     match mod_pak.get_file(&entry).and_then(|mut f| f.read_all()) {
                         Err(e) => AttachmentReport::undecodable(&entry, format!("mod: {e:#}")),
-                        Ok(bytes) => match stale_attachments(&bytes, atts) {
+                        Ok(bytes) => match model_issues(&bytes, atts) {
                             Err(e) => AttachmentReport::undecodable(&entry, format!("mod: {e:#}")),
                             Ok(stale) if stale.is_empty() => {
                                 AttachmentReport::new(&entry, AttachmentStatus::Current)
@@ -237,11 +244,26 @@ fn base_model<'a>(
         let Ok(mut file) = base.get_file(entry) else {
             return BaseModel::Missing;
         };
-        match file.read_all().and_then(|bytes| root_attachments(&bytes)) {
-            Ok(atts) => BaseModel::Attachments(atts),
+        match file.read_all().and_then(|bytes| {
+            Ok(GameModel {
+                root: root_attachments(&bytes)?,
+                camera: camera::Template::read(&bytes)?,
+            })
+        }) {
+            Ok(model) => BaseModel::Attachments(model),
             Err(e) => BaseModel::Error(format!("{e:#}")),
         }
     })
+}
+
+fn model_issues(model: &[u8], base: &GameModel) -> Result<Vec<String>> {
+    let mut issues = stale_attachments(model, &base.root)?;
+    for name in base.camera.issues(model)? {
+        if !issues.contains(&name) {
+            issues.push(name);
+        }
+    }
+    Ok(issues)
 }
 
 /// The `root_motion` attachments of the first mesh block that has any attachments.
@@ -290,9 +312,12 @@ fn stale_attachments(model: &[u8], base: &HashMap<String, Attachment>) -> Result
 fn stale_in(atts: &[Attachment], base: &HashMap<String, Attachment>) -> Vec<String> {
     atts.iter()
         .filter_map(|a| {
-            let b = shared(a, base)?;
-            let gap = rotation_gap_degrees(a.rotations.first()?, b.rotations.first()?)?;
-            (gap > STALE_DEGREES).then(|| a.name.clone())
+            if let Some(b) = shared(a, base) {
+                let gap = rotation_gap_degrees(a.rotations.first()?, b.rotations.first()?)?;
+                (gap > STALE_DEGREES).then(|| a.name.clone())
+            } else {
+                camera::reframe_extra(a, base).map(|_| a.name.clone())
+            }
         })
         .collect()
 }
@@ -321,11 +346,7 @@ fn rotation_gap_degrees(a: &[f64], b: &[f64]) -> Option<f64> {
 
 /// Patch every `MDAT` block of a stale model (each LOD mesh carries its own
 /// copy of the attachments).
-fn heal_model(
-    entry: &str,
-    model: &[u8],
-    base: &HashMap<String, Attachment>,
-) -> Result<(Vec<u8>, HealedModel)> {
+fn heal_model(entry: &str, model: &[u8], base: &GameModel) -> Result<(Vec<u8>, HealedModel)> {
     let mdat_indices: Vec<usize> = Resource::parse(model)?
         .blocks()
         .iter()
@@ -340,11 +361,21 @@ fn heal_model(
     for index in mdat_indices {
         let res = Resource::parse(&out)?;
         let raw = res.get_block_by_index(index).context("MDAT out of range")?;
-        let Some((patched, healed)) =
-            heal_block(raw, base).with_context(|| format!("patching MDAT block {index}"))?
-        else {
+        let vectors =
+            heal_block(raw, &base.root).with_context(|| format!("patching MDAT block {index}"))?;
+        let attachments = base
+            .camera
+            .restore_block(vectors.as_ref().map_or(raw, |(bytes, _)| bytes))?;
+        if vectors.is_none() && attachments.is_none() {
             continue;
-        };
+        }
+        let mut healed = vectors
+            .as_ref()
+            .map_or_else(Vec::new, |(_, names)| names.clone());
+        if let Some((_, added)) = &attachments {
+            healed.extend(added.iter().cloned());
+        }
+        let patched = attachments.or(vectors).context("Missing patched MDAT")?.0;
         for name in healed {
             if !names.contains(&name) {
                 names.push(name);
@@ -352,6 +383,10 @@ fn heal_model(
         }
         out = res.rebuild_with_block(index, &patched)?;
         blocks += 1;
+    }
+    if let Some(updated) = base.camera.restore_settings(&out)? {
+        out = updated;
+        names.push(camera::SETTINGS.into());
     }
     Ok((
         out,
@@ -377,7 +412,8 @@ fn heal_block(
     let mut block: Option<Vec<u8>> = None;
     let mut names = Vec::new();
     for a in &atts {
-        let Some(game) = shared(a, base) else {
+        let extra = camera::reframe_extra(a, base);
+        let Some(game) = shared(a, base).or(extra.as_ref()) else {
             continue;
         };
         let edits = attachment_edits(a, game);
@@ -709,5 +745,145 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("standing_pivot"), "{msg}");
         assert!(msg.contains("0.0 or 1.0"), "{msg}");
+    }
+
+    #[test]
+    fn reframes_extra_wolf_poses_after_the_pivot_was_already_fixed() {
+        let game = game_pivot();
+        let half = 0.5_f64.sqrt();
+        for (name, rotation, height) in [
+            ("far_01", [0.0, 0.0, -half, half], 178.0),
+            ("far_02", [half, half, 0.0, 0.0], 14.0),
+        ] {
+            let old = att(1, name, ROOT_BONE, [-50.0, height, 25.0], rotation);
+            assert_eq!(stale_in(std::slice::from_ref(&old), &game), [name]);
+            let updated = camera::reframe_extra(&old, &game).unwrap();
+            assert_eq!(updated.offsets[0], [25.0, -50.0, height]);
+            assert!(camera::reframe_extra(&updated, &game).is_none());
+            assert!(stale_in(&[updated], &game).is_empty());
+        }
+    }
+
+    #[test]
+    fn extra_pose_detection_preserves_current_custom_and_non_camera_attachments() {
+        let game = game_pivot();
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        for (name, parent, rotation) in [
+            ("far_01", ROOT_BONE, [0.0, half, 0.0, half]),
+            ("far_01", ROOT_BONE, [0.0, 0.0, 0.087_156, 0.996_195]),
+            ("custom_camera", ROOT_BONE, OLD_FRAME),
+            ("far_01", "head", OLD_FRAME),
+        ] {
+            let authored = att(0, name, parent, [1.0, 2.0, 3.0], rotation);
+            assert!(camera::reframe_extra(&authored, &game).is_none());
+        }
+    }
+
+    fn camera_model(atts: &[Attachment], settings: bool) -> Vec<u8> {
+        let mut mesh = mdat(atts);
+        if let Value::Object(ref mut fields) = mesh {
+            fields.push((
+                "m_skeleton".into(),
+                Value::Object(vec![(
+                    "m_bones".into(),
+                    Value::Array(vec![Value::Object(vec![(
+                        "m_boneName".into(),
+                        Value::String(ROOT_BONE.into()),
+                    )])]),
+                )]),
+            ));
+        }
+        let binding = if settings {
+            "CitadelCameraSettings_t = { m_flCameraHeightStanding = 60.0 }"
+        } else {
+            ""
+        };
+        let data = Value::Object(vec![(
+            "m_modelInfo".into(),
+            Value::Object(vec![(
+                "m_keyValueText".into(),
+                Value::String(format!(
+                    "{} {{ custom = 17 {binding} }}",
+                    crate::model_metadata::HEADER
+                )),
+            )]),
+        )]);
+        let data = morphic::kv3::encode(&data, &morphic::kv3::Format([0; 16]));
+        let mesh = morphic::kv3::encode(&mesh, &morphic::kv3::Format([0; 16]));
+        let payloads: [(&[u8; 4], &[u8]); 3] = [
+            (b"DATA", &data),
+            (b"MDAT", &mesh),
+            (b"MVTX", b"geometry-kept"),
+        ];
+        let mut bytes = vec![0; 16 + payloads.len() * 12];
+        bytes[4..6].copy_from_slice(&12_u16.to_le_bytes());
+        bytes[8..12].copy_from_slice(&8_u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&u32::try_from(payloads.len()).unwrap().to_le_bytes());
+        for (i, (kind, payload)) in payloads.iter().enumerate() {
+            let row = 16 + i * 12;
+            bytes[row..row + 4].copy_from_slice(*kind);
+            let offset = u32::try_from(bytes.len() - row - 4).unwrap();
+            bytes[row + 4..row + 8].copy_from_slice(&offset.to_le_bytes());
+            bytes[row + 8..row + 12]
+                .copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+            bytes.extend_from_slice(payload);
+        }
+        let len = u32::try_from(bytes.len()).unwrap();
+        bytes[..4].copy_from_slice(&len.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn restores_missing_cat_points_and_settings_as_one_repair() {
+        let stock = camera_model(
+            &[
+                att(0, "standing_pivot", ROOT_BONE, [0.0, 0.0, 60.0], IDENTITY),
+                att(1, "near_00", ROOT_BONE, [-28.0, -72.0, 60.0], IDENTITY),
+            ],
+            true,
+        );
+        let template = GameModel {
+            root: root_attachments(&stock).unwrap(),
+            camera: camera::Template::read(&stock).unwrap(),
+        };
+        let source = camera_model(&[att(0, "carry", "head", [1.0, 2.0, 3.0], IDENTITY)], false);
+        let before = Resource::parse(&source).unwrap();
+        let issues = model_issues(&source, &template).unwrap();
+        assert_eq!(issues, ["standing_pivot", "near_00", camera::SETTINGS]);
+        let (healed, report) = heal_model("cat.vmdl_c", &source, &template).unwrap();
+        assert_eq!(report.attachments, issues);
+        assert!(model_issues(&healed, &template).unwrap().is_empty());
+        let after = Resource::parse(&healed).unwrap();
+        assert_eq!(before.find_block(*b"MVTX"), after.find_block(*b"MVTX"));
+        let old_mesh = morphic::kv3::decode(before.find_block(*b"MDAT").unwrap()).unwrap();
+        let new_mesh = morphic::kv3::decode(after.find_block(*b"MDAT").unwrap()).unwrap();
+        assert_eq!(
+            old_mesh.get("m_attachments").unwrap().as_array().unwrap()[0],
+            new_mesh.get("m_attachments").unwrap().as_array().unwrap()[0]
+        );
+    }
+
+    #[test]
+    fn settings_only_repair_preserves_an_authored_camera_block() {
+        let atts = [att(
+            0,
+            "standing_pivot",
+            ROOT_BONE,
+            [0.0, 0.0, 60.0],
+            IDENTITY,
+        )];
+        let stock = camera_model(&atts, true);
+        let template = GameModel {
+            root: root_attachments(&stock).unwrap(),
+            camera: camera::Template::read(&stock).unwrap(),
+        };
+        let partial = camera_model(&atts, false);
+        assert_eq!(
+            model_issues(&partial, &template).unwrap(),
+            [camera::SETTINGS]
+        );
+        let (healed, _) = heal_model("cat.vmdl_c", &partial, &template).unwrap();
+        assert!(model_issues(&healed, &template).unwrap().is_empty());
+        assert!(template.camera.restore_settings(&stock).unwrap().is_none());
     }
 }

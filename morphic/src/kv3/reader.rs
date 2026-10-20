@@ -743,10 +743,10 @@ fn read_node(ctx: &mut Ctx) -> Result<Node, DecodeError> {
 fn read_val(ctx: &mut Ctx, tag: u8) -> Result<Val, DecodeError> {
     use node::*;
     Ok(match tag {
-        NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO | DOUBLE_ONE => {
-            Val::Implied
-        }
+        NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO | DOUBLE_ONE
+        | UINT32_ZERO | UINT32_ONE => Val::Implied,
         BOOLEAN => Val::Bool(ctx.main.b1.u8()?),
+        INT8 => Val::Int(i64::from(ctx.main.b1.u8()? as i8)),
         INT32_AS_BYTE => Val::Int(i64::from(ctx.main.b1.u8()?)),
         INT16 => Val::Int(i64::from(ctx.main.b2.u16()? as i16)),
         UINT16 => Val::UInt(u64::from(ctx.main.b2.u16()?)),

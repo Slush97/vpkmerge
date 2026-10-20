@@ -48,11 +48,11 @@ pub struct Node {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Val {
     /// The tag carries the value: `NULL`, `BOOLEAN_TRUE/FALSE`,
-    /// `INT64_ZERO/ONE`, `DOUBLE_ZERO/ONE`.
+    /// `INT64_ZERO/ONE`, `UINT32_ZERO/ONE`, `DOUBLE_ZERO/ONE`.
     Implied,
     /// `BOOLEAN`: the raw byte from the 1-byte lane (1 = true).
     Bool(u8),
-    /// `INT64`, `INT32`, `INT16`, `INT32_AS_BYTE`.
+    /// `INT64`, `INT32`, `INT16`, `INT8`, `INT32_AS_BYTE`.
     Int(i64),
     /// `UINT64`, `UINT32`, `UINT16`.
     UInt(u64),
@@ -107,6 +107,8 @@ fn val_to_value(tag: u8, val: &Val) -> Value {
             BOOLEAN_FALSE => Value::Bool(false),
             INT64_ZERO => Value::Int(0),
             INT64_ONE => Value::Int(1),
+            UINT32_ZERO => Value::UInt(0),
+            UINT32_ONE => Value::UInt(1),
             DOUBLE_ZERO => Value::Double(0.0),
             DOUBLE_ONE => Value::Double(1.0),
             _ => Value::Null,
@@ -282,9 +284,9 @@ fn is_container(tag: u8) -> bool {
 fn widen(tag: u8) -> Option<u8> {
     use node::*;
     Some(match tag {
-        INT32_AS_BYTE | INT16 => INT32,
+        INT8 | INT32_AS_BYTE | INT16 => INT32,
         INT32 | INT64_ZERO | INT64_ONE => INT64,
-        UINT16 => UINT32,
+        UINT16 | UINT32_ZERO | UINT32_ONE => UINT32,
         UINT32 => UINT64,
         DOUBLE_ZERO | DOUBLE_ONE => DOUBLE,
         BOOLEAN_TRUE | BOOLEAN_FALSE => BOOLEAN,
@@ -307,6 +309,12 @@ fn scalar_node(v: &Value, tag: u8) -> Option<(u8, Val)> {
         }
         (Value::Int(1) | Value::UInt(1), INT64_ZERO | INT64_ONE) => {
             return Some((INT64_ONE, Val::Implied));
+        }
+        (Value::Int(0) | Value::UInt(0), UINT32_ZERO | UINT32_ONE) => {
+            return Some((UINT32_ZERO, Val::Implied));
+        }
+        (Value::Int(1) | Value::UInt(1), UINT32_ZERO | UINT32_ONE) => {
+            return Some((UINT32_ONE, Val::Implied));
         }
         (Value::Double(d), DOUBLE_ZERO | DOUBLE_ONE) if *d == 0.0 || *d == 1.0 => {
             let t = if *d == 0.0 { DOUBLE_ZERO } else { DOUBLE_ONE };
@@ -346,8 +354,9 @@ fn scalar_exact(v: &Value, tag: u8) -> Option<Val> {
         | (BOOLEAN_TRUE, Value::Bool(true))
         | (BOOLEAN_FALSE, Value::Bool(false)) => Val::Implied,
         (BOOLEAN, Value::Bool(b)) => Val::Bool(u8::from(*b)),
-        (INT64_ZERO, _) if int == Some(0) => Val::Implied,
-        (INT64_ONE, _) if int == Some(1) => Val::Implied,
+        (INT64_ZERO | UINT32_ZERO, _) if int == Some(0) => Val::Implied,
+        (INT64_ONE | UINT32_ONE, _) if int == Some(1) => Val::Implied,
+        (INT8, _) => Val::Int(in_range(i128::from(i8::MIN), i128::from(i8::MAX))? as i64),
         (INT32_AS_BYTE, _) => Val::Int(in_range(0, 255)? as i64),
         (INT16, _) => Val::Int(in_range(i128::from(i16::MIN), i128::from(i16::MAX))? as i64),
         (INT32, _) => Val::Int(in_range(i128::from(i32::MIN), i128::from(i32::MAX))? as i64),
@@ -538,10 +547,14 @@ impl Enc {
         match (tag, val) {
             (
                 NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO
-                | DOUBLE_ONE,
+                | DOUBLE_ONE | UINT32_ZERO | UINT32_ONE,
                 Val::Implied,
             ) => {}
             (BOOLEAN, Val::Bool(b)) => self.main.b1.push(*b),
+            (INT8, Val::Int(i)) => self
+                .main
+                .b1
+                .extend_from_slice(&fit::<i8, _>(*i)?.to_le_bytes()),
             (INT32_AS_BYTE, Val::Int(i)) => self.main.b1.push(fit(*i)?),
             (INT16, Val::Int(i)) => self
                 .main

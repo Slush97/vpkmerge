@@ -1029,10 +1029,11 @@ impl InsertEncoder<'_> {
         match (t, value) {
             (
                 NULL | BOOLEAN_TRUE | BOOLEAN_FALSE | INT64_ZERO | INT64_ONE | DOUBLE_ZERO
-                | DOUBLE_ONE,
+                | DOUBLE_ONE | UINT32_ZERO | UINT32_ONE,
                 _,
             ) => {}
             (BOOLEAN, Value::Bool(b)) => self.out.b1.push(u8::from(*b)),
+            (INT8, Value::Int(i)) => self.out.b1.push(*i as i8 as u8),
             (INT32_AS_BYTE, Value::Int(i)) => self.out.b1.push(*i as u8),
             (INT16, Value::Int(i)) => self.out.b2.extend_from_slice(&(*i as i16).to_le_bytes()),
             (UINT16, Value::UInt(u)) => self.out.b2.extend_from_slice(&(*u as u16).to_le_bytes()),

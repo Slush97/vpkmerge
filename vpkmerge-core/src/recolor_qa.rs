@@ -60,6 +60,7 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("astro", &["holliday"]),
     ("bookworm", &["paige"]),
     ("chrono", &["paradox"]),
+    ("deadpack", &["airheart"]),
     ("digger", &["krill"]),
     ("dynamo", &["sumo"]),
     ("fencer", &["apollo"]),
@@ -297,6 +298,21 @@ const REVIEWED: &[(&str, &str, &str)] = &[
         "baba",
         "models/heroes_wip/baba/materials/baba_glasses.vmat_c",
         "always-on lens glow on the live body model (60 triangles, additive, static tint, no expression): skin identity, and nothing in her abilities references it; her ability color constants are 82% purple or pink (504 of 617 over the 226 live particles) against its green-white",
+    ),
+    (
+        "artist",
+        "models/heroes_wip/artist/materials/artist_rolled_painting_color_png_",
+        "rolled painting prop (albedo + transmissive): the color is its artwork, 17% faintly tinted texels",
+    ),
+    (
+        "deadpack",
+        "models/heroes_wip/deadpack/materials/deadpack_missile_color_png_",
+        "missile paint (albedo + transmissive), 8% faintly tinted trim; its glow is the pinned deadpack_missile tint",
+    ),
+    (
+        "deadpack",
+        "models/heroes_wip/deadpack/materials/deadpack_weapon_color_png_f7ef9e26.vtex_c",
+        "his gun's paint, borrowed as the fuel globules' albedo; the globule color is the pinned deadpack_globules tint",
     ),
 ];
 

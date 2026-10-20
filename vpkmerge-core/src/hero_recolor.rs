@@ -144,6 +144,9 @@ pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
         "punkgoat" => Some(punkgoat_recipe()),
         "vampirebat" => Some(vampirebat_recipe()),
         "hornet" | "mirage" | "shiv" | "warden" | "wraith" => Some(particle_only_recipe(&codename)),
+        "nurse" => Some(nurse_recipe()),
+        "artist" => Some(artist_recipe()),
+        "deadpack" => Some(deadpack_recipe()),
         "baba" => Some(baba_recipe()),
         "ratking" => Some(ratking_recipe()),
         "bebop" => Some(bebop_recipe()),
@@ -181,6 +184,7 @@ const SHARED_ENTRIES: &[(&str, &[&str])] = &[
             "particles/abilities/inferno/inferno_flame_dash_tag_enemy_slow_arrow.vpcf_c",
             "particles/abilities/inferno/inferno_flame_dash_tag_enemy_splash.vpcf_c",
             "particles/abilities/inferno/inferno_flame_dash_tag_enemy_trail.vpcf_c",
+            "particles/abilities/inferno/inferno_flamedash_",
         ],
     ),
     (
@@ -227,7 +231,13 @@ const SHARED_ENTRIES: &[(&str, &[&str])] = &[
             "particles/abilities/archer/archer_power_jump_buff_trail.vpcf_c",
         ],
     ),
-    ("astro", &["particles/abilities/astro/astro_lasso_chain"]),
+    (
+        "astro",
+        &[
+            "particles/abilities/astro/astro_bounce_pad_destroy_dust.vpcf_c",
+            "particles/abilities/astro/astro_lasso_chain",
+        ],
+    ),
     (
         "bebop",
         &["particles/abilities/bebop/bebop_uppercut_impact_sparks.vpcf_c"],
@@ -357,6 +367,7 @@ const SHARED_ENTRIES: &[(&str, &[&str])] = &[
             "particles/abilities/shiv/shiv_dash_dust.vpcf_c",
             "particles/abilities/shiv/shiv_dash_echo.vpcf_c",
             "particles/abilities/shiv/shiv_dash_pnt.vpcf_c",
+            "particles/abilities/shiv/shiv_dash_screen_lines.vpcf_c",
             "particles/abilities/shiv/shiv_dash_start.vpcf_c",
             "particles/abilities/shiv/shiv_dash_tgt.vpcf_c",
             "particles/abilities/shiv/shiv_dash_tgt_icon.vpcf_c",
@@ -400,11 +411,18 @@ const SHARED_ENTRIES: &[(&str, &[&str])] = &[
     ),
     (
         "gigawatt",
-        &["particles/abilities/gigawatt/gigawatt_voltage_drain_buff"],
+        &[
+            "particles/abilities/gigawatt/gigawatt_static_charge_explosion",
+            "particles/abilities/gigawatt/gigawatt_voltage_drain_buff",
+        ],
     ),
     (
         "vampirebat",
-        &["particles/abilities/vampirebat/vampirebat_lovebites_damage_body_lv.vpcf_c"],
+        &[
+            "particles/abilities/vampirebat/vampirebat_lovebites_damage.vpcf_c",
+            "particles/abilities/vampirebat/vampirebat_lovebites_damage_body",
+            "particles/abilities/vampirebat/vampirebat_lovebites_damage_icon_top",
+        ],
     ),
     (
         "warden",
@@ -435,10 +453,12 @@ pub const fn pinned_hero_codenames() -> &'static [&'static str] {
         "chrono",
         "abrams",
         "archer",
+        "artist",
         "astro",
         "baba",
         "bebop",
         "chessmaster",
+        "deadpack",
         "digger",
         "doorman",
         "drifter",
@@ -455,6 +475,7 @@ pub const fn pinned_hero_codenames() -> &'static [&'static str] {
         "mcginnis",
         "magician",
         "mirage",
+        "nurse",
         "pocket",
         "priest",
         "punkgoat",
@@ -1007,6 +1028,7 @@ fn ratking_recipe() -> HeroRecolorRecipe {
         &[
             "materials/particle/abilities/ratking/ratking_standard_bearer_aura_caster_ground_projected_bright_psd_e4a346cc.vtex_c",
             "materials/particle/abilities/ratking/ratking_standard_bearer_exploded_ground_color_psd_f71dffe9.vtex_c",
+            "materials/particle/abilities/ratking/ratking_scrap_grenade_warning_ground_projected_light_vmat_g_tselfillum_670d93d.vtex_c",
             "models/heroes_wip/ratking/materials/ratking_crown_fx_vmat_g_tcolor_518041ec.vtex_c",
             "models/heroes_wip/ratking/materials/ratking_crown_fx_vmat_g_tnprtransmissivecolor_ee835aa2.vtex_c",
             "models/heroes_wip/ratking/materials/ratking_ult_diorama_sewage_vmat_g_tnprtransmissivecolor_1fff71fb.vtex_c",
@@ -1039,6 +1061,98 @@ fn baba_recipe() -> HeroRecolorRecipe {
         &[],
         Some("models/heroes_wip/baba/materials/pigeon_effect_color_tga_f5ac1d89.vtex_c"),
     )
+}
+
+/// Violet (`artist`): her paint is particle-driven, plus the brush stroke and
+/// paint globule props (colored albedos, transmissive maps and self-illum tints)
+/// and the green self-illum maps of her splat and cone-fan ground decals. The
+/// rolled painting prop keeps its artwork.
+fn artist_recipe() -> HeroRecolorRecipe {
+    standard_recipe(
+        "artist",
+        &[
+            "materials/particle/abilities/artist/artist_splat_ground_trans_02_psd_c97b253f.vtex_c",
+            "materials/particle/projected/artist_cone_fan_ground_projected_helper_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/artist_cone_fan_ground_projected_motion_vmat_g_tselfillum_670d93d.vtex_c",
+            "materials/particle/projected/artist_cone_fan_ground_projected_vmat_g_tselfillum_670d93d.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability1_brush_color_png_19e5c1f2.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability1_brush_color_png_6ca5701c.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability1_brush_trans_png_f2abaf3f.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability_brush_color_png_2ac14041.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability_brush_color_png_b7e770ed.vtex_c",
+            "models/heroes_wip/artist/materials/artist_ability_brush_trans_png_e2b43a5f.vtex_c",
+            "models/heroes_wip/artist/materials/artist_globule_color_png_299b0d1.vtex_c",
+            "models/heroes_wip/artist/materials/artist_globule_color_png_ae3f23c4.vtex_c",
+            "models/heroes_wip/artist/materials/artist_globule_vmat_g_tnprtransmissivecolor_fdf22e73.vtex_c",
+        ],
+        &[
+            "models/heroes_wip/artist/materials/artist_ability1_brush.vmat_c",
+            "models/heroes_wip/artist/materials/artist_ability1_brush_outline.vmat_c",
+            "models/heroes_wip/artist/materials/artist_ability_brush.vmat_c",
+            "models/heroes_wip/artist/materials/artist_ability_brush_outline.vmat_c",
+        ],
+        Some("models/heroes_wip/artist/materials/artist_globule_color_png_299b0d1.vtex_c"),
+    )
+}
+
+/// Nurse Harrow (`nurse`): particles plus the ampoule glass, the Adrenaline Rush
+/// vapors trails and the vapors / crash status icons over a target (colored
+/// albedos and transmissive maps, and baked vertex color on the vapors icon).
+/// One hue merges the teal vapors and orange crash icons, as it does their
+/// particles. The gun liquid, leech jar and eye glows on her body stay vanilla.
+fn nurse_recipe() -> HeroRecolorRecipe {
+    let mut r = standard_recipe(
+        "nurse",
+        &[
+            "models/heroes_wip/nurse/materials/nurse_ampoule_glass_vmat_g_tnprtransmissivecolor_a78c804d.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_pick_screen_effect_trail_trans_psd_67ac9064.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_pick_screen_effect_trail_trans_psd_693b69bb.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_crash_icon_color_psd_173a92c0.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_crash_icon_color_psd_cb3867c9.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_icon_color_tga_2d8423b9.vtex_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_icon_color_tga_a2d206eb.vtex_c",
+        ],
+        &[
+            "models/heroes_wip/nurse/materials/nurse_ampoule_glass.vmat_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_crash_trails.vmat_c",
+            "models/heroes_wip/nurse/materials/nurse_vapors_trails.vmat_c",
+        ],
+        Some("models/heroes_wip/nurse/materials/nurse_vapors_icon_color_tga_a2d206eb.vtex_c"),
+    );
+    r.model_entries = vec!["models/heroes_wip/nurse/nurse_vapors_icon.vmdl_c".to_string()];
+    r
+}
+
+/// Deadman Danny (`deadpack`): his kit kept its development name, so nearly
+/// every particle lives under `airheart/`; his own dir only holds the VTOL
+/// ground preview. Outside the particles: the lava erode prop, the green
+/// self-illum maps of the mark, crater and magma pool decals, and the missile
+/// and fuel globule glow tints. The missile and weapon paint stay vanilla, as do
+/// the fuel, lens and head accents on his body.
+fn deadpack_recipe() -> HeroRecolorRecipe {
+    let mut r = standard_recipe(
+        "deadpack",
+        &[
+            "materials/particle/abilities/airheart/airheart_chimera_mark_ground_psd_3abc7a7.vtex_c",
+            "materials/particle/abilities/airheart/airheart_crater_projected_v1_trans_psd_e32a6d4f.vtex_c",
+            "materials/particle/abilities/airheart/airheart_magma_pool_self_illum_psd_c5cab65a.vtex_c",
+            "models/abilities/materials/airheart_lava_erode_vmat_g_tcolor_693a7ca5.vtex_c",
+            "models/abilities/materials/airheart_lava_erode_vmat_g_tnprtransmissivecolor_3bdbb943.vtex_c",
+        ],
+        &[
+            "models/abilities/materials/airheart_lava_erode.vmat_c",
+            "models/abilities/materials/deadpack_globules.vmat_c",
+            "models/heroes_wip/deadpack/materials/deadpack_missile.vmat_c",
+        ],
+        Some("materials/particle/abilities/airheart/airheart_magma_pool_self_illum_psd_c5cab65a.vtex_c"),
+    );
+    r.particle_prefixes = vec![
+        "particles/abilities/deadpack/".to_string(),
+        "particles/abilities/airheart/".to_string(),
+        "particles/weapon_fx/airheart/".to_string(),
+        "particles/heroes/airheart/".to_string(),
+    ];
+    r
 }
 
 /// Seven (`gigawatt`): Power Surge's chain jump and the Storm Cloud status sit

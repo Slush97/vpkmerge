@@ -539,11 +539,13 @@ vertex-color models), and one call recolors the whole set into a single addon VP
 that overrides the base in place. Pinned codenames (`pinned_hero_codenames`):
 `bookworm` (Paige, full particles+textures+models), `necro` (Graves, +tint
 materials), `yamato` (Yamato), `chrono` (Paradox), plus particle/texture/material
-heroes `abrams`, `archer`, `astro` (Holliday), `baba`, `bebop`, `chessmaster` (Solomon), `digger`, `doorman`,
+heroes `abrams`, `archer`, `artist` (Violet), `astro` (Holliday), `baba`, `bebop`, `chessmaster` (Solomon), `digger`, `doorman`,
 `drifter`, `dynamo`, `familiar`, `fencer` (Apollo), `frank`, `ghost` (Lady Geist),
 `haze`, `kelvin`, `nano` (Calico), `lash`, `mcginnis` (McGinnis), `magician`
-(Sinclair), `pocket`, `priest`, `punkgoat`, `ratking` (Rat King), `tengu`, `unicorn` (Celeste),
-`vampirebat` (Mina), `viper`, `viscous`, and `werewolf`. `gigawatt` (Seven) and
+(Sinclair), `nurse` (Nurse Harrow, + the vapors icon's vertex color), `pocket`, `priest`, `punkgoat`, `ratking` (Rat King), `tengu`, `unicorn` (Celeste),
+`vampirebat` (Mina), `viper`, `viscous`, and `werewolf`. `deadpack` (Deadman Danny)
+keeps his kit under the `airheart` dev name (`particles/{abilities,weapon_fx,heroes}/airheart/`;
+`recolor_qa::ALIASES` maps it). `gigawatt` (Seven) and
 `inferno` (Infernus) are particles plus extra out-of-dir prefixes (Infernus also pins
 his two additive body glow layers, `inferno_headglow` and `inferno_armglow`, with
 their glow textures); `hornet`,

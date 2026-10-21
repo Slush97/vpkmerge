@@ -2868,13 +2868,17 @@ fn decode_rgba(bytes: &[u8], info: &morphic::TextureInfo, mip: u8, stride: u32) 
     let keep = |i: usize| (i % width).is_multiple_of(stride) && (i / width).is_multiple_of(stride);
     let px = match &image.data {
         ImageData::Rgba8(p) => p
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(i, _)| keep(*i))
             .map(|(_, c)| [0, 1, 2, 3].map(|i| f32::from(c[i]) / 255.0))
             .collect(),
         ImageData::Rgba16F(p) => p
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(i, _)| keep(*i))
             .map(|(_, c)| [0, 1, 2, 3].map(|i| c[i].to_f32().clamp(0.0, 1.0)))
@@ -3768,7 +3772,7 @@ mod tests {
             ],
         );
         let names = vec!["bookworm".to_owned(), "paige".to_owned()];
-        assert!(index.foreign_owners("p/aoe.vpcf_c", &names).is_empty());
+        assert_eq!(index.foreign_owners("p/aoe.vpcf_c", &names), []);
         let cyl = index.foreign_owners("p/cyl.vpcf_c", &names);
         assert_eq!(cyl.len(), 1);
         assert_eq!(*cyl[0].0, fencer);

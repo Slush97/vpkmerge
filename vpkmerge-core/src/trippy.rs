@@ -8,8 +8,8 @@
 
 use crate::hero_recolor::{
     animate_particle_timing_bytes, insert_color_cycle_operator_with_tuning,
-    is_prism_animation_target, loop_animate_particle_bytes, recolor_material_color_bytes,
-    GradientStop, PrismAnimationStyle, PrismGradient, PrismTuning,
+    is_prism_animation_target, isolate_bake, loop_animate_particle_bytes, recipe_particle_entries,
+    recolor_material_color_bytes, GradientStop, PrismAnimationStyle, PrismGradient, PrismTuning,
 };
 use crate::{recipe_for, recolor_model_vertex_colors, recolor_particle_bytes, Recolor};
 use anyhow::{Context, Result};
@@ -191,6 +191,7 @@ pub struct TrippyAbilityReport {
     pub models_recolored: usize,
     pub model_vertices: usize,
     pub missing_entries: usize,
+    pub isolation: crate::IsolationStats,
     pub total_entries: usize,
 }
 
@@ -501,7 +502,7 @@ pub fn trippy_ability_vfx_to_addon(
         ..Default::default()
     };
 
-    let particle_entries: Vec<String> = list_entries(&vpks, &recipe.particle_prefixes, ".vpcf_c")
+    let particle_entries: Vec<String> = recipe_particle_entries(&vpks, &recipe)
         .into_iter()
         .filter(|entry| vfx_target_allowed(entry, options))
         .collect();
@@ -713,6 +714,8 @@ pub fn trippy_ability_vfx_to_addon(
         options.include_abilities,
         options.include_weapons,
     );
+    let (mut packed, isolation) = isolate_bake(&vpks, &recipe, &particle_entries, packed)?;
+    report.isolation = isolation;
     packed.insert("README.txt".to_string(), readme.into_bytes());
 
     let refs: Vec<(&str, &[u8])> = packed
@@ -866,7 +869,10 @@ fn repaint_texture(
     morphic::replace_mip_chain(bytes, &image).context("re-encoding trippy texture")
 }
 
-fn repaint_ability_texture(bytes: &[u8], options: &TrippyAbilityOptions) -> Result<Vec<u8>> {
+pub(crate) fn repaint_ability_texture(
+    bytes: &[u8],
+    options: &TrippyAbilityOptions,
+) -> Result<Vec<u8>> {
     let mut image = morphic::decode(bytes).context("decoding trippy ability texture")?;
     paint_image_keep_value(&mut image, options.style, options.phase, options.intensity)?;
     morphic::replace_mip_chain(bytes, &image).context("re-encoding trippy ability texture")
@@ -1625,18 +1631,6 @@ pub(crate) fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>
         }
     }
     None
-}
-
-fn list_entries(vpks: &[valve_pak::VPK], prefixes: &[String], suffix: &str) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    for vpk in vpks {
-        for p in vpk.file_paths() {
-            if p.ends_with(suffix) && prefixes.iter().any(|prefix| p.starts_with(prefix)) {
-                seen.insert(p.clone());
-            }
-        }
-    }
-    seen.into_iter().collect()
 }
 
 #[cfg(test)]

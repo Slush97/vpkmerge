@@ -539,13 +539,27 @@ vertex-color models), and one call recolors the whole set into a single addon VP
 that overrides the base in place. Pinned codenames (`pinned_hero_codenames`):
 `bookworm` (Paige, full particles+textures+models), `necro` (Graves, +tint
 materials), `yamato` (Yamato), `chrono` (Paradox), plus particle/texture/material
-heroes `abrams`, `archer`, `digger`, `doorman`, `drifter`, `dynamo`, `familiar`,
-`fencer` (Apollo), `frank`, `ghost` (Lady Geist), `haze`, `kelvin`, `nano`
-(Calico), `lash`, `mcginnis` (McGinnis), `magician` (Sinclair), `pocket`,
-`priest`, `tengu`, `unicorn` (Celeste), `viper`, `viscous`, `warden`, and
-`werewolf`. Particle-only recipes are pinned for `astro` (Holliday), `bebop`,
-`gigawatt` (Seven), `hornet`, `inferno` (Infernus), `mirage`, `punkgoat`, `shiv`,
-`vampirebat` (Mina), and `wraith`. An unknown codename lists the pinned set.
+heroes `abrams`, `archer`, `artist` (Violet), `astro` (Holliday), `baba`, `bebop`, `chessmaster` (Solomon), `digger`, `doorman`,
+`drifter`, `dynamo`, `familiar`, `fencer` (Apollo), `frank`, `ghost` (Lady Geist),
+`haze`, `kelvin`, `nano` (Calico), `lash`, `mcginnis` (McGinnis), `magician`
+(Sinclair), `nurse` (Nurse Harrow, + the vapors icon's vertex color), `pocket`, `priest`, `punkgoat`, `ratking` (Rat King), `tengu`, `unicorn` (Celeste),
+`vampirebat` (Mina), `viper`, `viscous`, and `werewolf`. `deadpack` (Deadman Danny)
+keeps his kit under the `airheart` dev name (`particles/{abilities,weapon_fx,heroes}/airheart/`;
+`recolor_qa::ALIASES` maps it). `gigawatt` (Seven) and
+`inferno` (Infernus) are particles plus extra out-of-dir prefixes (Infernus also pins
+his two additive body glow layers, `inferno_headglow` and `inferno_armglow`, with
+their glow textures); `hornet`,
+`mirage`, `shiv`, `warden` and `wraith` are particle-only. Every recipe is gated
+by `recolor-qa` (below). An unknown codename lists the pinned set.
+
+Assets another hero, item or neutral also renders are listed in each recipe's
+`shared_entries` (the generated `SHARED_ENTRIES` table; regenerate with
+`recolor-qa --suggest-shared` after a game update) and are never edited in place:
+`recolor_isolate` writes a hero-local copy (`{stem}_{codename}_recolor.{ext}`) and
+repoints the hero's own particles and pinned materials at it through
+`morphic::repoint_resource_refs` (KV3 string redirect plus the `RERL` entry). One
+only game data names stays vanilla for that hero too. In-game confirmed 2026-10-11
+(all 41 heroes in one test addon).
 
 Three CLI commands share these recipes:
 
@@ -574,6 +588,89 @@ Same engine as the GUI's Prism tab (`build_hero_prism_vpk`). In-game confirmed:
 single-hue on Paige (purple); static + animated prism on Celeste and Paige. Source
 of truth: [../grimoire/docs/ability-vfx-recolor.md](../grimoire/docs/ability-vfx-recolor.md)
 and [docs/handoff-vertex-color-recolor.md](docs/handoff-vertex-color-recolor.md).
+
+### Recolor QA (`recolor-qa`)
+
+`vpkmerge recolor-qa --vpk <pak01_dir.vpk> [--hero CODE]... [--json] [--strict | --suggest-shared]`
+(`vpkmerge_core::recolor_qa::audit_heroes`) scores every pinned recipe against the
+live pak. Run it after every game update and after any recipe edit.
+`--suggest-shared` prints each hero's minimal `shared_entries` (below) as Rust
+string literals.
+
+- **integrity** (fail): stale pinned paths (with the same-stem successor if one
+  exists), empty prefixes, entries that don't patch, outputs that don't decode.
+- **violations** (fail): a particle under the prefixes that another hero, item or
+  neutral can also spawn and `shared_entries` does not list (`bleed`), a listed
+  pinned asset no file the bake repoints reaches (`unreachable-isolation`), a
+  pinned asset another hero / neutral / generic effect also uses and the recipe
+  does not list (`shared`), a data channel (normal/mask slot, or a sprite sampled as
+  alpha only), the live body's solid albedo (`skin`), a UI cue
+  (`preview_bad`), and **shape drift**: every texture bake path (recolor, prism,
+  prism --animated, trippy-vfx) is run on each pinned texture and diffed against
+  the source at mip 0. `squares` = the bake lit the black margin of a shaped
+  texture (renders as a square); `alpha` = alpha moved past BC noise (BC7 trades
+  alpha precision for busy RGB).
+- **gaps** (warn): color carriers the recipe misses, found by walking the hero's
+  particles, prop models, vdata-spawned ability models and live body model
+  through RERL blocks: live hero-named particles outside the prefixes (with what
+  spawns them), chromatic sprite sheets / glow material color maps, additive or
+  self-illum materials with a tint constant, additive vertex-color props, and
+  additive `body-glow` layers. **noops** (warn): achromatic or orphan pins.
+- **limits** (info, `--json`): shared sheets / child particles that need a copy +
+  repoint, `shared-candidate` (a carrier something outside the hero also renders,
+  so pinning it would bleed), self-illum `body-accent` surfaces, `unreferenced`
+  and `not-hero-spawned` hero-named particles, `vanilla-for-hero` (a listed
+  shared particle the hero reaches only through roots the bake cannot repoint)
+  and `isolated` (a listed pinned asset that is copied and repointed).
+  **noops**: `isolation-unneeded` (a `shared_entries` pattern nothing foreign
+  uses, or one that also covers particles only the hero spawns).
+- **Liveness and ownership.** A particle is live if a vdata string, a clip/model
+  RERL or a path hardcoded in `bin/win64/{client,server}.dll` reaches it (closed
+  over child systems); a model if a vdata node or a live particle names it.
+  Coverage only follows live particles, dead renderers never count as bleed, and
+  a material is judged by what renders it, not its name.
+- **Spawn graph (bleed).** Every top-level node of `scripts/*.vdata_c` is owned
+  by the released heroes, `upgrade_*` items and neutrals that reach it: a hero
+  owns its `hero_*` node, its `m_mapBoundAbilities` and, transitively, every node
+  whose key appears as a string value in a node it owns (summoned units,
+  modifiers, projectiles). Edges into `hero_*` nodes are never followed: items
+  list `m_vecDisabledOnHeroes`, a blacklist that would hand them a hero's whole
+  kit. A node no closure reaches is spawned by code (the entity classname is its
+  key): units in `npc_units.vdata_c` and nodes whose key says neutral are the one
+  hero all their hero-named assets sit under (Graves' ghouls, McGinnis' sentry,
+  Holliday's bounce pad, Paradox's time wall, Rat King's rats), else neutral (a
+  key that says neutral wins over the assets: jungle rats wear Rat King's model),
+  and own their closures. Anything else (abilities of heroes in development,
+  pickups) is nobody's. Each owner's nodes name root particles, directly or
+  through the particles a named model embeds (RERL), and a released hero's body
+  model and its `clips/` add theirs; closing over particle children gives what an
+  owner can spawn. A particle under a hero's prefixes that anyone else can spawn
+  is shared: it must not be recolored in place. The planner mirrors the bake
+  (`recolor_isolate`): walked particles (prefixes plus anything matching
+  `shared_entries`) and `material_entries` that are not shared are private
+  referrers; a shared entry is written only as a copy (`{stem}_{codename}_recolor`)
+  and only when the bake changed it or it leads through shared links to one it
+  changed, repointed from a private file or another copy (only particles and
+  materials are ever repointed, never models). A shared particle that carries no
+  color and leads to none is not bleed. One only a vdata node, a clip or a DLL
+  string names stays vanilla for the hero (`vanilla-for-hero`). `isolation` in
+  `--json` lists each entry with its kind (`copy`, `vanilla`, `pinned`) and the
+  referrers the bake repoints; `suggested_shared` is the minimal list, with runs
+  of files collapsed to a path prefix only when nothing else lives under it. A
+  pinned texture or material that something outside the hero uses (an in-prefix
+  particle someone else spawns too counts) is legal when listed and reached
+  through a private file or a copy.
+- **Inert self-illum** (noop `inert-selfillum`): a pinned texture whose only live
+  use is a `g_tSelfIllum*` slot of materials whose `g_flSelfIllumScale*` is a
+  static 0 with no dynamic expression never renders. A decal that drives the
+  scale through `$SELFILLUM` does render.
+
+A deliberate exclusion goes in `recolor_qa::REVIEWED` with a reason; rows that
+match nothing are reported so the table can't rot. The run also lists selectable
+heroes with no recipe (`--strict` fails on those too). Live test:
+`tests/recolor_qa_live.rs` (gated on `DEADLOCK_PAK`, ~2 min): zero integrity
+findings roster-wide, and every hero must `pass` except those in its
+`KNOWN_WARN` list (empty).
 
 ## Material shader-param styling (`.vmat_c`)
 

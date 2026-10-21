@@ -121,6 +121,13 @@ enum Command {
     /// Scan pinned hero recipes for rainbow / animated-rainbow VFX support.
     RainbowScan(RainbowScanCmd),
 
+    /// QA every pinned hero recolor recipe against a live pak: stale paths,
+    /// entries that don't patch or decode, pinned assets that bleed into other
+    /// heroes or hit data channels / skin / UI cues, and color carriers the
+    /// recipe misses. Exits non-zero when any hero fails (or warns, with
+    /// `--strict`). `--json` is the machine report for agents and CI.
+    RecolorQa(RecolorQaCmd),
+
     /// Detect mods that ship a stale `.vdata_c` (`scripts/heroes.vdata_c`,
     /// `abilities.vdata_c`, ...). A shipped copy overrides the whole file in
     /// game, so fields Valve added since the mod was built are deleted. Compares
@@ -1198,6 +1205,38 @@ struct RainbowScanCmd {
 }
 
 #[derive(Args)]
+struct RecolorQaCmd {
+    /// VPK to audit against (the base pak, or a skin VPK with `--base`).
+    #[arg(long, value_name = "VPK")]
+    vpk: PathBuf,
+
+    /// Base `pak01_dir.vpk` to fall back to for entries `--vpk` does not ship.
+    #[arg(long, value_name = "VPK")]
+    base: Option<PathBuf>,
+
+    /// Hero codename(s) to audit. Defaults to every pinned hero recipe.
+    #[arg(long = "hero", value_name = "CODENAME")]
+    heroes: Vec<String>,
+
+    /// Hue the bake checks recolor to.
+    #[arg(long, value_name = "DEG", default_value_t = vpkmerge_core::recolor_qa::DEFAULT_PROBE_HUE)]
+    hue: f64,
+
+    /// Emit the full report as JSON instead of the table.
+    #[arg(long)]
+    json: bool,
+
+    /// Also exit non-zero when any hero warns (unreviewed gaps, no-op pins).
+    #[arg(long)]
+    strict: bool,
+
+    /// Print each hero's minimal `shared_entries` as Rust string literals
+    /// instead of the table, ready to paste into its recipe.
+    #[arg(long, conflicts_with_all = ["json", "strict"])]
+    suggest_shared: bool,
+}
+
+#[derive(Args)]
 struct VdataCheckCmd {
     /// The game's `citadel/pak01_dir.vpk`.
     #[arg(long, value_name = "VPK")]
@@ -1970,6 +2009,7 @@ fn main() -> Result<()> {
         Some(Command::TrippyVfx(args)) => run_trippy_vfx(&args),
         Some(Command::TrippyPreview(args)) => run_trippy_preview(&args),
         Some(Command::RainbowScan(args)) => run_rainbow_scan(&args),
+        Some(Command::RecolorQa(args)) => run_recolor_qa(&args),
         Some(Command::VdataCheck(args)) => run_vdata_check(&args),
         Some(Command::Compatibility(args)) => run_compatibility(args),
         Some(Command::Attachments(args)) => match &args.action {
@@ -4567,6 +4607,7 @@ fn run_recolor_hero(args: &RecolorHeroCmd) -> Result<()> {
             report.particles_unpatchable, report.materials_unpatchable,
         );
     }
+    print_isolation(report.isolation);
     println!(
         "wrote {}: {} entries, hero {} recolored to hue {} deg (overrides the base in place)",
         out.display(),
@@ -4646,6 +4687,7 @@ fn run_prism(args: &PrismCmd) -> Result<()> {
             report.particles_unpatchable, report.materials_unpatchable,
         );
     }
+    print_isolation(report.isolation);
     println!(
         "wrote {}: {} entries, hero {} recolored as a prism spectrum (overrides the base in place)",
         args.encode_vpk.display(),
@@ -4795,6 +4837,7 @@ fn run_trippy_vfx(args: &TrippyVfxCmd) -> Result<()> {
             report.textures_skipped, report.materials_unpatchable,
         );
     }
+    print_isolation(report.isolation);
     println!(
         "wrote {}: {} entries, hero {} painted with {} trippy ability VFX",
         args.encode_vpk.display(),
@@ -4803,6 +4846,16 @@ fn run_trippy_vfx(args: &TrippyVfxCmd) -> Result<()> {
         style.as_str(),
     );
     Ok(())
+}
+
+fn print_isolation(iso: vpkmerge_core::IsolationStats) {
+    if iso.copies + iso.kept_vanilla > 0 {
+        eprintln!(
+            "  shared assets: {} recolored as hero-local copies ({} hero file(s) repointed), {} left \
+             vanilla (other heroes, items or neutrals render them, and only game data reaches them)",
+            iso.copies, iso.repointed, iso.kept_vanilla,
+        );
+    }
 }
 
 fn parse_trippy_vfx_animation(
@@ -5317,6 +5370,103 @@ fn run_rainbow_scan(args: &RainbowScanCmd) -> Result<()> {
     println!(
         "\nmode: looped = existing looped gradient color inputs; animated = age/lifetime gradients; strong = many static gradients; static = color constants only"
     );
+    Ok(())
+}
+
+fn run_recolor_qa(args: &RecolorQaCmd) -> Result<()> {
+    use vpkmerge_core::QaStatus;
+    let run = vpkmerge_core::audit_heroes(&args.vpk, args.base.as_deref(), &args.heroes, args.hue)?;
+    if args.suggest_shared {
+        for r in run.heroes.iter().filter(|r| !r.suggested_shared.is_empty()) {
+            println!("{}", r.codename);
+            for entry in &r.suggested_shared {
+                println!("    {entry:?},");
+            }
+        }
+        return Ok(());
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&run)?);
+    } else {
+        println!(
+            "{:<11} {:<6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>5} {:>5} {:>5} {:>5} {:>5} {:>4} {:>6}",
+            "hero",
+            "status",
+            "cover",
+            "vpcf",
+            "recol",
+            "tex",
+            "mat",
+            "mdl",
+            "gaps",
+            "fail",
+            "noop",
+            "bleed",
+            "copy",
+            "van",
+            "limits"
+        );
+        for r in &run.heroes {
+            println!(
+                "{:<11} {:<6} {:>5.0}% {:>5} {:>5} {:>4} {:>4} {:>4} {:>5} {:>5} {:>5} {:>5} {:>5} {:>4} {:>6}",
+                r.codename,
+                format!("{:?}", r.status).to_uppercase(),
+                r.coverage * 100.0,
+                r.particles,
+                r.particles_recolored,
+                r.textures_pinned,
+                r.materials_pinned,
+                r.models_pinned,
+                r.gaps.len(),
+                r.violations.len() + r.integrity.len(),
+                r.noops.len(),
+                r.violations.iter().filter(|f| f.kind == "bleed").count(),
+                r.isolation.iter().filter(|i| i.kind == "copy").count(),
+                r.isolation.iter().filter(|i| i.kind == "vanilla").count(),
+                r.limits.len(),
+            );
+        }
+        for r in run.heroes.iter().filter(|r| r.status != QaStatus::Pass) {
+            println!("\n{} ({:?})", r.codename, r.status);
+            let sections = [
+                ("integrity", &r.integrity),
+                ("violation", &r.violations),
+                ("gap", &r.gaps),
+                ("noop", &r.noops),
+            ];
+            for (label, findings) in sections {
+                for f in findings {
+                    let suggest = f.suggest.map(|s| format!(" -> {s}")).unwrap_or_default();
+                    println!(
+                        "  {label:<9} {:<13} {}{suggest}\n            {}",
+                        f.kind, f.entry, f.detail
+                    );
+                }
+            }
+            for p in &r.stale_reviews {
+                println!("  review    stale         {p} (matches nothing)");
+            }
+        }
+        if !run.unpinned_selectable.is_empty() {
+            println!(
+                "\nselectable heroes with no recipe: {}",
+                run.unpinned_selectable.join(", ")
+            );
+        }
+        println!(
+            "\nbleed = in-prefix particles another hero, item or neutral also spawns that shared_entries does not list; \
+             copy / van = shared entries the bake copies / leaves vanilla (--suggest-shared prints the list); \
+             limits are listed in --json"
+        );
+    }
+    let failed = run
+        .heroes
+        .iter()
+        .any(|r| r.status == QaStatus::Fail || (args.strict && r.status == QaStatus::Warn))
+        || (args.strict && !run.unpinned_selectable.is_empty());
+    if failed {
+        anyhow::bail!("recolor QA failed");
+    }
     Ok(())
 }
 

@@ -130,6 +130,25 @@ pub fn encode_kv3_resource(original: &[u8], value: &kv3::Value) -> Result<Vec<u8
     resource.rebuild_with_data(&new_data)
 }
 
+/// Re-encode `value` into the `DATA` block of `original` as **KV3 v5**, taking
+/// every node's wire shape (typed-array framing, numeric widths, value flags,
+/// string-table order) from the original `DATA` wherever the paths line up
+/// (see [`kv3::encode_v5_like`]). Every non-DATA block is kept byte-for-byte.
+///
+/// Unlike [`encode_kv3_resource`] (uncompressed v4, typed framing and flags
+/// dropped), this keeps what the engine binds natively, so it is the full
+/// re-encode for model and animation data. Blob-bearing blocks stay LZ4 with
+/// Valve's per-blob framing.
+pub fn encode_kv3_resource_like(
+    original: &[u8],
+    value: &kv3::Value,
+) -> Result<Vec<u8>, DecodeError> {
+    let resource = resource::Resource::parse(original)?;
+    let template = kv3::decode_lossless(resource.data_block()?)?;
+    let new_data = kv3::encode_v5_like(value, &template)?;
+    resource.rebuild_with_data(&new_data)
+}
+
 /// Patch integer scalar fields of a resource's KV3 `DATA` block in place by
 /// path, preserving every other byte: value flags, auxiliary-buffer typed-array
 /// tags, and the v5 framing the engine's particle/model loaders require.
@@ -243,8 +262,8 @@ pub fn patch_kv3_resource_strings(
 /// lacks those enums, so the recolored spectrum cycles over time. The string table
 /// is grown byte-faithfully ([`kv3::set_strings_adding`]); every other byte is
 /// preserved, so the engine's particle loader accepts the result. Returns a
-/// complete, loadable resource file. v5 only for the append; a v4 block succeeds
-/// only when every target is already interned.
+/// complete, loadable resource file. Both v4 and v5 append, and a blobbed v5
+/// block stays LZ4-compressed; a blobbed v4 block is refused.
 pub fn patch_kv3_resource_strings_adding(
     original: &[u8],
     edits: &[(Vec<kv3::Seg>, String)],
@@ -253,6 +272,122 @@ pub fn patch_kv3_resource_strings_adding(
     let data = resource.data_block()?;
     let new_data = kv3::set_strings_adding(data, edits)?;
     resource.rebuild_with_data(&new_data)
+}
+
+/// Redirect resource references of a KV3 resource (`.vpcf_c`, `.vmat_c`, ...) from
+/// old names to new ones, keeping its `RERL` precache list consistent. Returns the
+/// rebuilt file and the number of KV3 string fields redirected.
+///
+/// `map` holds `(old, new)` resource names exactly as KV3 and `RERL` store them:
+/// lowercase and uncompiled (`particles/x.vpcf`, `materials/y.vmat`,
+/// `materials/z.vtex`). `old` matches ASCII case-insensitively; `new` is
+/// lowercased, as Valve's compiler stores every name. Every `DATA` string equal to
+/// an `old` is redirected through [`kv3::set_strings_adding`], so the edit is
+/// byte-faithful (v4, v5 and blobbed v5 alike; a blobbed v4 block is refused) and
+/// the string keeps its resource flag. An `old` that no `DATA` string names is an
+/// error ([`DecodeError::MissingReference`]), never a silent no-op.
+///
+/// `RERL` then follows the redirect: an `old` no `DATA` string still names has its
+/// entry rewritten to `new` (id and name), one that is still named elsewhere keeps
+/// its entry and `new` is appended, and a `new` the list already holds is never
+/// duplicated. The list stays sorted by name, which is how Valve emits it. A
+/// resource without a `RERL` block gets the `DATA` redirect only. For a model,
+/// whose `RERL` also covers references held in blocks other than `DATA`, an
+/// entry only those blocks still use would be rewritten too.
+///
+/// `RED2` (and legacy `REDI`) is left as is. It is compiler edit info, not a load
+/// binding: `.vpcf_c` files carry an empty `m_ChildResourceList` whatever they
+/// reference, and `.vmat_c` files mirror their `RERL` there (sorted, one entry
+/// per use), an order a redirect would break without a re-encode. The engine does
+/// not read it (materials built on a donor's stale `RED2` render in game).
+///
+/// Every byte outside the redirected string ids, the grown string table, the
+/// `RERL` block and the container offsets is preserved.
+pub fn repoint_resource_refs(
+    original: &[u8],
+    map: &[(String, String)],
+) -> Result<(Vec<u8>, usize), DecodeError> {
+    let resource = resource::Resource::parse(original)?;
+    let data = resource.data_block()?;
+    let mut fields = Vec::new();
+    string_fields(&kv3::decode(data)?, &mut Vec::new(), &mut fields);
+
+    let pairs: Vec<(String, String)> = map
+        .iter()
+        .map(|(old, new)| (old.to_ascii_lowercase(), new.to_ascii_lowercase()))
+        .collect();
+    let mut after: Vec<&str> = fields.iter().map(|(_, value)| value.as_str()).collect();
+    let mut edits = Vec::new();
+    for (old, new) in &pairs {
+        let before = edits.len();
+        for (i, (path, value)) in fields.iter().enumerate() {
+            if value.eq_ignore_ascii_case(old) {
+                after[i] = new;
+                edits.push((path.clone(), new.clone()));
+            }
+        }
+        if edits.len() == before {
+            return Err(DecodeError::MissingReference(old.clone()));
+        }
+    }
+    let new_data = kv3::set_strings_adding(data, &edits)?;
+
+    let blocks = resource.blocks();
+    let data_idx = blocks
+        .iter()
+        .position(|b| b.kind == resource::BLOCK_TYPE_DATA)
+        .ok_or(DecodeError::MissingDataBlock)?;
+    let mut replacements: Vec<(usize, &[u8])> = vec![(data_idx, &new_data)];
+    let rerl_idx = blocks.iter().position(|b| b.kind == *b"RERL");
+    let new_rerl;
+    if let Some(idx) = rerl_idx {
+        let block = resource
+            .get_block_by_index(idx)
+            .ok_or(DecodeError::BadResource("RERL block out of range"))?;
+        let mut refs = resource::read_rerl(block)?;
+        for (old, new) in &pairs {
+            let still_named = after.iter().any(|value| value.eq_ignore_ascii_case(old));
+            let old_at = refs.iter().position(|(_, n)| n.eq_ignore_ascii_case(old));
+            let has_new = refs.iter().any(|(_, n)| n.eq_ignore_ascii_case(new));
+            match (old_at, has_new, still_named) {
+                (Some(i), false, false) => refs[i] = (resource::resource_id(new), new.clone()),
+                (Some(i), true, false) => {
+                    refs.remove(i);
+                }
+                (_, false, _) => refs.push((resource::resource_id(new), new.clone())),
+                (_, true, _) => {}
+            }
+        }
+        refs.sort_by(|a, b| a.1.cmp(&b.1));
+        new_rerl = resource::write_rerl(&refs);
+        replacements.push((idx, &new_rerl));
+    }
+    Ok((resource.rebuild_with_blocks(&replacements)?, edits.len()))
+}
+
+fn string_fields(
+    value: &kv3::Value,
+    path: &mut Vec<kv3::Seg>,
+    out: &mut Vec<(Vec<kv3::Seg>, String)>,
+) {
+    match value {
+        kv3::Value::String(s) => out.push((path.clone(), s.clone())),
+        kv3::Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                path.push(kv3::Seg::Index(i));
+                string_fields(item, path, out);
+                path.pop();
+            }
+        }
+        kv3::Value::Object(members) => {
+            for (key, member) in members {
+                path.push(kv3::Seg::Key(key.clone()));
+                string_fields(member, path, out);
+                path.pop();
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Insert one element into a KV3 array inside a resource's `DATA` block,

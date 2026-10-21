@@ -56,6 +56,9 @@ pub enum DecodeError {
 
     #[error("material compile error: {0}")]
     Material(String),
+
+    #[error("resource reference not found in DATA: {0}")]
+    MissingReference(String),
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -261,20 +261,24 @@ pub(crate) fn set_color(rgb: [u8; 3], hue_deg: f64, sat_scale: f64, val_scale: f
     [channel(r), channel(g), channel(b)]
 }
 
-/// The absolute brand color to **stamp** onto a material tint, as linear 0..1
-/// RGB: the picked hue at `recolor`'s saturation and value, here read as
-/// **absolutes** (clamped to 0..1), not the per-pixel scales [`set_color`] uses.
+/// The brand color to **stamp** onto one material tint, as linear RGB: the picked
+/// hue at `recolor`'s saturation (an absolute, clamped to 0..1), at the tint's own
+/// brightness. `source_value` is the source tint's max RGB component, and the
+/// stamped HSV value is that times `recolor.value`, so a dim tint stays dim while a
+/// white one stamps to the full brand color. The value is clamped to
+/// `0..=source_value.max(1.0)`, so a brightness lift never pushes a normal tint past
+/// 1.0 but an HDR tint keeps its range.
 ///
 /// A material's `g_vColorTint` / `g_vSelfIllumTint` is a single flat effect color,
 /// and the reference recolor mods stamp one brand color on every tint, including
 /// neutral white ones. A saturation-preserving recolor can't colorize a white
 /// tint (zero chroma scales to zero), so the material path stamps an absolute hue
-/// instead. The default `Recolor::hue(h)` (saturation = value = 1.0) stamps a
-/// vivid, fully-saturated hue; dial saturation/value down for a paler stamp.
+/// instead. Brightness is kept because a deliberately dim tint often sits under a
+/// large self-illum scale, which a full-value stamp would blow out.
 #[allow(clippy::many_single_char_names)]
-pub(crate) fn stamp_rgb(recolor: Recolor) -> [f64; 3] {
+pub(crate) fn stamp_rgb(recolor: Recolor, source_value: f64) -> [f64; 3] {
     let s = recolor.saturation.clamp(0.0, 1.0);
-    let v = recolor.value.clamp(0.0, 1.0);
+    let v = (source_value * recolor.value).clamp(0.0, source_value.max(1.0));
     let (r, g, b) = hsv_to_rgb(recolor.hue.rem_euclid(360.0), s, v);
     [r, g, b]
 }

@@ -105,6 +105,13 @@ pub use hero_recolor::{
     PrismGradient, PrismTuning, MAX_GRADIENT_STOPS, PRISM_PRESET_NAMES,
 };
 
+pub mod recolor_isolate;
+pub use recolor_isolate::IsolationStats;
+
+// Per-hero QA for the recolor recipes: integrity, safety, coverage gaps.
+pub mod recolor_qa;
+pub use recolor_qa::{audit_heroes, Finding, HeroQa, Isolation, QaRun, QaStatus};
+
 pub mod trippy;
 pub use trippy::{
     trippy_ability_vfx_to_addon, trippy_preview_frames, trippy_preview_sprite,

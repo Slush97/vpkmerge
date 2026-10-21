@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.24.0
+
+Hero recolors stop bleeding onto other heroes, and every selectable hero on build 6801 has a recipe (#67).
+
+### CLI (`vpkmerge` 0.24)
+
+- `recolor-hero`, `prism` and `trippy-vfx` no longer edit assets another hero, item or neutral also renders. The bake writes a hero-local copy (`{stem}_{codename}_recolor.{ext}`) and repoints that hero's own particles and materials at it, so everyone else keeps the vanilla file. Shared assets only game data reaches stay vanilla.
+- New `recolor-qa --vpk pak01_dir.vpk [--base VPK] [--hero CODENAME...] [--json] [--strict] [--suggest-shared]` checks every pinned recipe against a live pak: stale paths, entries that don't patch or decode, bleed into other heroes, data channels, skin and UI cues, and color carriers the recipe misses. Exits non-zero when a hero fails. `--suggest-shared` prints each recipe's shared-entry list, to regenerate after a game update.
+- Recipes for Baba, Solomon, Rat King, Violet, Deadman Danny and Nurse Harrow. All 44 selectable heroes pass `recolor-qa` on build 6801.
+- Material recolors keep each tint's own brightness and also recolor chromatic solid outlines.
+- Fix: vertex-color recolors failed on models with KV3 node types 22, 26 or 27 (Solomon's hand and knight shield, Nurse Harrow's vapors).
+- Fix: `model live-materials` found no heroes on builds from 2026-09 on, which dropped `m_bPlayerSelectable`. A hero now counts as selectable when it is neither disabled nor in development.
+
+### Library (`morphic` 0.11.4, `vpkmerge-core` 0.24)
+
+- `vpkmerge_core::recolor_qa` (`audit_heroes`, `QaRun`, `HeroQa`, `Finding`, `QaStatus`) and `recolor_isolate` (`IsolationStats`).
+- `morphic::kv3::decode_lossless` / `encode_v5` / `encode_v5_like` and `morphic::encode_kv3_resource_like`: a lossless KV3 document (wire tags, value flags, typed-array framing, string order) and a v5 writer that reproduces Valve's buffers.
+- `morphic::repoint_resource_refs` redirects resource strings and keeps the `RERL` block in sync; `morphic::resource::{resource_id, read_rerl, write_rerl}`.
+
 ## v0.23.2
 
 ### CLI (`vpkmerge` 0.23.2)

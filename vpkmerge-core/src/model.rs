@@ -140,7 +140,7 @@ pub fn export_hero_model(
 /// win), then the base pak. A vanilla export passes the base pak as both; it
 /// opens once, since parsing its directory is most of the open cost and a base
 /// lookup would only find the entries `vpk` already resolved.
-fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak::VPK>> {
+pub(crate) fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak::VPK>> {
     let mut vpks =
         vec![valve_pak::open(vpk).with_context(|| format!("opening {}", vpk.display()))?];
     if let Some(base) = base.filter(|&base| base != vpk) {
@@ -703,7 +703,7 @@ pub fn live_hero_materials(
 /// List selectable live heroes from `scripts/heroes.vdata_c`.
 pub fn live_hero_entries(vpk: impl AsRef<Path>, base: Option<&Path>) -> Result<Vec<LiveHeroEntry>> {
     let vpks = open_vpks(vpk.as_ref(), base)?;
-    live_hero_entries_from_vdata(&vpks)
+    live_hero_entries_from_vdata(&vpks, true)
 }
 
 fn decode_model_entry(
@@ -1395,11 +1395,11 @@ fn inspect_material_full(
     (material_source, Some(mat), textures)
 }
 
-fn live_hero_model_from_vdata(
+pub(crate) fn live_hero_model_from_vdata(
     vpks: &[valve_pak::VPK],
     codename: &str,
 ) -> Result<(String, Option<String>)> {
-    let entries = live_hero_entries_from_vdata(vpks)?;
+    let entries = live_hero_entries_from_vdata(vpks, false)?;
     let wanted = codename.to_ascii_lowercase();
     if let Some(entry) = entries
         .iter()
@@ -1408,7 +1408,7 @@ fn live_hero_model_from_vdata(
         return Ok((entry.model_entry.clone(), entry.localized_name.clone()));
     }
     anyhow::bail!(
-        "no hero_{wanted} in scripts/heroes.vdata_c; selectable codenames include: {}",
+        "no hero_{wanted} in scripts/heroes.vdata_c; codenames include: {}",
         entries
             .iter()
             .take(32)
@@ -1418,7 +1418,10 @@ fn live_hero_model_from_vdata(
     )
 }
 
-fn live_hero_entries_from_vdata(vpks: &[valve_pak::VPK]) -> Result<Vec<LiveHeroEntry>> {
+fn live_hero_entries_from_vdata(
+    vpks: &[valve_pak::VPK],
+    selectable_only: bool,
+) -> Result<Vec<LiveHeroEntry>> {
     let bytes = read_entry(vpks, "scripts/heroes.vdata_c")
         .context("scripts/heroes.vdata_c not found; pass the base pak as --vpk or --base")?;
     let data = morphic::decode_kv3_resource(&bytes).context("decoding scripts/heroes.vdata_c")?;
@@ -1430,11 +1433,13 @@ fn live_hero_entries_from_vdata(vpks: &[valve_pak::VPK]) -> Result<Vec<LiveHeroE
         if !key.starts_with("hero_") {
             continue;
         }
-        if !hero
-            .get("m_bPlayerSelectable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        let flag = |name| hero.get(name).and_then(Value::as_bool);
+        // Builds from 2026-09 on dropped `m_bPlayerSelectable`; a hero is pickable
+        // when it is neither disabled nor in development (same as the roster).
+        let selectable = flag("m_bPlayerSelectable").unwrap_or(
+            !flag("m_bDisabled").unwrap_or(false) && !flag("m_bInDevelopment").unwrap_or(false),
+        );
+        if selectable_only && !selectable {
             continue;
         }
         let Some(model) = hero
@@ -1704,7 +1709,7 @@ fn draw_call_id(c: &DrawCallInfo) -> String {
     )
 }
 
-fn compiled_resource_path(path: &str) -> String {
+pub(crate) fn compiled_resource_path(path: &str) -> String {
     if path.ends_with("_c") {
         path.to_string()
     } else {
@@ -1721,7 +1726,7 @@ fn source_label(index: usize, has_base: bool) -> String {
 }
 
 /// Reads a VPK entry from the first of `vpks` that contains it.
-fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>> {
+pub(crate) fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>> {
     read_entry_with_source(vpks, entry).map(|(bytes, _)| bytes)
 }
 

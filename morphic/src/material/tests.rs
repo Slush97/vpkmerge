@@ -10,6 +10,29 @@ use serde::Deserialize;
 
 use super::{parse, AlphaMode};
 
+#[test]
+fn environment_first_layer_maps_without_claiming_layer_blending() {
+    let mut mat = super::Material {
+        shader_name: "environment_blend.vfx".into(),
+        ..Default::default()
+    };
+    mat.texture_params
+        .insert("g_tColor1".into(), "first.vtex".into());
+    mat.texture_params
+        .insert("g_tColor2".into(), "second.vtex".into());
+    mat.texture_params
+        .insert("g_tNormalRoughness1".into(), "normal.vtex".into());
+    assert_eq!(mat.pbr().base_color, Some("first.vtex"));
+    assert_eq!(mat.pbr().normal, Some("normal.vtex"));
+    assert!(mat.uses_vertex_color());
+    mat.texture_params
+        .insert("g_tColor".into(), "primary.vtex".into());
+    assert_eq!(mat.pbr().base_color, Some("primary.vtex"));
+    mat.shader_name = "other.vfx".into();
+    mat.texture_params.remove("g_tColor");
+    assert_eq!(mat.pbr().base_color, None);
+}
+
 #[derive(Deserialize)]
 struct Golden {
     name: String,

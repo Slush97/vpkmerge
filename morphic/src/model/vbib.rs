@@ -518,9 +518,13 @@ impl OnDiskBuffer {
         for i in 0..self.element_count {
             let o = i * self.element_size + attr.offset;
             let v = match attr.format {
-                DxgiFormat::R32G32Float => [self.f32_at(o)?, self.f32_at(o + 4)?],
-                DxgiFormat::R16G16Float => [self.half_at(o)?, self.half_at(o + 2)?],
-                DxgiFormat::R16G16Unorm => [
+                DxgiFormat::R32G32Float
+                | DxgiFormat::R32G32B32Float
+                | DxgiFormat::R32G32B32A32Float => [self.f32_at(o)?, self.f32_at(o + 4)?],
+                DxgiFormat::R16G16Float | DxgiFormat::R16G16B16A16Float => {
+                    [self.half_at(o)?, self.half_at(o + 2)?]
+                }
+                DxgiFormat::R16G16Unorm | DxgiFormat::R16G16B16A16Unorm => [
                     f32::from(self.u16_at(o)?) / 65535.0,
                     f32::from(self.u16_at(o + 2)?) / 65535.0,
                 ],
@@ -528,10 +532,30 @@ impl OnDiskBuffer {
                     f32::from(self.i16_at(o)?) / 32767.0,
                     f32::from(self.i16_at(o + 2)?) / 32767.0,
                 ],
+                DxgiFormat::R8G8B8A8Unorm => [
+                    f32::from(
+                        self.data
+                            .get(o)
+                            .copied()
+                            .ok_or(DecodeError::Model("texcoord read past buffer"))?,
+                    ) / 255.0,
+                    f32::from(
+                        self.data
+                            .get(o + 1)
+                            .copied()
+                            .ok_or(DecodeError::Model("texcoord read past buffer"))?,
+                    ) / 255.0,
+                ],
                 // A 1-component texcoord (the V channel is implicit); read the
                 // single float and zero-fill, matching VRF's component-count read.
                 DxgiFormat::R32Float => [self.f32_at(o)?, 0.0],
-                _ => return Err(DecodeError::Model("unexpected vec2 format")),
+                _ => {
+                    return Err(DecodeError::ModelAttributeFormat {
+                        semantic: attr.semantic_name.clone(),
+                        index: attr.semantic_index,
+                        format: attr.format.id(),
+                    })
+                }
             };
             out.push(v);
         }
@@ -1041,5 +1065,91 @@ mod tests {
             }],
         };
         assert!(buf.write_positions(&[[0.0; 3], [0.0; 3]]).is_err());
+    }
+
+    #[test]
+    fn texcoords_accept_wider_float_storage() {
+        for (format, stride) in [
+            (DxgiFormat::R32G32B32Float, 12),
+            (DxgiFormat::R32G32B32A32Float, 16),
+        ] {
+            let field = InputLayoutField {
+                semantic_name: "TEXCOORD".into(),
+                semantic_index: 0,
+                format,
+                offset: 4,
+            };
+            let mut data = vec![0; (stride + 4) * 2];
+            for (i, uv) in [[0.25_f32, -2.0_f32], [3.5_f32, 0.75_f32]]
+                .iter()
+                .enumerate()
+            {
+                let offset = i * (stride + 4) + 4;
+                data[offset..offset + 4].copy_from_slice(&uv[0].to_le_bytes());
+                data[offset + 4..offset + 8].copy_from_slice(&uv[1].to_le_bytes());
+            }
+            let buffer = OnDiskBuffer {
+                data,
+                element_count: 2,
+                element_size: stride + 4,
+                fields: vec![field.clone()],
+            };
+            assert_eq!(buffer.vector2(&field).unwrap(), [[0.25, -2.0], [3.5, 0.75]]);
+        }
+    }
+
+    #[test]
+    fn texcoords_accept_four_channel_half_and_unorm_storage() {
+        for (format, values, expected) in [
+            (
+                DxgiFormat::R16G16B16A16Float,
+                [0x3800_u16, 0xbc00, 0x7c00, 0],
+                [0.5, -1.0],
+            ),
+            (
+                DxgiFormat::R16G16B16A16Unorm,
+                [65535_u16, 0, 400, 100],
+                [1.0, 0.0],
+            ),
+        ] {
+            let field = InputLayoutField {
+                semantic_name: "TEXCOORD".into(),
+                semantic_index: 0,
+                format,
+                offset: 0,
+            };
+            let buffer = OnDiskBuffer {
+                data: values.into_iter().flat_map(u16::to_le_bytes).collect(),
+                element_count: 1,
+                element_size: 8,
+                fields: vec![field.clone()],
+            };
+            assert_eq!(buffer.vector2(&field).unwrap(), [expected]);
+        }
+    }
+
+    #[test]
+    fn texcoords_accept_map_auxiliary_unorm_bytes() {
+        let field = InputLayoutField {
+            semantic_name: "TEXCOORD".into(),
+            semantic_index: 5,
+            format: DxgiFormat::R8G8B8A8Unorm,
+            offset: 0,
+        };
+        let buffer = OnDiskBuffer {
+            data: vec![128, 64, 0, 255],
+            element_count: 1,
+            element_size: 4,
+            fields: vec![field.clone()],
+        };
+        assert_eq!(
+            buffer.vector2(&field).unwrap(),
+            [[128.0 / 255.0, 64.0 / 255.0]]
+        );
+        let truncated = OnDiskBuffer {
+            data: vec![128],
+            ..buffer
+        };
+        assert!(truncated.vector2(&field).is_err());
     }
 }

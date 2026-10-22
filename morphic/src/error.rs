@@ -39,6 +39,13 @@ pub enum DecodeError {
     #[error("model decode error: {0}")]
     Model(&'static str),
 
+    #[error("unsupported model attribute {semantic}{index} DXGI format {format}")]
+    ModelAttributeFormat {
+        semantic: String,
+        index: i32,
+        format: u32,
+    },
+
     #[error("texture header missing field: {0}")]
     MissingField(&'static str),
 

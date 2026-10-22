@@ -81,6 +81,9 @@ enum Command {
     /// the base entry path and it overrides in place, no `.vmat_c` edit needed.
     Texture(TextureCmd),
 
+    /// Read a compiled texture's original dimensions without decoding its pixels.
+    TextureInfo(TextureInfoCmd),
+
     /// Export a Source 2 cubemap texture (`.vtex_c`) to six Radiance `.hdr`
     /// face files (px/nx/py/ny/pz/nz.hdr, in `[+X, -X, +Y, -Y, +Z, -Z]` order).
     /// Decode-only: ships a real Deadlock IBL probe to the grimoire three.js
@@ -1117,6 +1120,28 @@ struct TrippySkinCmd {
     /// Paint only this material and isolate its texture from other parts.
     #[arg(long, value_name = "VMAT")]
     material: Option<String>,
+
+    /// Rotate source colors, in degrees. Requires --material.
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    hue_shift: f64,
+
+    /// Source saturation multiplier. Requires --material.
+    #[arg(long, default_value_t = 1.0)]
+    saturation: f64,
+
+    /// Source HSV value multiplier. Requires --material.
+    #[arg(long, default_value_t = 1.0)]
+    brightness: f64,
+}
+
+#[derive(Args)]
+struct TextureInfoCmd {
+    #[arg(long)]
+    vpk: PathBuf,
+    #[arg(long)]
+    base: Option<PathBuf>,
+    #[arg(long)]
+    entry: String,
 }
 
 #[derive(Args)]
@@ -2020,6 +2045,15 @@ fn main() -> Result<()> {
         Some(Command::Model(args)) => run_model(args),
         Some(Command::Soundevents(args)) => run_soundevents(args),
         Some(Command::Texture(args)) => run_texture(args),
+        Some(Command::TextureInfo(args)) => {
+            let (width, height) = vpkmerge_core::trippy::texture_dimensions(
+                &args.vpk,
+                args.base.as_deref(),
+                &args.entry,
+            )?;
+            println!("{{\"width\":{width},\"height\":{height}}}");
+            Ok(())
+        }
         Some(Command::Cubemap(args)) => run_cubemap(&args),
         Some(Command::TextureHdr(args)) => vpkmerge_core::cubemap::export_texture_hdr(
             &args.input,
@@ -4767,14 +4801,23 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
         include_weapons,
     };
     if let Some(material) = &args.material {
-        return vpkmerge_core::trippy::trippy_material_to_addon(
+        return vpkmerge_core::trippy::edit_material_to_addon(
             &args.vpk,
             args.base.as_deref(),
             material,
             &options,
+            &vpkmerge_core::trippy::MaterialColorAdjustments {
+                hue: args.hue_shift,
+                saturation: args.saturation,
+                brightness: args.brightness,
+            },
             &args.encode_vpk,
         );
     }
+    anyhow::ensure!(
+        args.hue_shift == 0.0 && args.saturation == 1.0 && args.brightness == 1.0,
+        "Color adjustments require --material"
+    );
     let report = vpkmerge_core::trippy_skin_to_addon(
         &args.vpk,
         args.base.as_deref(),

@@ -330,6 +330,14 @@ struct TrippyTarget {
     placeholder: bool,
 }
 
+pub fn texture_dimensions(vpk: &Path, base: Option<&Path>, entry: &str) -> Result<(u32, u32)> {
+    let vpks = open_vpks(vpk, base)?;
+    let bytes =
+        read_entry(&vpks, &compiled_resource_path(entry)).context("Reading texture header")?;
+    let info = morphic::inspect(&bytes)?;
+    Ok((u32::from(info.width), u32::from(info.height)))
+}
+
 /// Paint one material with an isolated texture so another part sharing its source stays unchanged.
 pub fn trippy_material_to_addon(
     vpk: &Path,
@@ -338,6 +346,94 @@ pub fn trippy_material_to_addon(
     options: &TrippySkinOptions,
     out: &Path,
 ) -> Result<()> {
+    edit_material_to_addon(
+        vpk,
+        base,
+        material,
+        options,
+        &MaterialColorAdjustments::default(),
+        out,
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MaterialColorAdjustments {
+    pub hue: f64,
+    pub saturation: f64,
+    pub brightness: f64,
+}
+
+impl Default for MaterialColorAdjustments {
+    fn default() -> Self {
+        Self {
+            hue: 0.0,
+            saturation: 1.0,
+            brightness: 1.0,
+        }
+    }
+}
+
+pub fn adjust_material_pixels(pixels: &mut [u8], value: &MaterialColorAdjustments) {
+    if value.hue == 0.0 && value.saturation == 1.0 && value.brightness == 1.0 {
+        return;
+    }
+    for pixel in pixels.chunks_exact_mut(4) {
+        let r = f64::from(pixel[0]) / 255.0;
+        let g = f64::from(pixel[1]) / 255.0;
+        let b = f64::from(pixel[2]) / 255.0;
+        let peak = r.max(g).max(b);
+        let delta = peak - r.min(g).min(b);
+        let hue = if delta == 0.0 {
+            0.0
+        } else if peak == r {
+            (g - b) / delta
+        } else if peak == g {
+            (b - r) / delta + 2.0
+        } else {
+            (r - g) / delta + 4.0
+        };
+        let hue = (hue / 6.0 + value.hue / 360.0).rem_euclid(1.0);
+        let saturation = (if peak == 0.0 { 0.0 } else { delta / peak } * value.saturation).min(1.0);
+        let brightness = (peak * value.brightness).min(1.0);
+        let chroma = brightness * saturation;
+        let x = chroma * (1.0 - (hue * 6.0 % 2.0 - 1.0).abs());
+        let m = brightness - chroma;
+        let rgb = if hue < 1.0 / 6.0 {
+            [chroma, x, 0.0]
+        } else if hue < 2.0 / 6.0 {
+            [x, chroma, 0.0]
+        } else if hue < 3.0 / 6.0 {
+            [0.0, chroma, x]
+        } else if hue < 4.0 / 6.0 {
+            [0.0, x, chroma]
+        } else if hue < 5.0 / 6.0 {
+            [x, 0.0, chroma]
+        } else {
+            [chroma, 0.0, x]
+        };
+        for channel in 0..3 {
+            pixel[channel] = ((rgb[channel] + m) * 255.0).round() as u8;
+        }
+    }
+}
+
+pub fn edit_material_to_addon(
+    vpk: &Path,
+    base: Option<&Path>,
+    material: &str,
+    options: &TrippySkinOptions,
+    color: &MaterialColorAdjustments,
+    out: &Path,
+) -> Result<()> {
+    anyhow::ensure!(
+        color.hue.is_finite()
+            && (-180.0..=180.0).contains(&color.hue)
+            && color.saturation.is_finite()
+            && (0.0..=2.0).contains(&color.saturation)
+            && color.brightness.is_finite()
+            && (0.0..=2.0).contains(&color.brightness),
+        "Invalid material color adjustment"
+    );
     let vpks = open_vpks(vpk, base)?;
     let entry = compiled_resource_path(material);
     let bytes = read_entry(&vpks, &entry).context("Reading selected material")?;
@@ -353,7 +449,7 @@ pub fn trippy_material_to_addon(
     let texture = compiled_resource_path(parsed.texture(slot).unwrap());
     let source = read_entry(&vpks, &texture).context("Reading selected material's texture")?;
     let mut image = morphic::decode(&source)?;
-    if image.width <= 8 || image.height <= 8 {
+    if options.intensity > 0.0 && (image.width <= 8 || image.height <= 8) {
         let color = match &image.data {
             ImageData::Rgba8(p) if p.len() >= 4 => [p[0], p[1], p[2], p[3]],
             _ => [255; 4],
@@ -365,6 +461,10 @@ pub fn trippy_material_to_addon(
         };
     }
     paint_image(&mut image, options.style, options.phase, options.intensity)?;
+    match &mut image.data {
+        ImageData::Rgba8(pixels) => adjust_material_pixels(pixels, color),
+        _ => anyhow::bail!("Selected color texture is not RGBA8"),
+    }
     let painted = morphic::encode_vtex_png_rgba8888(&image, morphic::TextureFlags::empty())?;
     let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
@@ -1724,6 +1824,33 @@ pub(crate) fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_hsv_adjustment_preserves_alpha_and_neutrals() {
+        let mut pixels = vec![255, 0, 0, 19, 0, 255, 0, 128, 80, 80, 80, 0];
+        let original = pixels.clone();
+        adjust_material_pixels(&mut pixels, &MaterialColorAdjustments::default());
+        assert_eq!(pixels, original);
+        adjust_material_pixels(
+            &mut pixels,
+            &MaterialColorAdjustments {
+                hue: 120.0,
+                saturation: 1.0,
+                brightness: 0.5,
+            },
+        );
+        assert_eq!(pixels, vec![0, 128, 0, 19, 0, 0, 128, 128, 40, 40, 40, 0]);
+        let mut gray = vec![40, 80, 160, 255];
+        adjust_material_pixels(
+            &mut gray,
+            &MaterialColorAdjustments {
+                hue: -180.0,
+                saturation: 0.0,
+                brightness: 1.5,
+            },
+        );
+        assert_eq!(gray, vec![240, 240, 240, 255]);
+    }
 
     #[test]
     fn selected_material_paint_isolates_shared_texture_and_preserves_other_slots() {

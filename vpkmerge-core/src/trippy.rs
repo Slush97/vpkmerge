@@ -330,6 +330,94 @@ struct TrippyTarget {
     placeholder: bool,
 }
 
+/// Paint one material with an isolated texture so another part sharing its source stays unchanged.
+pub fn trippy_material_to_addon(
+    vpk: &Path,
+    base: Option<&Path>,
+    material: &str,
+    options: &TrippySkinOptions,
+    out: &Path,
+) -> Result<()> {
+    let vpks = open_vpks(vpk, base)?;
+    let entry = compiled_resource_path(material);
+    let bytes = read_entry(&vpks, &entry).context("Reading selected material")?;
+    let parsed = morphic::material::parse(&bytes)?;
+    anyhow::ensure!(
+        parsed.shader_name == "pbr.vfx",
+        "Selected material does not support pattern paint"
+    );
+    let slot = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
+        .into_iter()
+        .find(|slot| parsed.texture(slot).is_some())
+        .context("Material has no color texture")?;
+    let texture = compiled_resource_path(parsed.texture(slot).unwrap());
+    let source = read_entry(&vpks, &texture).context("Reading selected material's texture")?;
+    let mut image = morphic::decode(&source)?;
+    if image.width <= 8 || image.height <= 8 {
+        let color = match &image.data {
+            ImageData::Rgba8(p) if p.len() >= 4 => [p[0], p[1], p[2], p[3]],
+            _ => [255; 4],
+        };
+        image = Image {
+            width: 256,
+            height: 256,
+            data: ImageData::Rgba8(color.repeat(256 * 256)),
+        };
+    }
+    paint_image(&mut image, options.style, options.phase, options.intensity)?;
+    let painted = morphic::encode_vtex_png_rgba8888(&image, morphic::TextureFlags::empty())?;
+    let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+    });
+    let isolated = format!("materials/grimoire/skin_parts/{hash:016x}/color.vtex");
+    let value = morphic::decode_kv3_resource(&bytes)?;
+    let slots = value
+        .get("m_textureParams")
+        .and_then(Value::as_array)
+        .context("Material texture params")?;
+    let index = slots
+        .iter()
+        .position(|param| param.get("m_name").and_then(Value::as_str) == Some(slot))
+        .context("Color texture slot")?;
+    let redirect = vec![
+        Seg::Key("m_textureParams".into()),
+        Seg::Index(index),
+        Seg::Key("m_pValue".into()),
+    ];
+    let changed =
+        morphic::patch_kv3_resource_strings_adding(&bytes, &[(redirect, isolated.clone())])?;
+    let edits = trippy_material_edits(&value, options, false);
+    let changed = if edits.is_empty() {
+        changed
+    } else {
+        morphic::patch_kv3_resource_doubles(&changed, &edits)?
+    };
+    let resource = morphic::resource::Resource::parse(&changed)?;
+    let rerl_index = resource
+        .blocks()
+        .iter()
+        .position(|block| block.kind == *b"RERL")
+        .context("Selected material has no resource reference list")?;
+    let mut refs = morphic::resource::read_rerl(
+        resource
+            .get_block_by_index(rerl_index)
+            .context("Material reference list")?,
+    )?;
+    if !refs.iter().any(|(_, name)| name == &isolated) {
+        refs.push((morphic::resource::resource_id(&isolated), isolated.clone()));
+    }
+    refs.sort_by(|a, b| a.1.cmp(&b.1));
+    let changed = resource.rebuild_with_block(rerl_index, &morphic::resource::write_rerl(&refs))?;
+    crate::pack(
+        &[
+            (&entry, changed.as_slice()),
+            (&compiled_resource_path(&isolated), painted.as_slice()),
+        ],
+        out,
+    )?;
+    Ok(())
+}
+
 /// Build a procedural trippy hero skin addon. Textures are discovered from
 /// hero-namespaced VMATs under `models/heroes*`; weapon materials are included
 /// when `options.include_weapons` is true.
@@ -1636,6 +1724,53 @@ pub(crate) fn read_entry(vpks: &[valve_pak::VPK], entry: &str) -> Option<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_material_paint_isolates_shared_texture_and_preserves_other_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let out = dir.path().join("paint_dir.vpk");
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let texture_bytes =
+            include_bytes!("../../morphic/fixtures/png_rgba8888/dynamic_images_sentinel.vtex_c");
+        let original = morphic::material::parse(donor).unwrap();
+        let color = original.texture("g_tColor").unwrap();
+        crate::pack(
+            &[
+                ("models/test/a.vmat_c", donor.as_slice()),
+                ("models/test/b.vmat_c", donor.as_slice()),
+                (&compiled_resource_path(color), texture_bytes.as_slice()),
+            ],
+            &source,
+        )
+        .unwrap();
+        let before = std::fs::read(&source).unwrap();
+        trippy_material_to_addon(
+            &source,
+            None,
+            "models/test/a.vmat",
+            &TrippySkinOptions::default(),
+            &out,
+        )
+        .unwrap();
+        let vpks = open_vpks(&out, None).unwrap();
+        let bytes = read_entry(&vpks, "models/test/a.vmat_c").unwrap();
+        let painted = morphic::material::parse(&bytes).unwrap();
+        let isolated = painted.texture("g_tColor").unwrap();
+        assert_ne!(isolated, color);
+        assert!(read_entry(&vpks, &compiled_resource_path(isolated)).is_some());
+        assert!(read_entry(&vpks, "models/test/b.vmat_c").is_none());
+        assert!(read_entry(&vpks, &compiled_resource_path(color)).is_none());
+        for (slot, path) in &original.texture_params {
+            if slot != "g_tColor" {
+                assert_eq!(painted.texture(slot), Some(path.as_str()));
+            }
+        }
+        let resource = morphic::resource::Resource::parse(&bytes).unwrap();
+        let refs = morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
+        assert!(refs.iter().any(|(_, path)| path == isolated));
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+    }
 
     #[test]
     fn keep_value_paint_preserves_silhouette() {

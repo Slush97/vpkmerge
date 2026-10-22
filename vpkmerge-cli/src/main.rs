@@ -1113,6 +1113,10 @@ struct TrippySkinCmd {
     /// Target set: all, body, or weapons.
     #[arg(long, value_name = "TARGETS", default_value = "all")]
     targets: String,
+
+    /// Paint only this material and isolate its texture from other parts.
+    #[arg(long, value_name = "VMAT")]
+    material: Option<String>,
 }
 
 #[derive(Args)]
@@ -4762,6 +4766,15 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
         include_body,
         include_weapons,
     };
+    if let Some(material) = &args.material {
+        return vpkmerge_core::trippy::trippy_material_to_addon(
+            &args.vpk,
+            args.base.as_deref(),
+            material,
+            &options,
+            &args.encode_vpk,
+        );
+    }
     let report = vpkmerge_core::trippy_skin_to_addon(
         &args.vpk,
         args.base.as_deref(),

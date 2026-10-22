@@ -22,6 +22,66 @@ use std::path::Path;
 /// Output file stems in morphic's cubemap face order `[+X, -X, +Y, -Y, +Z, -Z]`.
 pub const CUBEMAP_FACE_NAMES: [&str; 6] = ["px", "nx", "py", "ny", "pz", "nz"];
 
+/// Export a two-dimensional texture without clamping its HDR range.
+pub fn export_texture_hdr(
+    input: &Path,
+    from_vpk: Option<&Path>,
+    out: &Path,
+    max_size: u32,
+) -> Result<()> {
+    let bytes = match from_vpk {
+        Some(vpk) => crate::read_vpk_entry(vpk, &input.to_string_lossy())?,
+        None => std::fs::read(input)?,
+    };
+    let info = morphic::inspect(&bytes)?;
+    if info.depth != 1 || info.flags.contains(TextureFlags::CUBE_TEXTURE) {
+        bail!(
+            "Expected a 2D texture, got depth {} and flags {:?}",
+            info.depth,
+            info.flags
+        );
+    }
+    if max_size == 0 {
+        bail!("max-size must be positive");
+    }
+    let mut mip = 0;
+    while mip + 1 < info.mip_count && (u32::from(info.width.max(info.height)) >> mip) > max_size {
+        mip += 1;
+    }
+    let image = morphic::decode_at(
+        &bytes,
+        &DecodeOptions {
+            mip,
+            ..Default::default()
+        },
+    )?;
+    let (width, height) = info.actual_mip_dims(mip);
+    let image = morphic::crop_to_actual(&image, width, height);
+    let pixels = linear_rgb_pixels(&image);
+    let source = image::ImageBuffer::<image::Rgb<f32>, _>::from_raw(
+        image.width,
+        image.height,
+        pixels.into_flattened(),
+    )
+    .context("Invalid decoded texture dimensions")?;
+    let ratio = (max_size as f32 / image.width.max(image.height) as f32).min(1.0);
+    let resized = image::imageops::resize(
+        &source,
+        (image.width as f32 * ratio).round().max(1.0) as u32,
+        (image.height as f32 * ratio).round().max(1.0) as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let pixels: Vec<[f32; 3]> = resized.pixels().map(|pixel| pixel.0).collect();
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        out,
+        encode_radiance_hdr(resized.width(), resized.height(), &pixels),
+    )?;
+    Ok(())
+}
+
 /// Per-face summary returned by [`export_cubemap_hdr`], so a caller can print
 /// an orientation sanity table (the `+Y`/`py` face should be the sky).
 #[derive(Debug, Clone)]
@@ -216,6 +276,31 @@ fn float_to_rgbe(rgb: [f32; 3]) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texture_export_limits_size_and_rejects_cubemaps() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("source.vtex_c");
+        let out = temp.path().join("source.hdr");
+        std::fs::write(
+            &input,
+            include_bytes!("../../morphic/fixtures/png_rgba8888/dynamic_images_sentinel.vtex_c"),
+        )
+        .unwrap();
+        export_texture_hdr(&input, None, &out, 2).unwrap();
+        let hdr = std::fs::read(&out).unwrap();
+        let text = String::from_utf8_lossy(&hdr[..hdr.len().min(80)]);
+        assert!(text.contains("-Y 1 +X 2"), "{text}");
+        assert!(export_texture_hdr(&input, None, &out, 0).is_err());
+        std::fs::write(
+            &input,
+            include_bytes!(
+                "../../morphic/fixtures/bc6h/sky_alpha_matte_vmat_g_tskytexture_298cc46b.vtex_c"
+            ),
+        )
+        .unwrap();
+        assert!(export_texture_hdr(&input, None, &out, 2).is_err());
+    }
 
     /// Standard RGBE inverse: `v = byte * 2^(e_byte - 136)` (bias 128 plus the
     /// 8-bit mantissa shift). The all-zero exponent byte means a zero pixel.

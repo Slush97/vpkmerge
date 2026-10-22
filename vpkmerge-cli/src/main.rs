@@ -89,6 +89,9 @@ enum Command {
     /// pak01_dir.vpk --out-dir dusk-ibl`.
     Cubemap(CubemapCmd),
 
+    /// Decode a 2D texture to linear Radiance HDR without clipping bright pixels.
+    TextureHdr(TextureHdrCmd),
+
     /// Recolor a hero's full ability VFX (particles + color textures + baked
     /// vertex colors) to one hue and pack it into a single addon VPK. The
     /// one-call bridge for a mod manager: composes all three recolor mechanisms
@@ -929,6 +932,17 @@ struct CubemapCmd {
     /// Directory to write the six face files into (created if missing).
     #[arg(long = "out-dir", value_name = "DIR")]
     out_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct TextureHdrCmd {
+    input: PathBuf,
+    #[arg(long, value_name = "VPK")]
+    from_vpk: Option<PathBuf>,
+    #[arg(long, value_name = "HDR")]
+    out: PathBuf,
+    #[arg(long, default_value_t = 2048)]
+    max_size: u32,
 }
 
 #[derive(Args)]
@@ -2003,6 +2017,12 @@ fn main() -> Result<()> {
         Some(Command::Soundevents(args)) => run_soundevents(args),
         Some(Command::Texture(args)) => run_texture(args),
         Some(Command::Cubemap(args)) => run_cubemap(&args),
+        Some(Command::TextureHdr(args)) => vpkmerge_core::cubemap::export_texture_hdr(
+            &args.input,
+            args.from_vpk.as_deref(),
+            &args.out,
+            args.max_size,
+        ),
         Some(Command::RecolorHero(args)) => run_recolor_hero(&args),
         Some(Command::Prism(args)) => run_prism(&args),
         Some(Command::TrippySkin(args)) => run_trippy_skin(&args),

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.25.0
+
+Hideout previews and per-material skin edits, for Grimoire's Door Stuck skin editor. Contributed by @oldreceipt (#69).
+
+### CLI (`vpkmerge` 0.25)
+
+- `trippy-skin --material VMAT` paints only that material and gives it its own copy of the color texture, so other parts that share the texture stay unchanged. With `--material`, `--hue-shift DEG`, `--saturation X` and `--brightness X` adjust the source colors; without it they are an error.
+- New `texture-info --vpk VPK [--base VPK] --entry PATH` prints a compiled texture's original `{"width","height"}` without decoding its pixels.
+- New `texture-hdr INPUT [--from-vpk VPK] --out OUT.hdr [--max-size N]` decodes a 2D texture to linear Radiance HDR without clipping bright pixels.
+- `model export` keeps secondary UV sets and vertex colors, and picks up the first-layer textures of `environment_*` (map) materials.
+
+### Library (`morphic` 0.11.5, `vpkmerge-core` 0.25)
+
+- `vpkmerge_core::trippy::{edit_material_to_addon, trippy_material_to_addon, texture_dimensions, adjust_material_pixels, MaterialColorAdjustments}` and `vpkmerge_core::cubemap::export_texture_hdr`.
+- `morphic` meshes keep every `TEXCOORD` set at its semantic index, `environment_*` materials fall back to `g_tColor1`/`g_tNormalRoughness1` and count as vertex-colored, and an unsupported attribute format is a typed `ModelAttributeFormat` error.
+
 ## v0.24.0
 
 Hero recolors stop bleeding onto other heroes, and every selectable hero on build 6801 has a recipe (#67).

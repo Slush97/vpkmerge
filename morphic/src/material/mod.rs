@@ -446,9 +446,18 @@ impl Material {
     /// Best-effort PBR slot mapping by texture-parameter name.
     #[must_use]
     pub fn pbr(&self) -> PbrSlots<'_> {
+        let environment = self.shader_name.starts_with("environment_");
         PbrSlots {
-            base_color: self.first_texture(&["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]),
-            normal: self.first_texture(&["g_tNormal", "g_tNormalRoughness"]),
+            base_color: self
+                .first_texture(&["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"])
+                .or_else(|| environment.then(|| self.texture("g_tColor1")).flatten()),
+            normal: self
+                .first_texture(&["g_tNormal", "g_tNormalRoughness"])
+                .or_else(|| {
+                    environment
+                        .then(|| self.texture("g_tNormalRoughness1"))
+                        .flatten()
+                }),
             occlusion: self.first_texture(&["g_tAmbientOcclusion", "g_tOcclusion"]),
             emissive: self.first_texture(&["g_tSelfIllumMask", "g_tEmissive", "g_tSelfIllum"]),
             roughness: self.first_texture(&["g_tRoughness"]),
@@ -482,7 +491,8 @@ impl Material {
     /// ability meshes whose albedo texture is neutral.
     #[must_use]
     pub fn uses_vertex_color(&self) -> bool {
-        self.int_params.get("F_VERTEX_COLOR").copied().unwrap_or(0) > 0
+        self.shader_name.starts_with("environment_")
+            || self.int_params.get("F_VERTEX_COLOR").copied().unwrap_or(0) > 0
             || self
                 .int_params
                 .get("F_PAINT_VERTEX_COLORS")

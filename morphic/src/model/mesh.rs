@@ -495,7 +495,13 @@ fn deinterleave(buf: &OnDiskBuffer, remap: Option<&[usize]>) -> Result<VertexBuf
                 }
             }
             "TANGENT" => standalone_tangent = Some(buf.vector4(f)?),
-            "TEXCOORD" => out.texcoords.push(buf.vector2(f)?),
+            "TEXCOORD" => {
+                let index = usize::try_from(f.semantic_index).unwrap_or(out.texcoords.len());
+                if out.texcoords.len() <= index {
+                    out.texcoords.resize_with(index + 1, Vec::new);
+                }
+                out.texcoords[index] = buf.vector2(f)?;
+            }
             "COLOR" => {
                 let index = usize::try_from(f.semantic_index).unwrap_or(out.colors.len());
                 if out.colors.len() <= index {

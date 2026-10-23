@@ -581,6 +581,7 @@ impl Builder {
     /// the viewer via `blend_mode='additive'` extras; see [`is_glow_material`]).
     /// Hidden-by-default alt-forms (Viscous's `inflated` Goo Ball) are dropped
     /// too: see [`is_alt_form`].
+    #[allow(clippy::too_many_lines)]
     fn add_mesh(
         &mut self,
         part: &MeshPart,
@@ -623,8 +624,35 @@ impl Builder {
             if let Some(a) = attrs.tangent {
                 attributes.insert(Valid(json::mesh::Semantic::Tangents), a);
             }
-            for (i, a) in attrs.texcoords.iter().enumerate() {
-                attributes.insert(Valid(json::mesh::Semantic::TexCoords(i as u32)), *a);
+            for stream in prim
+                .vertex_buffers
+                .iter()
+                .copied()
+                .chain(std::iter::once(prim.vertex_buffer))
+            {
+                if let Some(stream_attrs) = vb_attrs.get(stream) {
+                    for (semantic, accessor) in [
+                        (json::mesh::Semantic::Normals, stream_attrs.normal),
+                        (json::mesh::Semantic::Tangents, stream_attrs.tangent),
+                    ] {
+                        if let Some(accessor) = accessor {
+                            if self.root.accessors[accessor.value()].count
+                                == self.root.accessors[position.value()].count
+                            {
+                                attributes.entry(Valid(semantic)).or_insert(accessor);
+                            }
+                        }
+                    }
+                    for (index, accessor) in &stream_attrs.texcoords {
+                        if self.root.accessors[accessor.value()].count
+                            == self.root.accessors[position.value()].count
+                        {
+                            attributes
+                                .entry(Valid(json::mesh::Semantic::TexCoords(*index as u32)))
+                                .or_insert(*accessor);
+                        }
+                    }
+                }
             }
             if material_uses_vertex_color(&prim.material, files) {
                 let mut colors = Vec::new();
@@ -733,17 +761,19 @@ impl Builder {
         let texcoords: Vec<_> = vb
             .texcoords
             .iter()
-            .filter(|uv| uv.len() == count)
-            .map(|uv| {
+            .enumerate()
+            .filter(|(_, uv)| !uv.is_empty() && uv.len() == count)
+            .map(|(index, uv)| {
                 let bytes: Vec<u8> = uv.iter().flat_map(f32x).collect();
                 let view = self.add_view(&bytes, json::buffer::Target::ArrayBuffer);
-                self.add_accessor(
+                let accessor = self.add_accessor(
                     view,
                     count,
                     json::accessor::ComponentType::F32,
                     json::accessor::Type::Vec2,
                     None,
-                )
+                );
+                (index, accessor)
             })
             .collect();
         let colors = vb
@@ -1912,7 +1942,7 @@ struct VertexAccessors {
     position: Option<json::Index<json::Accessor>>,
     normal: Option<json::Index<json::Accessor>>,
     tangent: Option<json::Index<json::Accessor>>,
-    texcoords: Vec<json::Index<json::Accessor>>,
+    texcoords: Vec<(usize, json::Index<json::Accessor>)>,
     colors: Vec<json::Index<json::Accessor>>,
     joints0: Option<json::Index<json::Accessor>>,
     weights0: Option<json::Index<json::Accessor>>,
@@ -2030,5 +2060,50 @@ fn fix_duplicate_joints(joints: &mut [[u16; 4]], weights: &mut [[f32; 4]]) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::model::mesh::Primitive;
+
+    #[test]
+    fn auxiliary_uv_streams_keep_semantic_indices() {
+        let positions = VertexBuffer {
+            element_count: 3,
+            positions: vec![[0.0, 0.0, 0.0]; 3],
+            ..Default::default()
+        };
+        let mut texcoords = vec![Vec::new(); 6];
+        texcoords[0] = vec![[0.0, 1.0]; 3];
+        texcoords[5] = vec![[0.25, 0.75]; 3];
+        let uv_stream = VertexBuffer {
+            element_count: 3,
+            texcoords,
+            ..Default::default()
+        };
+        let part = MeshPart {
+            name: "wall".into(),
+            mesh_index: 0,
+            vertex_buffers: vec![positions, uv_stream],
+            primitives: vec![Primitive {
+                vertex_buffer: 0,
+                vertex_buffers: vec![0, 1],
+                material: "wall.vmat".into(),
+                vertex_count: 3,
+                indices: vec![0, 1, 2],
+            }],
+            min_bounds: [0.0; 3],
+            max_bounds: [1.0; 3],
+            bone_weight_count: 0,
+        };
+        let mut builder = Builder::default();
+        let mesh = builder.add_mesh(&part, &mut BTreeMap::new(), None).unwrap();
+        let attributes = &builder.root.meshes[mesh.value()].primitives[0].attributes;
+        assert!(attributes.contains_key(&Valid(json::mesh::Semantic::TexCoords(0))));
+        assert!(attributes.contains_key(&Valid(json::mesh::Semantic::TexCoords(5))));
+        assert!(!attributes.contains_key(&Valid(json::mesh::Semantic::TexCoords(1))));
+        assert_eq!(attributes.len(), 3);
     }
 }

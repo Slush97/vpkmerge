@@ -373,6 +373,12 @@ impl Default for MaterialColorAdjustments {
     }
 }
 
+#[allow(
+    clippy::many_single_char_names,
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn adjust_material_pixels(pixels: &mut [u8], value: &MaterialColorAdjustments) {
     if value.hue == 0.0 && value.saturation == 1.0 && value.brightness == 1.0 {
         return;
@@ -463,7 +469,7 @@ pub fn edit_material_to_addon(
     paint_image(&mut image, options.style, options.phase, options.intensity)?;
     match &mut image.data {
         ImageData::Rgba8(pixels) => adjust_material_pixels(pixels, color),
-        _ => anyhow::bail!("Selected color texture is not RGBA8"),
+        ImageData::Rgba16F(_) => anyhow::bail!("Selected color texture is not RGBA8"),
     }
     let painted = morphic::encode_vtex_png_rgba8888(&image, morphic::TextureFlags::empty())?;
     let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {

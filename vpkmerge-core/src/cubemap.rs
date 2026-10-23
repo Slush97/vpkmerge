@@ -23,6 +23,11 @@ use std::path::Path;
 pub const CUBEMAP_FACE_NAMES: [&str; 6] = ["px", "nx", "py", "ny", "pz", "nz"];
 
 /// Export a two-dimensional texture without clamping its HDR range.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn export_texture_hdr(
     input: &Path,
     from_vpk: Option<&Path>,

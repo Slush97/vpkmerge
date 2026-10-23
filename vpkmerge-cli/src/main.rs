@@ -4782,6 +4782,7 @@ fn run_trippy_preview(args: &TrippyPreviewCmd) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::float_cmp)]
 fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
     let style = vpkmerge_core::TrippyStyle::from_name(&args.style)
         .map_err(|e| anyhow::anyhow!("--style: {e:#}"))?;

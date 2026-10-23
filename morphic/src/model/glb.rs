@@ -581,6 +581,7 @@ impl Builder {
     /// the viewer via `blend_mode='additive'` extras; see [`is_glow_material`]).
     /// Hidden-by-default alt-forms (Viscous's `inflated` Goo Ball) are dropped
     /// too: see [`is_alt_form`].
+    #[allow(clippy::too_many_lines)]
     fn add_mesh(
         &mut self,
         part: &MeshPart,

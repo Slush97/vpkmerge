@@ -383,7 +383,7 @@ pub fn adjust_material_pixels(pixels: &mut [u8], value: &MaterialColorAdjustment
     if value.hue == 0.0 && value.saturation == 1.0 && value.brightness == 1.0 {
         return;
     }
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let r = f64::from(pixel[0]) / 255.0;
         let g = f64::from(pixel[1]) / 255.0;
         let b = f64::from(pixel[2]) / 255.0;

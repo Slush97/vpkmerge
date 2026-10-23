@@ -14,8 +14,8 @@
 use std::path::PathBuf;
 
 use morphic::{
-    decode_at, inspect, replace_face_mip_chain, replace_mip_chain, DecodeOptions, Image, ImageData,
-    TextureFormat,
+    decode_at, inspect, replace_face_mip_chain, replace_mip_chain, resize_mip_chain, DecodeOptions,
+    Image, ImageData, TextureFormat,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -297,4 +297,60 @@ fn dim_mismatch_rejected() {
     let err = replace_mip_chain(&bytes, &bad).expect_err("dim mismatch must reject");
     let msg = err.to_string();
     assert!(msg.contains("size mismatch"), "unexpected: {msg}");
+}
+
+/// Growing a 4x4 constant-color DXT1 (stored canvas 4x4, `FILL_TO_POWER_OF_TWO`
+/// says 1x1) to 256x256 keeps the format, flags and `RED2`, rewrites the fill
+/// block so the whole canvas counts, and builds the compiler's chain down to
+/// 4 px on the short edge.
+#[test]
+fn resize_mip_chain_grows_tiny_dxt1() {
+    let path = fixture("dxt1/default_color_tga_99901565.vtex_c");
+    let bytes = std::fs::read(&path).expect("fixture present");
+    let before = inspect(&bytes).expect("inspect template");
+    assert_eq!((before.actual_width, before.actual_height), (1, 1));
+
+    let mut pixels = Vec::with_capacity(256 * 256 * 4);
+    for y in 0..=255u8 {
+        for x in 0..=255u8 {
+            pixels.extend_from_slice(&[x, y, 255 - x, 255]);
+        }
+    }
+    let mip0 = Image {
+        width: 256,
+        height: 256,
+        data: ImageData::Rgba8(pixels),
+    };
+    let resized = resize_mip_chain(&bytes, &mip0).expect("resize");
+
+    let info = inspect(&resized).expect("inspect resized");
+    assert_eq!(info.format, TextureFormat::Dxt1);
+    assert_eq!(info.flags, before.flags);
+    assert_eq!((info.width, info.height), (256, 256));
+    assert_eq!((info.actual_width, info.actual_height), (256, 256));
+    assert_eq!(info.mip_count, 7);
+    let red2 = |b: &[u8]| {
+        morphic::resource::Resource::parse(b)
+            .expect("parse")
+            .find_block(*b"RED2")
+            .expect("RED2")
+            .to_vec()
+    };
+    assert_eq!(red2(&resized), red2(&bytes));
+
+    for mip in 0..info.mip_count {
+        let img = decode_at(
+            &resized,
+            &DecodeOptions {
+                mip,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("decode resized mip {mip}: {e}"));
+        let edge = 256 >> u32::from(mip);
+        assert_eq!((img.width, img.height), (edge, edge), "mip {mip} dims");
+        if mip == 0 {
+            assert_rgba8_close(&img, &mip0, 8.0, "DXT1 resized mip 0");
+        }
+    }
 }

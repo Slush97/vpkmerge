@@ -49,6 +49,10 @@ on top of it:
   per-face mip pyramid from a new mip-0 [`Image`]. Downsamples 2x2 (box
   filter) at each level, re-encodes in the texture's format, and splices
   every mip. For cubemaps, other faces remain byte-exact.
+- `resize_mip_chain`: the same regeneration for a 2D texture at a new size.
+  The original is only a template for format, flags and the other blocks;
+  the mip chain stops where Valve's compiler stops (4 px short edge for
+  block formats, 1 px for uncompressed).
 
 ```rust
 use morphic::{decode, inspect, replace_mip_chain};
@@ -63,9 +67,9 @@ let modified = replace_mip_chain(&bytes, &img)?;
 std::fs::write("hero_albedo.modified.vtex_c", &modified)?;
 ```
 
-Constraints: same dimensions and same format as the original (no
-resize or format conversion yet), and no support for inline `PNG_*` /
-`JPEG_*` formats (no on-wire mip chain to regenerate).
+Constraints: same format as the original (no format conversion yet),
+same dimensions except through `resize_mip_chain`, and no support for
+inline `PNG_*` / `JPEG_*` formats (no on-wire mip chain to regenerate).
 
 ## Layout
 
@@ -161,9 +165,9 @@ by padding to the next 4x4 multiple via edge replication, then taking the
 encoder's first block; the decoder's matching scratch-buffer path lifts
 those bytes back into the smaller mip dims.
 
-Still pending: same-resource-different-format / different-dim rewrites,
-3D texture arrays, and VPK entry replacement (so a re-encoded `.vtex_c`
-can flow back into a `.vpk` from the CLI / GUI).
+Still pending: same-resource-different-format rewrites, 3D texture
+arrays, and VPK entry replacement (so a re-encoded `.vtex_c` can flow
+back into a `.vpk` from the CLI / GUI).
 
 ## Attribution
 

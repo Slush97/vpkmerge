@@ -9,6 +9,8 @@
 //!   new mip-0 [`Image`] for one face, downsample it 2x2 (box) all the way
 //!   down, re-encode each level in the texture's format, and splice the
 //!   full per-face mip pyramid. Other faces are untouched.
+//! - [`resize_mip_chain`]: the same regeneration for a 2D texture at a new
+//!   size, using the original only as a format/flags template.
 //!
 //! The address arithmetic for both paths lives in
 //! [`crate::texture::face_mip_byte_range`]; this module just calls it,
@@ -18,7 +20,8 @@ use crate::error::{DecodeError, EncodeError};
 use crate::resource::Resource;
 use crate::texture::format::{TextureFlags, TextureFormat};
 use crate::texture::{
-    encode::encode_image, face_mip_byte_range, mip_dims, parse_texture_header, Image, ImageData,
+    encode::encode_image, face_mip_byte_range, fill_to_power_of_two_payload, mip_dims,
+    parse_texture_header, u16_dimension, Image, ImageData,
 };
 use crate::DecodeOptions;
 
@@ -149,6 +152,65 @@ pub fn replace_face_mip_chain(
 /// Convenience for the non-cubemap case: regenerate face 0's full mip chain.
 pub fn replace_mip_chain(resource_bytes: &[u8], new_mip0: &Image) -> Result<Vec<u8>, EncodeError> {
     replace_face_mip_chain(resource_bytes, 0, new_mip0)
+}
+
+/// Rebuild a 2D texture at `new_mip0`'s size, which may differ from the
+/// template's, keeping the template's format, flags and every other block.
+///
+/// The mip chain is regenerated the way Valve's texture compiler lays it out:
+/// block-compressed formats stop once the short edge reaches 4 px,
+/// uncompressed ones go down to 1 px. A `FILL_TO_POWER_OF_TWO` extra-data
+/// block is rewritten to the new size, since the new image fills the whole
+/// canvas. Cubemaps, volumes and inline formats are rejected.
+pub fn resize_mip_chain(template: &[u8], new_mip0: &Image) -> Result<Vec<u8>, EncodeError> {
+    let resource = Resource::parse(template)?;
+    let data = resource.data_block()?;
+    let meta = resource.data_block_meta()?;
+    let info = parse_texture_header(data)?;
+    if is_inline_format(info.format)
+        || info.flags.contains(TextureFlags::CUBE_TEXTURE)
+        || info.depth != 1
+    {
+        return Err(EncodeError::Unimplemented(info.format));
+    }
+    require_pixel_kind(new_mip0, info.format)?;
+    let width = u16_dimension(new_mip0.width, "width")?;
+    let height = u16_dimension(new_mip0.height, "height")?;
+    let floor = match info.format {
+        TextureFormat::Rgba8888 | TextureFormat::Bgra8888 | TextureFormat::Rgba16161616F => 1,
+        _ => 4,
+    };
+    let mut mip_count = 1u8;
+    let mut short_edge = width.min(height);
+    while short_edge > floor {
+        short_edge /= 2;
+        mip_count += 1;
+    }
+
+    let header = meta.offset as usize;
+    let mut out = template[..header + meta.size as usize].to_vec();
+    out[header + 20..header + 22].copy_from_slice(&width.to_le_bytes());
+    out[header + 22..header + 24].copy_from_slice(&height.to_le_bytes());
+    out[header + 27] = mip_count;
+    if let Some(fill) = fill_to_power_of_two_payload(data) {
+        let at = header + fill;
+        out[at + 2..at + 4].copy_from_slice(&width.to_le_bytes());
+        out[at + 4..at + 6].copy_from_slice(&height.to_le_bytes());
+    }
+
+    let mut levels = Vec::with_capacity(usize::from(mip_count));
+    let mut current = new_mip0.clone();
+    for mip in 0..mip_count {
+        levels.push(encode_image(&current, info.format)?);
+        if mip + 1 < mip_count {
+            let (mw, mh) = mip_dims(width, height, mip + 1);
+            current = downsample_to(&current, u32::from(mw), u32::from(mh));
+        }
+    }
+    for level in levels.iter().rev() {
+        out.extend_from_slice(level);
+    }
+    Ok(out)
 }
 
 fn is_inline_format(fmt: TextureFormat) -> bool {

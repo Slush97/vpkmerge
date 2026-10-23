@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix: `trippy-skin --material` saved the part's color texture as an inline PNG with one mip, so hero color maps (alpha 0 almost everywhere) decoded black in `model export` and `texture-hdr`, even for an edit with no changes. The copy now keeps the source texture's format, flags and mip chain (BC7 for hero maps). A 4x4 constant-color texture painted at 256x256 keeps its format and gets a full mip chain.
+
+### Library (`morphic`)
+
+- `morphic::resize_mip_chain(template, new_mip0)` rebuilds a 2D texture at a new size in the template's format and flags, with the mip chain Valve's compiler would build for that size.
+
 ## v0.25.0
 
 Hideout previews and per-material skin edits, for Grimoire's Door Stuck skin editor. Contributed by @oldreceipt (#69).

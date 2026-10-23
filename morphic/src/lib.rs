@@ -24,7 +24,10 @@ pub mod sound;
 mod texture;
 pub mod vfx_expr;
 
-pub use edit::{replace_face0_mip0, replace_face_mip, replace_face_mip_chain, replace_mip_chain};
+pub use edit::{
+    replace_face0_mip0, replace_face_mip, replace_face_mip_chain, replace_mip_chain,
+    resize_mip_chain,
+};
 pub use error::{DecodeError, EncodeError};
 pub use material::{compile_pbr_vmat, encode_pbr_vmat_c, PbrVmatParams};
 pub use sound::{

@@ -496,7 +496,7 @@ pub fn edit_material_to_addon(
     let changed = if edits.is_empty() {
         changed
     } else {
-        morphic::patch_kv3_resource_doubles(&changed, &edits)?
+        patch_material_doubles(&changed, &edits)?
     };
     let resource = morphic::resource::Resource::parse(&changed)?;
     let rerl_index = resource
@@ -656,7 +656,7 @@ pub fn trippy_skin_to_addon(
         if edits.is_empty() {
             continue;
         }
-        match morphic::patch_kv3_resource_doubles(&bytes, &edits) {
+        match patch_material_doubles(&bytes, &edits) {
             Ok(new_bytes) => {
                 packed.insert(material.to_string(), new_bytes);
                 report.materials_scrolled += 1;
@@ -864,7 +864,7 @@ pub fn trippy_ability_vfx_to_addon(
                         is_weapon_path(entry),
                     );
                     if !edits.is_empty() {
-                        match morphic::patch_kv3_resource_doubles(&working, &edits) {
+                        match patch_material_doubles(&working, &edits) {
                             Ok(new_bytes) => {
                                 working = new_bytes;
                                 changed = true;
@@ -1754,6 +1754,31 @@ fn vaporwave(u: f32, v: f32, phase: f32) -> [u8; 3] {
     pack_rgb(rgb)
 }
 
+/// Apply [`trippy_material_edits`] to a material. A param stored as a tagless
+/// 0.0/1.0 (most hero materials keep `g_flSelfIllumScale1 = 1` that way) has no
+/// bytes to patch in place, so the material is then re-encoded with the edits
+/// applied to its tree, the same promotion the material recolor uses.
+fn patch_material_doubles(bytes: &[u8], edits: &[(Vec<Seg>, f64)]) -> Result<Vec<u8>> {
+    if let Ok(patched) = morphic::patch_kv3_resource_doubles(bytes, edits) {
+        return Ok(patched);
+    }
+    let mut tree = morphic::decode_kv3_resource(bytes)?;
+    for (path, new) in edits {
+        let slot = path
+            .iter()
+            .try_fold(&mut tree, |node, seg| match seg {
+                Seg::Key(key) => node.get_mut(key),
+                Seg::Index(i) => match node {
+                    Value::Array(items) => items.get_mut(*i),
+                    _ => None,
+                },
+            })
+            .context("material param path")?;
+        *slot = Value::Double(*new);
+    }
+    morphic::encode_kv3_resource_like(bytes, &tree).context("re-encoding material params")
+}
+
 fn vector_param_index(v: &Value, name: &str) -> Option<usize> {
     v.get("m_vectorParams")?
         .as_array()?
@@ -2145,6 +2170,98 @@ mod tests {
                 .any(|p| p[0].max(p[1]).max(p[2]) > 0 && p[..3] != [255, 255, 255]),
             "full-canvas paint should differ (sanity check)"
         );
+    }
+
+    fn param_at<'a>(value: &'a Value, path: &[Seg]) -> Option<&'a Value> {
+        path.iter().try_fold(value, |node, seg| match seg {
+            Seg::Key(key) => node.get(key),
+            Seg::Index(i) => node.as_array()?.get(*i),
+        })
+    }
+
+    #[test]
+    fn holo_promotes_a_tagless_self_illum_scale() {
+        use morphic::kv3::{Node, Val};
+        let source = std::fs::read(format!(
+            "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read material fixture");
+        // Most shipped hero materials store g_flSelfIllumScale1 = 1 as a tagless
+        // DOUBLE_ONE, which leaves the in-place double patch nothing to overwrite.
+        let data = morphic::kv3_resource_data_block(&source).expect("data block");
+        let mut doc = morphic::kv3::decode_lossless(&data).expect("lossless decode");
+        let Val::Object(root) = &mut doc.root.val else {
+            panic!("material root is an object");
+        };
+        let Val::Typed { items, .. } = &mut root
+            .iter_mut()
+            .find(|(k, _)| k == "m_floatParams")
+            .expect("m_floatParams")
+            .1
+            .val
+        else {
+            panic!("m_floatParams is a typed object array");
+        };
+        let members = items
+            .iter_mut()
+            .find_map(|item| match item {
+                Val::Object(members)
+                    if members.iter().any(|(k, n)| {
+                        k == "m_name"
+                            && matches!(&n.val, Val::String(s) if s == "g_flSelfIllumScale1")
+                    }) =>
+                {
+                    Some(members)
+                }
+                _ => None,
+            })
+            .expect("g_flSelfIllumScale1");
+        members
+            .iter_mut()
+            .find(|(k, _)| k == "m_flValue")
+            .expect("m_flValue")
+            .1 = Node {
+            tag: 18,
+            flag: None,
+            val: Val::Implied,
+        };
+        let new_data = morphic::kv3::encode_v5(&doc).expect("encode v5");
+        let tagless =
+            morphic::replace_resource_data_block(&source, &new_data).expect("rebuild resource");
+
+        let value = morphic::decode_kv3_resource(&tagless).expect("decode");
+        let options = TrippySkinOptions {
+            style: TrippyStyle::Holo,
+            ..TrippySkinOptions::default()
+        };
+        let edits = trippy_material_edits(&value, &options, false);
+        assert!(morphic::patch_kv3_resource_doubles(&tagless, &edits).is_err());
+
+        let patched = patch_material_doubles(&tagless, &edits).expect("patch holo params");
+        let got = morphic::decode_kv3_resource(&patched).expect("decode patched");
+        for (path, want) in &edits {
+            assert_eq!(
+                param_at(&got, path),
+                Some(&Value::Double(*want)),
+                "{path:?}"
+            );
+        }
+        let mut expected = value;
+        for (path, want) in &edits {
+            let slot = path
+                .iter()
+                .try_fold(&mut expected, |node, seg| match seg {
+                    Seg::Key(key) => node.get_mut(key),
+                    Seg::Index(i) => match node {
+                        Value::Array(items) => items.get_mut(*i),
+                        _ => None,
+                    },
+                })
+                .expect("edit path");
+            *slot = Value::Double(*want);
+        }
+        assert_eq!(got, expected, "only the holo params changed");
     }
 
     #[test]

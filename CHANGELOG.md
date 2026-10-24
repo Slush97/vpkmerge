@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fix: `trippy-skin --material` saved the part's color texture as an inline PNG with one mip, so hero color maps (alpha 0 almost everywhere) decoded black in `model export` and `texture-hdr`, even for an edit with no changes. The copy now keeps the source texture's format, flags and mip chain (BC7 for hero maps). A 4x4 constant-color texture painted at 256x256 keeps its format and gets a full mip chain.
+- Fix: the `holo` and `lava` styles failed with "double patch path not found" on `trippy-skin --material`, and the whole-hero `trippy-skin` and `trippy-vfx` skipped the same materials. Most hero materials store `g_flSelfIllumScale1 = 1` as a tagless value with no bytes to patch in place. Those materials are now re-encoded with the new values, the way material recolors already promote a neutral tint.
 
 ### Library (`morphic`)
 

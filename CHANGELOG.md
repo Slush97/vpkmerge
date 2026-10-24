@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.26.0
+
+Material finishes, movement effects and motion previews for Grimoire's Door Stuck editor. Contributed by @oldreceipt (#73).
+
+### CLI (`vpkmerge` 0.26)
+
+- New `workshop finish --vpk VPK... --entry VMAT --roughness X --metalness X --encode-vpk OUT` sets one material's roughness and metalness. Bound roughness/metalness masks are cloned to a path scoped to that material, so other parts sharing the texture stay unchanged. Only `pbr.vfx` materials without animated finish parameters are supported; anything else is an error.
+- New `workshop movement --vpk VPK --kind dash|heavy-melee --color HEX --encode-vpk OUT` recolors the current game's dash or heavy-melee particles. Dash trails also take `--end-color` (gradient) or `--rainbow`, `--brightness` (0.25 to 4), `--illuminated`, and `--image PNG` (up to 512 px, 4 MiB) to swap the rope trail for sprite stamps, with `--outline-color` for image trails. Stamps use a game-authored BC7 sprite layout with its mip chain and transparency, and the particle's resource references are repointed with the renderer.
+- New `workshop motions --vpk VPK... --entry VMDL --clip NAME=CLIP... --out GLB` exports up to eight animation clips onto a hero's rig as a mesh-free GLB for the viewer. `NAME=legacy:CLIP` picks an embedded legacy animation. Root translation is dropped for in-place playback; additive clips and clips that don't match the rig are rejected.
+
+### Library (`vpkmerge-core` 0.26)
+
+- `vpkmerge_core::workshop::{finish_material, movement_fx, MovementFxOptions}` and `vpkmerge_core::workshop_motion::export_motions`.
+
 ## v0.25.1
 
 Skin part edits from Grimoire's Door Stuck skin editor no longer render black, and the `holo` and `lava` styles work on hero materials (#71).

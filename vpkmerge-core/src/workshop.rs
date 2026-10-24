@@ -6,6 +6,9 @@ use morphic::kv3::{Seg, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::vmat_style::{patch_vmat_params, VmatEdit};
+const DASH_STAMP_PATH: &str = "materials/grimoire/movement/dash_stamp.vtex";
+const DASH_STAMP_TEMPLATE: &str =
+    "materials/particle/abilities/priest/priest_potent_vapors_cross.vtex_c";
 
 fn compiled(entry: &str) -> String {
     if entry.ends_with("_c") {
@@ -157,6 +160,16 @@ fn flatten_channel(image: &mut morphic::Image, channel: usize, value: f64) -> Re
     Ok(())
 }
 
+#[derive(Default)]
+pub struct MovementFxOptions<'a> {
+    pub end_color: Option<&'a str>,
+    pub rainbow: bool,
+    pub image: Option<&'a Path>,
+    pub brightness: Option<f64>,
+    pub illuminated: bool,
+    pub outline_color: Option<&'a str>,
+}
+
 /// Current-game movement definitions, recolored with optional image stamps on
 /// dash trail spritecards. No third-party particle definitions are used.
 ///
@@ -166,9 +179,26 @@ pub fn movement_fx(
     base: &Path,
     kind: &str,
     color: &str,
-    image: Option<&Path>,
+    options: &MovementFxOptions<'_>,
     output: &Path,
 ) -> Result<()> {
+    let MovementFxOptions {
+        end_color,
+        rainbow,
+        image,
+        brightness,
+        illuminated,
+        outline_color,
+    } = *options;
+    let brightness = brightness.unwrap_or(1.0);
+    ensure!(
+        brightness.is_finite() && (0.25..=4.0).contains(&brightness),
+        "Brightness must be between 0.25 and 4"
+    );
+    ensure!(
+        outline_color.is_none() || image.is_some(),
+        "Outlines require an image trail"
+    );
     ensure!(
         matches!(kind, "dash" | "heavy-melee"),
         "Unknown movement effect"
@@ -178,43 +208,17 @@ pub fn movement_fx(
         "Image stamps are supported on dash trails"
     );
     let rgb = parse_color(color)?;
-    let pak = valve_pak::open(base)?;
-    let paks = [pak];
-    let mut queue: Vec<String> = if kind == "dash" {
-        ["air_dash", "down_dash", "roll_jump"]
-            .iter()
-            .map(|n| format!("particles/generic/{n}.vpcf_c"))
-            .collect()
-    } else {
-        paks[0]
-            .file_paths()
-            .filter(|p| {
-                p.starts_with("particles/abilities/melee/")
-                    && p.ends_with(".vpcf_c")
-                    && p.rsplit('/').next().is_some_and(|n| n.contains("heavy"))
-            })
-            .cloned()
-            .collect()
-    };
     ensure!(
-        !queue.is_empty(),
-        "No matching movement effects in this game build"
+        !rainbow || end_color.is_none(),
+        "Choose a gradient or rainbow"
     );
-    let image_path = "materials/grimoire/movement/dash_stamp.vtex";
+    let end_rgb = end_color.map(parse_color).transpose()?;
+    let paks = [valve_pak::open(base)?];
+    let mut queue = movement_roots(&paks[0], kind)?;
     let mut files = BTreeMap::<String, Vec<u8>>::new();
     if let Some(path) = image {
-        let png = std::fs::read(path)?;
-        ensure!(png.len() <= 4 * 1024 * 1024, "Stamp image exceeds 4 MiB");
-        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)?;
-        ensure!(
-            decoded.width() <= 512 && decoded.height() <= 512,
-            "Stamp image exceeds 512 pixels"
-        );
-        let flags = morphic::TextureFlags::SUGGEST_CLAMP_S | morphic::TextureFlags::SUGGEST_CLAMP_T;
-        files.insert(
-            compiled(image_path),
-            morphic::encode_vtex_png_rgba8888_from_png(&png, flags)?,
-        );
+        let template = read(&paks, DASH_STAMP_TEMPLATE)?;
+        files.insert(compiled(DASH_STAMP_PATH), stamp_texture(path, &template)?);
     }
     let mut seen = BTreeSet::new();
     while let Some(entry) = queue.pop() {
@@ -245,13 +249,28 @@ pub fn movement_fx(
             }
         }
         let mut colors = Vec::new();
-        collect_colors(&tree, &mut Vec::new(), false, rgb, &mut colors);
+        let colored = kind != "dash" || entry.ends_with("_trail.vpcf_c") || rainbow;
+        if colored {
+            collect_colors(&tree, &mut Vec::new(), false, rgb, &mut colors);
+        }
         let mut bytes = morphic::patch_kv3_resource_scalars(&original, &colors)?;
         if image.is_some()
             && entry.starts_with("particles/generic/")
             && entry.ends_with("_trail.vpcf_c")
         {
-            bytes = image_trail(&bytes, &tree, image_path)?;
+            bytes = image_trail(&bytes, &tree, DASH_STAMP_PATH)?;
+        }
+        if kind == "dash" && entry.ends_with("_trail.vpcf_c") {
+            bytes = trail_appearance(
+                &bytes,
+                image.is_some(),
+                brightness,
+                illuminated,
+                outline_color,
+            )?;
+        }
+        if colored && (rainbow || end_rgb.is_some()) {
+            bytes = color_ramp(&bytes, rgb, end_rgb, rainbow)?;
         }
         files.insert(entry, bytes);
     }
@@ -262,12 +281,152 @@ pub fn movement_fx(
     crate::pack(&refs, output)
 }
 
+fn movement_roots(pak: &valve_pak::VPK, kind: &str) -> Result<Vec<String>> {
+    let roots: Vec<String> = if kind == "dash" {
+        ["air_dash", "down_dash", "roll_jump"]
+            .iter()
+            .map(|name| format!("particles/generic/{name}.vpcf_c"))
+            .collect()
+    } else {
+        pak.file_paths()
+            .filter(|path| {
+                path.starts_with("particles/abilities/melee/")
+                    && path.ends_with(".vpcf_c")
+                    && path
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|name| name.contains("heavy"))
+            })
+            .cloned()
+            .collect()
+    };
+    ensure!(
+        !roots.is_empty(),
+        "No matching movement effects in this game build"
+    );
+    Ok(roots)
+}
+
+fn stamp_texture(path: &Path, template: &[u8]) -> Result<Vec<u8>> {
+    let png = std::fs::read(path)?;
+    ensure!(png.len() <= 4 * 1024 * 1024, "Stamp image exceeds 4 MiB");
+    let (width, height) =
+        image::ImageReader::with_format(std::io::Cursor::new(&png), image::ImageFormat::Png)
+            .into_dimensions()?;
+    ensure!(
+        width > 0 && height > 0 && width <= 512 && height <= 512,
+        "Stamp image exceeds 512 pixels"
+    );
+    // Use the GPU format and mip layout of a game-authored sprite texture.
+    crate::icon::build_icon_from_template(template, &png)
+}
+
+/// Append an RGB operator without re-encoding the compiled resource. Particle
+/// age gives a gradient along the tail; collection age cycles the rainbow.
+fn color_ramp(
+    bytes: &[u8],
+    start: [i64; 3],
+    end: Option<[i64; 3]>,
+    rainbow: bool,
+) -> Result<Vec<u8>> {
+    let tree = morphic::decode_kv3_resource(bytes)?;
+    let Some(operators) = tree.get("m_Operators").and_then(Value::as_array) else {
+        return Ok(bytes.to_vec());
+    };
+    let colors = if rainbow {
+        vec![
+            [255, 50, 50],
+            [255, 230, 50],
+            [50, 255, 90],
+            [50, 220, 255],
+            [100, 70, 255],
+            [255, 60, 200],
+            [255, 50, 50],
+        ]
+    } else {
+        vec![start, end.unwrap_or(start)]
+    };
+    let intervals = u32::try_from(colors.len() - 1)?;
+    let stops = colors
+        .into_iter()
+        .enumerate()
+        .map(|(i, rgb)| {
+            Ok(Value::Object(vec![
+                (
+                    "m_flPosition".into(),
+                    Value::Double(f64::from(u32::try_from(i)?) / f64::from(intervals)),
+                ),
+                (
+                    "m_Color".into(),
+                    Value::Array(rgb.into_iter().map(Value::Int).collect()),
+                ),
+            ]))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let input = Value::Object(vec![
+        (
+            "m_nType".into(),
+            Value::String(
+                if rainbow {
+                    "PF_TYPE_COLLECTION_AGE"
+                } else {
+                    "PF_TYPE_PARTICLE_AGE_NORMALIZED"
+                }
+                .into(),
+            ),
+        ),
+        (
+            "m_nInputMode".into(),
+            Value::String(
+                if rainbow {
+                    "PF_INPUT_MODE_LOOPED"
+                } else {
+                    "PF_INPUT_MODE_CLAMPED"
+                }
+                .into(),
+            ),
+        ),
+        ("m_flInput0".into(), Value::Double(0.0)),
+        (
+            "m_flInput1".into(),
+            Value::Double(if rainbow { 1.5 } else { 1.0 }),
+        ),
+        ("m_flOutput0".into(), Value::Double(0.0)),
+        ("m_flOutput1".into(), Value::Double(1.0)),
+    ]);
+    let operator = Value::Object(vec![
+        ("_class".into(), Value::String("C_OP_SetVec".into())),
+        ("m_nOutputField".into(), Value::Int(6)),
+        (
+            "m_InputValue".into(),
+            Value::Object(vec![
+                (
+                    "m_nType".into(),
+                    Value::String("PVEC_TYPE_FLOAT_INTERP_GRADIENT".into()),
+                ),
+                ("m_FloatInterp".into(), input),
+                (
+                    "m_Gradient".into(),
+                    Value::Object(vec![("m_Stops".into(), Value::Array(stops))]),
+                ),
+            ]),
+        ),
+    ]);
+    Ok(morphic::patch_kv3_resource_array_insert(
+        bytes,
+        &[Seg::Key("m_Operators".into())],
+        operators.len(),
+        &operator,
+    )?)
+}
+
 fn image_trail(bytes: &[u8], tree: &Value, image_path: &str) -> Result<Vec<u8>> {
     let renderers = tree
         .get("m_Renderers")
         .and_then(Value::as_array)
         .context("Dash trail has no renderer")?;
     let mut strings = Vec::new();
+    let mut references = Vec::new();
     for (ri, renderer) in renderers.iter().enumerate() {
         ensure!(
             renderer.get("_class").and_then(Value::as_str) == Some("C_OP_RenderRopes"),
@@ -289,26 +448,94 @@ fn image_trail(bytes: &[u8], tree: &Value, image_path: &str) -> Result<Vec<u8>> 
                 "Dash trail has another enabled layer; image stamps need a recipe update"
             );
         }
-        strings.push((
-            [
-                root.clone(),
-                vec![
-                    Seg::Key("m_vecTexturesInput".into()),
-                    Seg::Index(0),
-                    Seg::Key("m_hTexture".into()),
-                ],
-            ]
-            .concat(),
-            image_path.into(),
-        ));
+        let original_texture = textures[0]
+            .get("m_hTexture")
+            .and_then(Value::as_str)
+            .context("Dash trail has no primary texture resource")?;
+        references.push((original_texture.into(), image_path.into()));
         if renderer.get("m_nOutputBlendMode").is_some() {
             strings.push((
                 [root, vec![Seg::Key("m_nOutputBlendMode".into())]].concat(),
-                "PARTICLE_BLEND_MODE_ALPHA".into(),
+                "PARTICLE_OUTPUT_BLEND_MODE_ALPHA".into(),
             ));
         }
     }
-    morphic::patch_kv3_resource_strings_adding(bytes, &strings).map_err(Into::into)
+    let bytes = morphic::patch_kv3_resource_strings_adding(bytes, &strings)?;
+    // The engine precaches RERL, while the viewer follows the DATA string.
+    // Redirect both so the game loads the same texture the preview displays.
+    Ok(morphic::repoint_resource_refs(&bytes, &references)?.0)
+}
+
+fn trail_appearance(
+    bytes: &[u8],
+    image: bool,
+    brightness: f64,
+    illuminated: bool,
+    outline: Option<&str>,
+) -> Result<Vec<u8>> {
+    if !image && (brightness - 1.0).abs() < f64::EPSILON && !illuminated && outline.is_none() {
+        return Ok(bytes.to_vec());
+    }
+    let resource = morphic::resource::Resource::parse(bytes)?;
+    let template = morphic::kv3::decode_lossless(resource.data_block()?)?;
+    let mut tree = template.to_value();
+    let Some(Value::Array(renderers)) = tree.get_mut("m_Renderers") else {
+        bail!("Trail has no renderers")
+    };
+    for renderer in renderers {
+        let mut light = renderer
+            .get("m_flSelfIllumAmount")
+            .cloned()
+            .unwrap_or_else(|| {
+                Value::Object(vec![
+                    ("m_nType".into(), Value::String("PF_TYPE_LITERAL".into())),
+                    ("m_flLiteralValue".into(), Value::Double(1.0)),
+                ])
+            });
+        let value = light
+            .get_mut("m_flLiteralValue")
+            .context("Trail illumination is not a literal")?;
+        let base = if image {
+            1.0
+        } else {
+            value
+                .as_f64()
+                .context("Trail illumination is not numeric")?
+        };
+        *value = Value::Double(base * brightness * if illuminated { 3.0 } else { 1.0 });
+        let Value::Object(fields) = renderer else {
+            bail!("Trail renderer is not an object")
+        };
+        if let Some((_, old)) = fields
+            .iter_mut()
+            .find(|(name, _)| name == "m_flSelfIllumAmount")
+        {
+            *old = light;
+        } else {
+            fields.push(("m_flSelfIllumAmount".into(), light));
+        }
+        if let Some(color) = outline {
+            for (key, value) in [
+                ("m_bOutline", Value::Bool(true)),
+                (
+                    "m_OutlineColor",
+                    Value::Array(parse_color(color)?.into_iter().map(Value::Int).collect()),
+                ),
+                ("m_flOutlineStart0", Value::Double(0.1)),
+                ("m_flOutlineStart1", Value::Double(0.25)),
+                ("m_flOutlineEnd0", Value::Double(0.7)),
+                ("m_flOutlineEnd1", Value::Double(0.9)),
+            ] {
+                if let Some((_, old)) = fields.iter_mut().find(|(name, _)| name == key) {
+                    *old = value;
+                } else {
+                    fields.push((key.into(), value));
+                }
+            }
+        }
+    }
+    let data = morphic::kv3::encode_v5_like(&tree, &template)?;
+    Ok(resource.rebuild_with_data(&data)?)
 }
 
 fn parse_color(color: &str) -> Result<[i64; 3]> {
@@ -376,31 +603,224 @@ fn collect_colors(
 mod tests {
     use super::*;
     #[test]
+    fn stamp_texture_keeps_gpu_format_mips_and_transparency() {
+        let template = std::fs::read(format!(
+            "{}/../morphic/fixtures/bc7/generic_sleep_icon.vtex_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("stamp.png");
+        image::RgbaImage::from_fn(64, 64, |x, _| {
+            image::Rgba([200, 30, 100, if x < 32 { 0 } else { 255 }])
+        })
+        .save(&path)
+        .unwrap();
+        let output = stamp_texture(&path, &template).unwrap();
+        let before = morphic::inspect(&template).unwrap();
+        let after = morphic::inspect(&output).unwrap();
+        assert_eq!(after.format, morphic::TextureFormat::Bc7);
+        assert_eq!(after.mip_count, before.mip_count);
+        assert_eq!((after.width, after.height), (before.width, before.height));
+        let morphic::ImageData::Rgba8(pixels) = morphic::decode(&output).unwrap().data else {
+            panic!()
+        };
+        assert_eq!(pixels[3], 0);
+        assert_eq!(pixels[pixels.len() - 1], 255);
+    }
+
+    #[test]
+    fn image_trail_accepts_double_illumination_and_preserves_the_particle_tree() {
+        let container = std::fs::read(format!(
+            "{}/../morphic/fixtures/particle/grenade_frag_fx.vpcf_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let tree = Value::Object(vec![
+            (
+                "_class".into(),
+                Value::String("CParticleSystemDefinition".into()),
+            ),
+            ("m_nMaxParticles".into(), Value::Int(20)),
+            (
+                "m_Renderers".into(),
+                Value::Array(vec![Value::Object(vec![
+                    ("_class".into(), Value::String("C_OP_RenderRopes".into())),
+                    (
+                        "m_flSelfIllumAmount".into(),
+                        Value::Object(vec![
+                            ("m_nType".into(), Value::String("PF_TYPE_LITERAL".into())),
+                            ("m_flLiteralValue".into(), Value::Double(0.2)),
+                        ]),
+                    ),
+                    (
+                        "m_nOutputBlendMode".into(),
+                        Value::String("PARTICLE_OUTPUT_BLEND_MODE_ADD".into()),
+                    ),
+                    (
+                        "m_vecTexturesInput".into(),
+                        Value::Array(vec![Value::Object(vec![(
+                            "m_hTexture".into(),
+                            Value::String("materials/particle/base_sprite.vtex".into()),
+                        )])]),
+                    ),
+                ])]),
+            ),
+        ]);
+        let resource = morphic::resource::Resource::parse(&container).unwrap();
+        let format = morphic::kv3::decode_lossless(resource.data_block().unwrap())
+            .unwrap()
+            .format;
+        let old_texture = "materials/particle/base_sprite.vtex";
+        let other_texture = "materials/particle/noise.vtex";
+        let references = morphic::resource::write_rerl(&[
+            (
+                morphic::resource::resource_id(old_texture),
+                old_texture.into(),
+            ),
+            (
+                morphic::resource::resource_id(other_texture),
+                other_texture.into(),
+            ),
+        ]);
+        let data = morphic::kv3::encode(&tree, &format);
+        let index = |kind| {
+            resource
+                .blocks()
+                .iter()
+                .position(|block| block.kind == kind)
+                .unwrap()
+        };
+        let source = resource
+            .rebuild_with_blocks(&[(index(*b"DATA"), &data), (index(*b"RERL"), &references)])
+            .unwrap();
+        let image = image_trail(&source, &tree, DASH_STAMP_PATH).unwrap();
+        let styled = trail_appearance(&image, true, 1.5, true, Some("#ff00ff")).unwrap();
+        let after = morphic::decode_kv3_resource(&styled).unwrap();
+        assert_eq!(after.get("m_nMaxParticles"), tree.get("m_nMaxParticles"));
+        let renderer = &after.get("m_Renderers").unwrap().as_array().unwrap()[0];
+        assert_eq!(
+            renderer.get("_class").unwrap().as_str(),
+            Some("C_OP_RenderSprites")
+        );
+        assert_eq!(
+            renderer
+                .get("m_flSelfIllumAmount")
+                .unwrap()
+                .get("m_flLiteralValue")
+                .unwrap()
+                .as_f64(),
+            Some(4.5)
+        );
+        assert_eq!(renderer.get("m_bOutline"), Some(&Value::Bool(true)));
+        let resource = morphic::resource::Resource::parse(&styled).unwrap();
+        let references =
+            morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
+        assert!(references.contains(&(
+            morphic::resource::resource_id(DASH_STAMP_PATH),
+            DASH_STAMP_PATH.into()
+        )));
+        assert!(!references.iter().any(|(_, path)| path == old_texture));
+        assert!(references.contains(&(
+            morphic::resource::resource_id(other_texture),
+            other_texture.into()
+        )));
+        assert_eq!(
+            renderer.get("m_nOutputBlendMode").unwrap().as_str(),
+            Some("PARTICLE_OUTPUT_BLEND_MODE_ALPHA")
+        );
+    }
+    #[test]
+    fn gradient_operator_roundtrips_compiled_particle_without_changing_other_fields() {
+        let source = std::fs::read(format!(
+            "{}/../morphic/fixtures/particle/grenade_frag_fx.vpcf_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let before = morphic::decode_kv3_resource(&source).unwrap();
+        let count = before.get("m_Operators").unwrap().as_array().unwrap().len();
+        let patched = color_ramp(&source, [255, 0, 0], Some([0, 0, 255]), false).unwrap();
+        let after = morphic::decode_kv3_resource(&patched).unwrap();
+        let operators = after.get("m_Operators").unwrap().as_array().unwrap();
+        assert_eq!(operators.len(), count + 1);
+        assert_eq!(after.get("m_Initializers"), before.get("m_Initializers"));
+        assert_eq!(after.get("m_Renderers"), before.get("m_Renderers"));
+        assert_eq!(operators[count].get("m_nOutputField"), Some(&Value::Int(6)));
+        assert_eq!(
+            operators[count]
+                .get("m_InputValue")
+                .unwrap()
+                .get("m_FloatInterp")
+                .unwrap()
+                .get("m_nType")
+                .unwrap()
+                .as_str(),
+            Some("PF_TYPE_PARTICLE_AGE_NORMALIZED")
+        );
+    }
+    #[test]
     fn finish_clones_a_bound_mask_without_changing_shared_source() {
-        let donor = std::fs::read(format!("{}/../morphic/fixtures/material/vindicta_headv2.vmat_c", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let donor = std::fs::read(format!(
+            "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
         let tree = morphic::decode_kv3_resource(&donor).unwrap();
-        let pixels = morphic::Image { width: 1, height: 1, data: morphic::ImageData::Rgba8(vec![127, 140, 200, 255]) };
-        let texture = morphic::encode_vtex_png_rgba8888(&pixels, morphic::TextureFlags::empty()).unwrap();
+        let pixels = morphic::Image {
+            width: 1,
+            height: 1,
+            data: morphic::ImageData::Rgba8(vec![127, 140, 200, 255]),
+        };
+        let texture =
+            morphic::encode_vtex_png_rgba8888(&pixels, morphic::TextureFlags::empty()).unwrap();
         let mut files = vec![("materials/test/part.vmat_c".to_string(), donor.clone())];
-        for param in tree.get("m_textureParams").and_then(Value::as_array).unwrap() {
+        for param in tree
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap()
+        {
             let path = param.get("m_pValue").and_then(Value::as_str).unwrap();
             files.push((compiled(path), texture.clone()));
         }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source_dir.vpk");
         let output = dir.path().join("finish_dir.vpk");
-        crate::pack(&files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect::<Vec<_>>(), &source).unwrap();
+        crate::pack(
+            &files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+            &source,
+        )
+        .unwrap();
         let source_bytes = std::fs::read(&source).unwrap();
-        finish_material(std::slice::from_ref(&source), "materials/test/part.vmat", 0.5, 1.0, &output).unwrap();
+        finish_material(
+            std::slice::from_ref(&source),
+            "materials/test/part.vmat",
+            0.5,
+            1.0,
+            &output,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
         let paks = open(&[output]).unwrap();
-        let edited = morphic::decode_kv3_resource(&read(&paks, "materials/test/part.vmat_c").unwrap()).unwrap();
-        let params = edited.get("m_textureParams").and_then(Value::as_array).unwrap();
-        let normal = params.iter().find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_tNormalRoughness")).unwrap();
+        let edited =
+            morphic::decode_kv3_resource(&read(&paks, "materials/test/part.vmat_c").unwrap())
+                .unwrap();
+        let params = edited
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap();
+        let normal = params
+            .iter()
+            .find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_tNormalRoughness"))
+            .unwrap();
         let path = normal.get("m_pValue").and_then(Value::as_str).unwrap();
         assert!(path.starts_with("materials/grimoire/finish/materials/test/part/"));
         let mask = morphic::decode(&read(&paks, &compiled(path)).unwrap()).unwrap();
-        let morphic::ImageData::Rgba8(bytes) = mask.data else { panic!() };
+        let morphic::ImageData::Rgba8(bytes) = mask.data else {
+            panic!()
+        };
         assert_eq!(bytes, [127, 140, 128, 255]);
         // Material shaders and all unrelated flags stay on the byte-faithful path.
         assert_eq!(edited.get("m_shaderName"), tree.get("m_shaderName"));

@@ -1,11 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.25.1
+
+Skin part edits from Grimoire's Door Stuck skin editor no longer render black, and the `holo` and `lava` styles work on hero materials (#71).
+
+### CLI (`vpkmerge` 0.25.1)
 
 - Fix: `trippy-skin --material` saved the part's color texture as an inline PNG with one mip, so hero color maps (alpha 0 almost everywhere) decoded black in `model export` and `texture-hdr`, even for an edit with no changes. The copy now keeps the source texture's format, flags and mip chain (BC7 for hero maps). A 4x4 constant-color texture painted at 256x256 keeps its format and gets a full mip chain.
 - Fix: the `holo` and `lava` styles failed with "double patch path not found" on `trippy-skin --material`, and the whole-hero `trippy-skin` and `trippy-vfx` skipped the same materials. Most hero materials store `g_flSelfIllumScale1 = 1` as a tagless value with no bytes to patch in place. Those materials are now re-encoded with the new values, the way material recolors already promote a neutral tint.
 
-### Library (`morphic`)
+### Library (`morphic` 0.11.6, `vpkmerge-core` 0.25.1)
 
 - `morphic::resize_mip_chain(template, new_mip0)` rebuilds a 2D texture at a new size in the template's format and flags, with the mip chain Valve's compiler would build for that size.
 

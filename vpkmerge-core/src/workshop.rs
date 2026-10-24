@@ -154,7 +154,7 @@ fn flatten_channel(image: &mut morphic::Image, channel: usize, value: f64) -> Re
         bail!("HDR finish masks are unsupported")
     };
     let byte = (value * 255.0).round() as u8;
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[channel] = byte;
     }
     Ok(())

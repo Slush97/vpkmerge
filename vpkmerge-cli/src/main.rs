@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+mod workshop;
 use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use vpkmerge_core::{
@@ -61,6 +62,8 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Command {
+    /// Targeted material and movement effect editing for the workshop.
+    Workshop(workshop::WorkshopArgs),
     /// Route entries from one VPK into N output VPKs by path predicate.
     Split(SplitCmd),
 
@@ -2040,6 +2043,7 @@ impl From<PortraitInfo> for ManifestEntry {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
+        Some(Command::Workshop(args)) => workshop::run(args),
         Some(Command::Split(args)) => run_split(args),
         Some(Command::Portrait(args)) => run_portrait(args),
         Some(Command::Model(args)) => run_model(args),

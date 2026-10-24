@@ -36,6 +36,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use crate::error::DecodeError;
 use crate::resource::Resource;
 use format::{TextureFlags, TextureFormat};
+pub(crate) use vtex::u16_dimension;
 pub use vtex::{encode_vtex_png_rgba8888, encode_vtex_png_rgba8888_from_png};
 
 const TEXTURE_VERSION: u16 = 1;
@@ -277,10 +278,20 @@ pub(crate) fn apply_ycocg(image: &mut Image) {
     }
 }
 
+/// Read the `(width, height)` of the `FILL_TO_POWER_OF_TWO` block, if any.
+fn parse_nonpow2_dims(data: &[u8]) -> Option<(u16, u16)> {
+    let payload = fill_to_power_of_two_payload(data)?;
+    Some((
+        LittleEndian::read_u16(&data[payload + 2..]),
+        LittleEndian::read_u16(&data[payload + 4..]),
+    ))
+}
+
 /// Scan the VTEX extra-data table for a `FILL_TO_POWER_OF_TWO` block and return
-/// its `(width, height)`. Returns `None` when absent (the common, pow2 case) or
-/// when the table runs past the DATA block (treated as not present rather than an
-/// error: callers fall back to the stored dims).
+/// the offset of its payload within the DATA block. Returns `None` when absent
+/// (the common, pow2 case) or when the table or payload runs past the DATA block
+/// (treated as not present rather than an error: callers fall back to the stored
+/// dims).
 ///
 /// Layout, all little-endian, relative to the texture header start:
 /// `u32 extra_data_offset @32`, `u32 extra_data_count @36`. The entry table
@@ -288,13 +299,11 @@ pub(crate) fn apply_ycocg(image: &mut Image) {
 /// `u32 rel_offset`, `u32 size`, and its payload sits at
 /// `entry_start + 4 + rel_offset` (matching VRF's `offset - 8` quirk). The
 /// FILL payload is `u16 _unused, u16 width, u16 height`.
-fn parse_nonpow2_dims(data: &[u8]) -> Option<(u16, u16)> {
+pub(crate) fn fill_to_power_of_two_payload(data: &[u8]) -> Option<usize> {
     let read_u32 = |o: usize| -> Option<u32> {
         data.get(o..o + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
-    let read_u16 =
-        |o: usize| -> Option<u16> { data.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]])) };
     let extra_offset = read_u32(32)? as usize;
     let extra_count = read_u32(36)? as usize;
     let table_base = 32usize.checked_add(extra_offset)?;
@@ -306,10 +315,8 @@ fn parse_nonpow2_dims(data: &[u8]) -> Option<(u16, u16)> {
         }
         let rel = read_u32(entry + 4)? as usize;
         let payload = entry.checked_add(4)?.checked_add(rel)?;
-        // payload: [u16 unused][u16 width][u16 height]
-        let w = read_u16(payload + 2)?;
-        let h = read_u16(payload + 4)?;
-        return Some((w, h));
+        data.get(payload..payload.checked_add(6)?)?;
+        return Some(payload);
     }
     None
 }

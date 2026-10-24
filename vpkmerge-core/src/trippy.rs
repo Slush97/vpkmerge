@@ -471,7 +471,7 @@ pub fn edit_material_to_addon(
         ImageData::Rgba8(pixels) => adjust_material_pixels(pixels, color),
         ImageData::Rgba16F(_) => anyhow::bail!("Selected color texture is not RGBA8"),
     }
-    let painted = morphic::encode_vtex_png_rgba8888(&image, morphic::TextureFlags::empty())?;
+    let painted = encode_part_texture(&source, &image)?;
     let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
     });
@@ -496,7 +496,7 @@ pub fn edit_material_to_addon(
     let changed = if edits.is_empty() {
         changed
     } else {
-        morphic::patch_kv3_resource_doubles(&changed, &edits)?
+        patch_material_doubles(&changed, &edits)?
     };
     let resource = morphic::resource::Resource::parse(&changed)?;
     let rerl_index = resource
@@ -522,6 +522,32 @@ pub fn edit_material_to_addon(
         out,
     )?;
     Ok(())
+}
+
+/// Encode an edited color texture in `source`'s own format, flags and mip layout.
+///
+/// Hero color maps keep a mask in alpha, often 0, and an inline PNG decodes to
+/// black RGB wherever A=0 (the game also rejects PNG albedo on models), so only
+/// an inline source stays inline. A tiny source painted at a larger size gets
+/// the full mip chain for its new size.
+fn encode_part_texture(source: &[u8], image: &Image) -> Result<Vec<u8>> {
+    let info = morphic::inspect(source)?;
+    anyhow::ensure!(
+        !info.ycocg,
+        "Selected color texture is YCoCg DXT5, which cannot be re-encoded"
+    );
+    let inline = matches!(
+        info.format,
+        TextureFormat::PngRgba8888 | TextureFormat::PngDxt5 | TextureFormat::JpegDxt5
+    );
+    let same_size = (image.width, image.height) == (u32::from(info.width), u32::from(info.height));
+    Ok(if inline {
+        morphic::encode_vtex_png_rgba8888(image, info.flags)?
+    } else if same_size {
+        morphic::replace_mip_chain(source, image)?
+    } else {
+        morphic::resize_mip_chain(source, image)?
+    })
 }
 
 /// Build a procedural trippy hero skin addon. Textures are discovered from
@@ -630,7 +656,7 @@ pub fn trippy_skin_to_addon(
         if edits.is_empty() {
             continue;
         }
-        match morphic::patch_kv3_resource_doubles(&bytes, &edits) {
+        match patch_material_doubles(&bytes, &edits) {
             Ok(new_bytes) => {
                 packed.insert(material.to_string(), new_bytes);
                 report.materials_scrolled += 1;
@@ -838,7 +864,7 @@ pub fn trippy_ability_vfx_to_addon(
                         is_weapon_path(entry),
                     );
                     if !edits.is_empty() {
-                        match morphic::patch_kv3_resource_doubles(&working, &edits) {
+                        match patch_material_doubles(&working, &edits) {
                             Ok(new_bytes) => {
                                 working = new_bytes;
                                 changed = true;
@@ -1728,6 +1754,31 @@ fn vaporwave(u: f32, v: f32, phase: f32) -> [u8; 3] {
     pack_rgb(rgb)
 }
 
+/// Apply [`trippy_material_edits`] to a material. A param stored as a tagless
+/// 0.0/1.0 (most hero materials keep `g_flSelfIllumScale1 = 1` that way) has no
+/// bytes to patch in place, so the material is then re-encoded with the edits
+/// applied to its tree, the same promotion the material recolor uses.
+fn patch_material_doubles(bytes: &[u8], edits: &[(Vec<Seg>, f64)]) -> Result<Vec<u8>> {
+    if let Ok(patched) = morphic::patch_kv3_resource_doubles(bytes, edits) {
+        return Ok(patched);
+    }
+    let mut tree = morphic::decode_kv3_resource(bytes)?;
+    for (path, new) in edits {
+        let slot = path
+            .iter()
+            .try_fold(&mut tree, |node, seg| match seg {
+                Seg::Key(key) => node.get_mut(key),
+                Seg::Index(i) => match node {
+                    Value::Array(items) => items.get_mut(*i),
+                    _ => None,
+                },
+            })
+            .context("material param path")?;
+        *slot = Value::Double(*new);
+    }
+    morphic::encode_kv3_resource_like(bytes, &tree).context("re-encoding material params")
+}
+
 fn vector_param_index(v: &Value, name: &str) -> Option<usize> {
     v.get("m_vectorParams")?
         .as_array()?
@@ -1905,6 +1956,163 @@ mod tests {
         assert_eq!(std::fs::read(&source).unwrap(), before);
     }
 
+    /// A 64x64 BC7 color map whose alpha is 0 everywhere, like a hero color
+    /// map that keeps a mask in alpha.
+    fn zero_alpha_bc7() -> Vec<u8> {
+        let template =
+            include_bytes!("../../morphic/fixtures/bc7/gradient_dev_02_color_psd_73660177.vtex_c");
+        let mut pixels = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64u8 {
+            for x in 0..64u8 {
+                pixels.extend_from_slice(&[x * 4, y * 4, 160, 0]);
+            }
+        }
+        let image = Image {
+            width: 64,
+            height: 64,
+            data: ImageData::Rgba8(pixels),
+        };
+        morphic::replace_mip_chain(template, &image).unwrap()
+    }
+
+    /// Run a skin part edit on `texture` as `g_tColor` and return the isolated copy.
+    fn edit_part_texture(
+        texture: &[u8],
+        options: &TrippySkinOptions,
+        color: &MaterialColorAdjustments,
+    ) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let out = dir.path().join("paint_dir.vpk");
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let original = morphic::material::parse(donor).unwrap();
+        crate::pack(
+            &[
+                ("models/test/a.vmat_c", donor.as_slice()),
+                (
+                    &compiled_resource_path(original.texture("g_tColor").unwrap()),
+                    texture,
+                ),
+            ],
+            &source,
+        )
+        .unwrap();
+        edit_material_to_addon(&source, None, "models/test/a.vmat", options, color, &out).unwrap();
+        let vpks = open_vpks(&out, None).unwrap();
+        let material = read_entry(&vpks, "models/test/a.vmat_c").unwrap();
+        let painted = morphic::material::parse(&material).unwrap();
+        read_entry(
+            &vpks,
+            &compiled_resource_path(painted.texture("g_tColor").unwrap()),
+        )
+        .unwrap()
+    }
+
+    fn rgba8(image: &Image) -> &[u8] {
+        let ImageData::Rgba8(pixels) = &image.data else {
+            panic!("expected RGBA8");
+        };
+        pixels
+    }
+
+    #[test]
+    fn noop_part_edit_keeps_source_format_and_pixels() {
+        let source = zero_alpha_bc7();
+        let options = TrippySkinOptions {
+            intensity: 0.0,
+            ..TrippySkinOptions::default()
+        };
+        let edited = edit_part_texture(&source, &options, &MaterialColorAdjustments::default());
+
+        let (before, after) = (
+            morphic::inspect(&source).unwrap(),
+            morphic::inspect(&edited).unwrap(),
+        );
+        assert_eq!(after.format, TextureFormat::Bc7);
+        assert_eq!(
+            (after.width, after.height, after.mip_count, after.flags),
+            (before.width, before.height, before.mip_count, before.flags)
+        );
+        let expected = morphic::decode(&source).unwrap();
+        let decoded = morphic::decode(&edited).unwrap();
+        let (expected, decoded) = (rgba8(&expected), rgba8(&decoded));
+        let worst = expected
+            .iter()
+            .zip(decoded)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 8, "no-op edit drifted by {worst}");
+        assert!(decoded.as_chunks::<4>().0.iter().all(|p| p[3] == 0));
+        assert!(
+            decoded.as_chunks::<4>().0.iter().all(|p| p[2] >= 150),
+            "zero-alpha pixels lost their color"
+        );
+    }
+
+    #[test]
+    fn painted_part_keeps_color_under_zero_alpha() {
+        let source = zero_alpha_bc7();
+        let edited = edit_part_texture(
+            &source,
+            &TrippySkinOptions::default(),
+            &MaterialColorAdjustments {
+                hue: 90.0,
+                saturation: 1.0,
+                brightness: 1.0,
+            },
+        );
+
+        let (before, after) = (
+            morphic::inspect(&source).unwrap(),
+            morphic::inspect(&edited).unwrap(),
+        );
+        assert_eq!(
+            (after.format, after.mip_count),
+            (before.format, before.mip_count)
+        );
+        let decoded = morphic::decode(&edited).unwrap();
+        let pixels = rgba8(&decoded).as_chunks::<4>().0;
+        let lit = pixels.iter().filter(|p| p[0].max(p[1]).max(p[2]) > 32);
+        assert!(
+            lit.count() * 10 >= pixels.len() * 9,
+            "painted part decodes dark"
+        );
+        for mip in 1..after.mip_count {
+            morphic::decode_at(
+                &edited,
+                &morphic::DecodeOptions {
+                    mip,
+                    ..morphic::DecodeOptions::default()
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn tiny_solid_part_is_painted_at_256_in_source_format() {
+        let source =
+            include_bytes!("../../morphic/fixtures/dxt1/default_color_tga_99901565.vtex_c");
+        let edited = edit_part_texture(
+            source,
+            &TrippySkinOptions::default(),
+            &MaterialColorAdjustments::default(),
+        );
+
+        let info = morphic::inspect(&edited).unwrap();
+        assert_eq!(info.format, TextureFormat::Dxt1);
+        assert_eq!((info.width, info.height), (256, 256));
+        assert_eq!((info.actual_width, info.actual_height), (256, 256));
+        assert_eq!(info.mip_count, 7);
+        let decoded = morphic::decode(&edited).unwrap();
+        let first = &rgba8(&decoded)[..4];
+        assert!(
+            rgba8(&decoded).chunks(4).any(|p| p != first),
+            "pattern did not land on the expanded texture"
+        );
+    }
+
     #[test]
     fn keep_value_paint_preserves_silhouette() {
         // Additive ability sprites carry their silhouette in brightness: a
@@ -1962,6 +2170,98 @@ mod tests {
                 .any(|p| p[0].max(p[1]).max(p[2]) > 0 && p[..3] != [255, 255, 255]),
             "full-canvas paint should differ (sanity check)"
         );
+    }
+
+    fn param_at<'a>(value: &'a Value, path: &[Seg]) -> Option<&'a Value> {
+        path.iter().try_fold(value, |node, seg| match seg {
+            Seg::Key(key) => node.get(key),
+            Seg::Index(i) => node.as_array()?.get(*i),
+        })
+    }
+
+    #[test]
+    fn holo_promotes_a_tagless_self_illum_scale() {
+        use morphic::kv3::{Node, Val};
+        let source = std::fs::read(format!(
+            "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read material fixture");
+        // Most shipped hero materials store g_flSelfIllumScale1 = 1 as a tagless
+        // DOUBLE_ONE, which leaves the in-place double patch nothing to overwrite.
+        let data = morphic::kv3_resource_data_block(&source).expect("data block");
+        let mut doc = morphic::kv3::decode_lossless(&data).expect("lossless decode");
+        let Val::Object(root) = &mut doc.root.val else {
+            panic!("material root is an object");
+        };
+        let Val::Typed { items, .. } = &mut root
+            .iter_mut()
+            .find(|(k, _)| k == "m_floatParams")
+            .expect("m_floatParams")
+            .1
+            .val
+        else {
+            panic!("m_floatParams is a typed object array");
+        };
+        let members = items
+            .iter_mut()
+            .find_map(|item| match item {
+                Val::Object(members)
+                    if members.iter().any(|(k, n)| {
+                        k == "m_name"
+                            && matches!(&n.val, Val::String(s) if s == "g_flSelfIllumScale1")
+                    }) =>
+                {
+                    Some(members)
+                }
+                _ => None,
+            })
+            .expect("g_flSelfIllumScale1");
+        members
+            .iter_mut()
+            .find(|(k, _)| k == "m_flValue")
+            .expect("m_flValue")
+            .1 = Node {
+            tag: 18,
+            flag: None,
+            val: Val::Implied,
+        };
+        let new_data = morphic::kv3::encode_v5(&doc).expect("encode v5");
+        let tagless =
+            morphic::replace_resource_data_block(&source, &new_data).expect("rebuild resource");
+
+        let value = morphic::decode_kv3_resource(&tagless).expect("decode");
+        let options = TrippySkinOptions {
+            style: TrippyStyle::Holo,
+            ..TrippySkinOptions::default()
+        };
+        let edits = trippy_material_edits(&value, &options, false);
+        assert!(morphic::patch_kv3_resource_doubles(&tagless, &edits).is_err());
+
+        let patched = patch_material_doubles(&tagless, &edits).expect("patch holo params");
+        let got = morphic::decode_kv3_resource(&patched).expect("decode patched");
+        for (path, want) in &edits {
+            assert_eq!(
+                param_at(&got, path),
+                Some(&Value::Double(*want)),
+                "{path:?}"
+            );
+        }
+        let mut expected = value;
+        for (path, want) in &edits {
+            let slot = path
+                .iter()
+                .try_fold(&mut expected, |node, seg| match seg {
+                    Seg::Key(key) => node.get_mut(key),
+                    Seg::Index(i) => match node {
+                        Value::Array(items) => items.get_mut(*i),
+                        _ => None,
+                    },
+                })
+                .expect("edit path");
+            *slot = Value::Double(*want);
+        }
+        assert_eq!(got, expected, "only the holo params changed");
     }
 
     #[test]

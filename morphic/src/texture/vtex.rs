@@ -83,7 +83,7 @@ fn texture_data_header(width: u16, height: u16, flags: TextureFlags) -> Vec<u8> 
     data
 }
 
-fn u16_dimension(value: u32, label: &str) -> Result<u16, EncodeError> {
+pub(crate) fn u16_dimension(value: u32, label: &str) -> Result<u16, EncodeError> {
     u16::try_from(value).map_err(|_| {
         EncodeError::InlineImage(format!(
             "texture {label} {value} exceeds Source 2 VTEX u16 dimension limit"

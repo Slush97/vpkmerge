@@ -59,6 +59,21 @@ enum WorkshopCommand {
         #[arg(long)]
         encode_vpk: PathBuf,
     },
+    /// Set transparency while separating opacity from an opaque part's packed metalness.
+    ///
+    /// Ghost is an experimental research recipe and is not supported by the skin editor.
+    Surface {
+        #[arg(long, required = true)]
+        vpk: Vec<PathBuf>,
+        #[arg(long)]
+        entry: String,
+        #[arg(long, value_parser = ["translucent", "ghost"])]
+        mode: String,
+        #[arg(long)]
+        opacity: f64,
+        #[arg(long)]
+        encode_vpk: PathBuf,
+    },
 }
 
 pub fn run(args: WorkshopArgs) -> Result<()> {
@@ -118,5 +133,12 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             metalness,
             &encode_vpk,
         ),
+        WorkshopCommand::Surface {
+            vpk,
+            entry,
+            mode,
+            opacity,
+            encode_vpk,
+        } => vpkmerge_core::workshop::surface_material(&vpk, &entry, &mode, opacity, &encode_vpk),
     }
 }

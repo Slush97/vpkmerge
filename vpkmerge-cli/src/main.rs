@@ -1083,6 +1083,12 @@ struct PrismCmd {
 
 #[derive(Args)]
 struct TrippySkinCmd {
+    /// Moo patch density multiplier (0.25..8). Other styles keep their original density.
+    #[arg(long, value_name = "DENSITY", default_value_t = 1.0)]
+    scale: f32,
+    /// Optional comma-separated RGB color stops. Requires --material.
+    #[arg(long, value_delimiter = ',', value_parser = parse_pattern_color, requires = "material", num_args = 1..=4)]
+    palette: Vec<[u8; 3]>,
     /// Hero model/material codename to repaint (e.g. `chrono` for Paradox).
     #[arg(long, value_name = "CODENAME")]
     hero: String,
@@ -1100,7 +1106,7 @@ struct TrippySkinCmd {
     encode_vpk: PathBuf,
 
     /// Procedural style: confetti, liquid, moire, kaleido, holo, glitch, thermal,
-    /// gradient, camo, carbon, galaxy, halftone, lava, or vaporwave.
+    /// gradient, camo, carbon, galaxy, halftone, lava, vaporwave, or moo.
     #[arg(long, value_name = "STYLE", default_value = "confetti")]
     style: String,
 
@@ -1166,7 +1172,7 @@ struct TrippyVfxCmd {
     encode_vpk: PathBuf,
 
     /// Procedural style: confetti, liquid, moire, kaleido, holo, glitch, thermal,
-    /// gradient, camo, carbon, galaxy, halftone, lava, or vaporwave.
+    /// gradient, camo, carbon, galaxy, halftone, lava, vaporwave, or moo.
     #[arg(long, value_name = "STYLE", default_value = "confetti")]
     style: String,
 
@@ -1204,8 +1210,14 @@ struct TrippyVfxCmd {
 
 #[derive(Args)]
 struct TrippyPreviewCmd {
+    /// Moo patch density multiplier (0.25..8), matching trippy-skin.
+    #[arg(long, value_name = "DENSITY", default_value_t = 1.0)]
+    scale: f32,
+    /// Optional comma-separated RGB color stops.
+    #[arg(long, value_delimiter = ',', value_parser = parse_pattern_color, num_args = 1..=4)]
+    palette: Vec<[u8; 3]>,
     /// Procedural style: confetti, liquid, moire, kaleido, holo, glitch, thermal,
-    /// gradient, camo, carbon, galaxy, halftone, lava, or vaporwave.
+    /// gradient, camo, carbon, galaxy, halftone, lava, vaporwave, or moo.
     #[arg(long, value_name = "STYLE", default_value = "confetti")]
     style: String,
 
@@ -1773,6 +1785,17 @@ struct ModelRecolorArgs {
 
 #[derive(Args)]
 struct ModelExportArgs {
+    /// Authored body group to preview (for example `inflated`). Does not modify the VPK.
+    #[arg(long, value_name = "NAME")]
+    mesh_group: Option<String>,
+
+    /// Authored material group to preview (for example `shadow` or `ultimate`).
+    #[arg(long, value_name = "NAME")]
+    material_group: Option<String>,
+
+    /// Preview a model particle's authored material override on every surface.
+    #[arg(long, value_name = "VMAT")]
+    material_override: Option<String>,
     /// VPK containing the `.vmdl_c` (a skin VPK, or the base pak itself).
     #[arg(long, value_name = "VPK")]
     vpk: PathBuf,
@@ -2548,6 +2571,11 @@ fn print_uv_segments(segs: &[vpkmerge_core::UvSegmentInfo], by: SegmentBy) {
 }
 
 fn run_model_export(e: &ModelExportArgs) -> Result<()> {
+    let variant = vpkmerge_core::ModelVariant {
+        mesh_group: e.mesh_group.clone(),
+        material_group: e.material_group.clone(),
+        material_override: e.material_override.clone(),
+    };
     let pose = e.pose.as_deref().map(parse_pose).transpose()?.map(|mut p| {
         p.require = e.require_pose;
         p
@@ -2561,11 +2589,27 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
         max_texture_edge: e.max_texture,
     };
     match (&e.entry, &e.hero) {
-        (Some(entry), _) => export_model(&e.vpk, entry, e.base.as_deref(), &anim, glb, &e.out)
-            .with_context(|| format!("exporting {entry} from {}", e.vpk.display()))?,
+        (Some(entry), _) => export_model(
+            &e.vpk,
+            entry,
+            e.base.as_deref(),
+            &anim,
+            &variant,
+            glb,
+            &e.out,
+        )
+        .with_context(|| format!("exporting {entry} from {}", e.vpk.display()))?,
         (None, Some(hero)) => {
-            export_hero_model(&e.vpk, hero, e.base.as_deref(), &anim, glb, &e.out)
-                .with_context(|| format!("exporting hero {hero} from {}", e.vpk.display()))?;
+            export_hero_model(
+                &e.vpk,
+                hero,
+                e.base.as_deref(),
+                &anim,
+                &variant,
+                glb,
+                &e.out,
+            )
+            .with_context(|| format!("exporting hero {hero} from {}", e.vpk.display()))?;
         }
         (None, None) => anyhow::bail!("model export: provide --entry or --hero"),
     }
@@ -4759,18 +4803,30 @@ fn run_prism(args: &PrismCmd) -> Result<()> {
     Ok(())
 }
 
+fn parse_pattern_color(value: &str) -> std::result::Result<[u8; 3], String> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Expected a six-digit RGB color".into());
+    }
+    let channel =
+        |start| u8::from_str_radix(&hex[start..start + 2], 16).map_err(|error| error.to_string());
+    Ok([channel(0)?, channel(2)?, channel(4)?])
+}
+
 fn run_trippy_preview(args: &TrippyPreviewCmd) -> Result<()> {
     let style = vpkmerge_core::TrippyStyle::from_name(&args.style)
         .map_err(|e| anyhow::anyhow!("--style: {e:#}"))?;
     let frames = args.frames.clamp(1, 48);
     let size = args.size.clamp(16, 512);
-    let sprite = vpkmerge_core::trippy_preview_sprite(
+    let sprite = vpkmerge_core::trippy::trippy_preview_sprite_scaled(
         style,
         args.phase,
         args.scroll,
         args.intensity,
         frames,
         size,
+        &args.palette,
+        args.scale,
     )
     .with_context(|| format!("rendering {} trippy preview sprite", style.as_str()))?;
     std::fs::write(&args.out, &sprite)
@@ -4799,9 +4855,11 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
     };
     let options = vpkmerge_core::TrippySkinOptions {
         style,
+        palette: args.palette.clone(),
         intensity: args.intensity,
         phase: args.phase,
         scroll: args.scroll,
+        scale: args.scale,
         include_body,
         include_weapons,
     };

@@ -34,6 +34,7 @@ pub const TRIPPY_STYLE_NAMES: &[&str] = &[
     "halftone",
     "lava",
     "vaporwave",
+    "moo",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub enum TrippyStyle {
     Halftone,
     Lava,
     Vaporwave,
+    Moo,
 }
 
 impl TrippyStyle {
@@ -72,6 +74,7 @@ impl TrippyStyle {
             Self::Halftone => "halftone",
             Self::Lava => "lava",
             Self::Vaporwave => "vaporwave",
+            Self::Moo => "moo",
         }
     }
 
@@ -91,6 +94,7 @@ impl TrippyStyle {
             "halftone" | "popart" | "pop-art" | "comic" | "dots" => Ok(Self::Halftone),
             "lava" | "magma" | "molten" => Ok(Self::Lava),
             "vaporwave" | "synthwave" | "retrowave" | "outrun" => Ok(Self::Vaporwave),
+            "moo" | "cow" | "cowprint" => Ok(Self::Moo),
             other => anyhow::bail!(
                 "unknown trippy style {other:?}; expected one of {}",
                 TRIPPY_STYLE_NAMES.join(", ")
@@ -102,12 +106,16 @@ impl TrippyStyle {
 #[derive(Debug, Clone)]
 pub struct TrippySkinOptions {
     pub style: TrippyStyle,
+    /// Optional color stops for selected-part paint. Empty keeps the style's colors.
+    pub palette: Vec<[u8; 3]>,
     /// Texture blend, 0.0 = original texture, 1.0 = full generated pattern.
     pub intensity: f32,
     /// Hue/pattern phase offset, normalized 0..1.
     pub phase: f32,
     /// Runtime material scroll scale, 1.0 = Paradox prototype speed.
     pub scroll: f64,
+    /// Moo patch density multiplier. Rounded to whole periodic cell counts.
+    pub scale: f32,
     pub include_body: bool,
     pub include_weapons: bool,
 }
@@ -116,9 +124,11 @@ impl Default for TrippySkinOptions {
     fn default() -> Self {
         Self {
             style: TrippyStyle::Confetti,
+            palette: Vec::new(),
             intensity: 1.0,
             phase: 0.0,
             scroll: 1.0,
+            scale: 1.0,
             include_body: true,
             include_weapons: true,
         }
@@ -235,6 +245,46 @@ pub fn trippy_preview_sprite(
     n_frames: usize,
     size: u32,
 ) -> Result<Vec<u8>> {
+    trippy_preview_sprite_with_palette(style, phase, scroll, intensity, n_frames, size, &[])
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::too_many_arguments
+)]
+pub fn trippy_preview_sprite_with_palette(
+    style: TrippyStyle,
+    phase: f32,
+    scroll: f32,
+    intensity: f32,
+    n_frames: usize,
+    size: u32,
+    palette: &[[u8; 3]],
+) -> Result<Vec<u8>> {
+    trippy_preview_sprite_scaled(
+        style, phase, scroll, intensity, n_frames, size, palette, 1.0,
+    )
+}
+
+/// Render a pattern sprite with the same Moo density used by the texture bake.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::too_many_arguments
+)]
+pub fn trippy_preview_sprite_scaled(
+    style: TrippyStyle,
+    phase: f32,
+    scroll: f32,
+    intensity: f32,
+    n_frames: usize,
+    size: u32,
+    palette: &[[u8; 3]],
+    scale: f32,
+) -> Result<Vec<u8>> {
+    validate_pattern_palette(palette)?;
+    validate_pattern_scale(scale)?;
     let n_frames = n_frames.clamp(1, 48);
     let size = size.clamp(16, 512);
     let width = size * n_frames as u32;
@@ -251,6 +301,8 @@ pub fn trippy_preview_sprite(
             frame_phase,
             intensity,
             size,
+            palette,
+            scale,
         );
     }
 
@@ -270,7 +322,17 @@ fn trippy_preview_png(
     size: u32,
 ) -> Result<Vec<u8>> {
     let mut pixels = vec![255; (size as usize) * (size as usize) * 4];
-    paint_preview_tile(&mut pixels, size, 0, style, phase, intensity, size);
+    paint_preview_tile(
+        &mut pixels,
+        size,
+        0,
+        style,
+        phase,
+        intensity,
+        size,
+        &[],
+        1.0,
+    );
     let image = Image {
         width: size,
         height: size,
@@ -284,7 +346,8 @@ fn trippy_preview_png(
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
 )]
 fn paint_preview_tile(
     pixels: &mut [u8],
@@ -294,13 +357,15 @@ fn paint_preview_tile(
     phase: f32,
     intensity: f32,
     size: u32,
+    palette: &[[u8; 3]],
+    scale: f32,
 ) {
     let blend = intensity.clamp(0.0, 1.0);
     for y in 0..size {
         let v = y as f32 / size.max(1) as f32;
         for x in 0..size {
             let u = x as f32 / size.max(1) as f32;
-            let generated = trippy_pixel(style, u, v, phase);
+            let generated = pattern_pixel(style, u, v, phase, palette, scale, 1.0 / size as f32);
             let shade = checker_shade(x, y);
             let i = ((y * row_stride + x0 + x) * 4) as usize;
             for k in 0..3 {
@@ -431,6 +496,8 @@ pub fn edit_material_to_addon(
     color: &MaterialColorAdjustments,
     out: &Path,
 ) -> Result<()> {
+    validate_pattern_palette(&options.palette)?;
+    validate_pattern_scale(options.scale)?;
     anyhow::ensure!(
         color.hue.is_finite()
             && (-180.0..=180.0).contains(&color.hue)
@@ -466,7 +533,14 @@ pub fn edit_material_to_addon(
             data: ImageData::Rgba8(color.repeat(256 * 256)),
         };
     }
-    paint_image(&mut image, options.style, options.phase, options.intensity)?;
+    paint_image_with_palette(
+        &mut image,
+        options.style,
+        options.phase,
+        options.intensity,
+        &options.palette,
+        options.scale,
+    )?;
     match &mut image.data {
         ImageData::Rgba8(pixels) => adjust_material_pixels(pixels, color),
         ImageData::Rgba16F(_) => anyhow::bail!("Selected color texture is not RGBA8"),
@@ -492,12 +566,7 @@ pub fn edit_material_to_addon(
     ];
     let changed =
         morphic::patch_kv3_resource_strings_adding(&bytes, &[(redirect, isolated.clone())])?;
-    let edits = trippy_material_edits(&value, options, false);
-    let changed = if edits.is_empty() {
-        changed
-    } else {
-        patch_material_doubles(&changed, &edits)?
-    };
+    let changed = patch_trippy_material_params(&changed, &value, options, false)?;
     let resource = morphic::resource::Resource::parse(&changed)?;
     let rerl_index = resource
         .blocks()
@@ -530,7 +599,7 @@ pub fn edit_material_to_addon(
 /// black RGB wherever A=0 (the game also rejects PNG albedo on models), so only
 /// an inline source stays inline. A tiny source painted at a larger size gets
 /// the full mip chain for its new size.
-fn encode_part_texture(source: &[u8], image: &Image) -> Result<Vec<u8>> {
+pub(crate) fn encode_part_texture(source: &[u8], image: &Image) -> Result<Vec<u8>> {
     let info = morphic::inspect(source)?;
     anyhow::ensure!(
         !info.ycocg,
@@ -565,6 +634,7 @@ pub fn trippy_skin_to_addon(
     options: &TrippySkinOptions,
     out: impl AsRef<Path>,
 ) -> Result<TrippySkinReport> {
+    validate_pattern_scale(options.scale)?;
     let vpk = vpk.as_ref();
     let live_materials = match crate::model::live_hero_materials(vpk, base, codename) {
         Ok(materials) => Some(materials),
@@ -652,11 +722,7 @@ pub fn trippy_skin_to_addon(
             }
         };
         let weapon = is_weapon_path(material);
-        let edits = trippy_material_edits(&value, options, weapon);
-        if edits.is_empty() {
-            continue;
-        }
-        match patch_material_doubles(&bytes, &edits) {
+        match patch_trippy_material_params(&bytes, &value, options, weapon) {
             Ok(new_bytes) => {
                 packed.insert(material.to_string(), new_bytes);
                 report.materials_scrolled += 1;
@@ -858,22 +924,20 @@ pub fn trippy_ability_vfx_to_addon(
         if options.animation_intensity > 0.0 {
             match morphic::decode_kv3_resource(&working) {
                 Ok(value) => {
-                    let edits = trippy_material_edits(
+                    match patch_trippy_material_params(
+                        &working,
                         &value,
                         &skin_options_from_ability(options),
                         is_weapon_path(entry),
-                    );
-                    if !edits.is_empty() {
-                        match patch_material_doubles(&working, &edits) {
-                            Ok(new_bytes) => {
-                                working = new_bytes;
-                                changed = true;
-                                report.materials_scrolled += 1;
-                            }
-                            Err(e) => {
-                                report.materials_unpatchable += 1;
-                                eprintln!("  note: material scroll skipped for {entry}: {e:#}");
-                            }
+                    ) {
+                        Ok(new_bytes) => {
+                            working = new_bytes;
+                            changed = true;
+                            report.materials_scrolled += 1;
+                        }
+                        Err(e) => {
+                            report.materials_unpatchable += 1;
+                            eprintln!("  note: material scroll skipped for {entry}: {e:#}");
                         }
                     }
                 }
@@ -1085,7 +1149,14 @@ fn repaint_texture(
     } else {
         options.style
     };
-    paint_image(&mut image, style, options.phase, options.intensity)?;
+    paint_image_with_palette(
+        &mut image,
+        style,
+        options.phase,
+        options.intensity,
+        &[],
+        options.scale,
+    )?;
     morphic::replace_mip_chain(bytes, &image).context("re-encoding trippy texture")
 }
 
@@ -1101,9 +1172,11 @@ pub(crate) fn repaint_ability_texture(
 fn skin_options_from_ability(options: &TrippyAbilityOptions) -> TrippySkinOptions {
     TrippySkinOptions {
         style: options.style,
+        palette: Vec::new(),
         intensity: options.intensity,
         phase: options.phase,
         scroll: options.animation_intensity,
+        scale: 1.0,
         include_body: true,
         include_weapons: true,
     }
@@ -1154,6 +1227,7 @@ fn trippy_style_gradient(style: TrippyStyle) -> Option<PrismGradient> {
         TrippyStyle::Vaporwave => {
             gradient_stops(&[(0.0, 280.0, 1.0), (0.5, 325.0, 0.95), (1.0, 185.0, 0.95)])
         }
+        TrippyStyle::Moo => gradient_stops(&[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]),
         TrippyStyle::Confetti | TrippyStyle::Gradient => None,
     }
 }
@@ -1302,12 +1376,19 @@ fn paint_image_keep_value(
 }
 
 #[allow(
-    clippy::many_single_char_names,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names
 )]
-fn paint_image(image: &mut Image, style: TrippyStyle, phase: f32, intensity: f32) -> Result<()> {
+fn paint_image_with_palette(
+    image: &mut Image,
+    style: TrippyStyle,
+    phase: f32,
+    intensity: f32,
+    palette: &[[u8; 3]],
+    scale: f32,
+) -> Result<()> {
     let (w, h) = (image.width, image.height);
     let ImageData::Rgba8(px) = &mut image.data else {
         anyhow::bail!("trippy skin supports LDR (8-bit) textures only");
@@ -1317,7 +1398,15 @@ fn paint_image(image: &mut Image, style: TrippyStyle, phase: f32, intensity: f32
         let v = y as f32 / h.max(1) as f32;
         for x in 0..w {
             let u = x as f32 / w.max(1) as f32;
-            let generated = trippy_pixel(style, u, v, phase);
+            let generated = pattern_pixel(
+                style,
+                u,
+                v,
+                phase,
+                palette,
+                scale,
+                1.0 / w.min(h).max(1) as f32,
+            );
             let i = ((y * w + x) * 4) as usize;
             for k in 0..3 {
                 let original = f32::from(px[i + k]);
@@ -1328,6 +1417,62 @@ fn paint_image(image: &mut Image, style: TrippyStyle, phase: f32, intensity: f32
         }
     }
     Ok(())
+}
+
+fn validate_pattern_palette(palette: &[[u8; 3]]) -> Result<()> {
+    anyhow::ensure!(
+        palette.is_empty() || (2..=4).contains(&palette.len()),
+        "Choose two to four pattern colors"
+    );
+    Ok(())
+}
+
+fn validate_pattern_scale(scale: f32) -> Result<()> {
+    anyhow::ensure!(
+        scale.is_finite() && (0.25..=8.0).contains(&scale),
+        "Pattern scale must be between 0.25 and 8"
+    );
+    Ok(())
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn pattern_pixel(
+    style: TrippyStyle,
+    u: f32,
+    v: f32,
+    phase: f32,
+    palette: &[[u8; 3]],
+    scale: f32,
+    texel: f32,
+) -> [u8; 3] {
+    if style == TrippyStyle::Moo {
+        return moo_sample(u, v, phase, palette, scale, texel);
+    }
+    let rgb = trippy_pixel(style, u, v, phase);
+    if palette.is_empty() {
+        return rgb;
+    }
+    let (hue, saturation, value) = rgb_to_hsv(rgb);
+    let t = if style == TrippyStyle::Gradient {
+        (u * 2.0 + v + phase).rem_euclid(1.0)
+    } else if saturation > 0.1 {
+        (hue / 360.0) as f32
+    } else {
+        value as f32
+    };
+    let position = t.clamp(0.0, 1.0) * (palette.len() - 1) as f32;
+    let left = (position.floor() as usize).min(palette.len() - 1);
+    let right = (left + 1).min(palette.len() - 1);
+    let blend = position - left as f32;
+    std::array::from_fn(|channel| {
+        (f32::from(palette[left][channel]) * (1.0 - blend)
+            + f32::from(palette[right][channel]) * blend)
+            .round() as u8
+    })
 }
 
 fn trippy_pixel(style: TrippyStyle, u: f32, v: f32, phase: f32) -> [u8; 3] {
@@ -1346,6 +1491,7 @@ fn trippy_pixel(style: TrippyStyle, u: f32, v: f32, phase: f32) -> [u8; 3] {
         TrippyStyle::Halftone => halftone(u, v, phase),
         TrippyStyle::Lava => lava(u, v, phase),
         TrippyStyle::Vaporwave => vaporwave(u, v, phase),
+        TrippyStyle::Moo => moo(u, v, phase, &[]),
     }
 }
 
@@ -1620,6 +1766,51 @@ fn camo(u: f32, v: f32, phase: f32) -> [u8; 3] {
     pack_rgb([c[0] + speck, c[1] + speck, c[2] + speck])
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn moo(u: f32, v: f32, phase: f32, palette: &[[u8; 3]]) -> [u8; 3] {
+    moo_sample(u, v, phase, palette, 1.0, 0.0)
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn moo_sample(u: f32, v: f32, phase: f32, palette: &[[u8; 3]], scale: f32, texel: f32) -> [u8; 3] {
+    const DEFAULT: [[u8; 3]; 2] = [[28, 28, 31], [238, 238, 232]];
+    let colors = if palette.is_empty() {
+        &DEFAULT[..]
+    } else {
+        palette
+    };
+    // Whole cell counts keep every density seamless, including fractional UI values.
+    let cells = (9.0 * scale).round().clamp(2.0, 72.0);
+    let u = (u + phase).rem_euclid(1.0);
+    let v = (v - phase).rem_euclid(1.0);
+    let warp_u = u + 0.75 / cells * (fbm(u + 1.7, v + 3.1, cells as i64, 3) - 0.5);
+    let warp_v = v + 0.75 / cells * (fbm(u + 5.3, v + 7.9, cells as i64, 3) - 0.5);
+    let (nearest, _, id) = voronoi(warp_u, warp_v, cells as i64);
+    let radius = 0.37 + 0.12 * (vnoise(warp_u + 2.7, warp_v + 4.1, cells as i64 * 3) - 0.5);
+    // A continuous boundary joins nearby lobes without exposing straight cell edges.
+    let inside = radius - nearest;
+    // One output texel of antialiasing keeps native bakes sharp at any resolution.
+    let width = (texel * cells).max(0.000_001);
+    let edge = (inside / width + 0.5).clamp(0.0, 1.0);
+    let coverage = edge * edge * (3.0 - 2.0 * edge);
+    // The final stop is the hide; preceding stops color individual patches.
+    let patch = colors[(id * (colors.len() - 1) as f32) as usize];
+    let hide = colors[colors.len() - 1];
+    std::array::from_fn(|channel| {
+        (f32::from(hide[channel])
+            + (f32::from(patch[channel]) - f32::from(hide[channel])) * coverage)
+            .round() as u8
+    })
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::many_single_char_names)]
 fn carbon(u: f32, v: f32, phase: f32) -> [u8; 3] {
     let cells = 22.0;
@@ -1758,6 +1949,54 @@ fn vaporwave(u: f32, v: f32, phase: f32) -> [u8; 3] {
 /// 0.0/1.0 (most hero materials keep `g_flSelfIllumScale1 = 1` that way) has no
 /// bytes to patch in place, so the material is then re-encoded with the edits
 /// applied to its tree, the same promotion the material recolor uses.
+fn patch_trippy_material_params(
+    bytes: &[u8],
+    value: &Value,
+    options: &TrippySkinOptions,
+    weapon: bool,
+) -> Result<Vec<u8>> {
+    let edits = trippy_material_edits(value, options, weapon);
+    let changed = if edits.is_empty() {
+        bytes.to_vec()
+    } else {
+        patch_material_doubles(bytes, &edits)?
+    };
+    let mut speeds = vec![
+        (
+            "g_vAlbedoScrollSpeed1",
+            [0.08 * options.scroll, 0.05 * options.scroll, 0.0, 0.0],
+        ),
+        (
+            "g_vSelfIllumScrollSpeed1",
+            [0.08 * options.scroll, 0.05 * options.scroll, 0.0, 0.0],
+        ),
+    ];
+    if options.style == TrippyStyle::Holo {
+        speeds.push((
+            "g_vNormalAndRoughnessScrollSpeed1",
+            [0.12 * options.scroll, 0.07 * options.scroll, 0.0, 0.0],
+        ));
+    }
+    let missing: Vec<_> = speeds
+        .into_iter()
+        .filter(|(name, _)| vector_param_index(value, name).is_none())
+        .map(|(name, value)| crate::vmat_style::VmatEdit::Vector {
+            name: name.into(),
+            value,
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(changed);
+    }
+    let (patched, stats) = crate::vmat_style::patch_vmat_params(&changed, &missing)?;
+    anyhow::ensure!(
+        stats.failed.is_empty(),
+        "Material scroll parameters could not be inserted: {:?}",
+        stats.failed
+    );
+    Ok(patched)
+}
+
 fn patch_material_doubles(bytes: &[u8], edits: &[(Vec<Seg>, f64)]) -> Result<Vec<u8>> {
     if let Ok(patched) = morphic::patch_kv3_resource_doubles(bytes, edits) {
         return Ok(patched);
@@ -2008,6 +2247,72 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn custom_palette_matches_preview_and_never_invents_green() {
+        let palette = [[255, 0, 0], [0, 0, 255]];
+        for name in TRIPPY_STYLE_NAMES {
+            let style = TrippyStyle::from_name(name).unwrap();
+            let mut image = Image {
+                width: 16,
+                height: 16,
+                data: ImageData::Rgba8(vec![255; 16 * 16 * 4]),
+            };
+            paint_image_with_palette(&mut image, style, 0.25, 1.0, &palette, 1.0).unwrap();
+            let png =
+                trippy_preview_sprite_with_palette(style, 0.25, 0.0, 1.0, 1, 16, &palette).unwrap();
+            let preview = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert_eq!(rgba8(&image), preview.as_raw(), "{name}");
+            assert!(rgba8(&image)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[1] == 0));
+        }
+        let edited = edit_part_texture(
+            &zero_alpha_bc7(),
+            &TrippySkinOptions {
+                style: TrippyStyle::Gradient,
+                palette: palette.to_vec(),
+                scroll: 0.0,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments::default(),
+        );
+        let decoded = morphic::decode(&edited).unwrap();
+        assert!(rgba8(&decoded)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            // BC7 quantizes channels. The uncompressed assertion above is exact.
+            .all(|pixel| pixel[1] <= 5));
+    }
+
+    #[test]
+    fn pattern_scroll_inserts_missing_material_speed_parameters() {
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let mut value = morphic::decode_kv3_resource(donor).unwrap();
+        let Value::Array(params) = value.get_mut("m_vectorParams").unwrap() else {
+            panic!()
+        };
+        params.retain(|param| {
+            !param
+                .get("m_name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("ScrollSpeed"))
+        });
+        let source = morphic::encode_kv3_resource_like(donor, &value).unwrap();
+        let options = TrippySkinOptions {
+            scroll: 0.5,
+            ..TrippySkinOptions::default()
+        };
+        let patched = patch_trippy_material_params(&source, &value, &options, false).unwrap();
+        let result = morphic::material::parse(&patched).unwrap();
+        assert_eq!(
+            result.vector_params.get("g_vAlbedoScrollSpeed1"),
+            Some(&[0.04, 0.025, 0.0, 0.0])
+        );
+    }
+
     fn rgba8(image: &Image) -> &[u8] {
         let ImageData::Rgba8(pixels) = &image.data else {
             panic!("expected RGBA8");
@@ -2159,7 +2464,7 @@ mod tests {
         }
         // The full-canvas painter, by contrast, lights the black margin up
         // (that is the squared-off failure this guards against).
-        paint_image(&mut image, TrippyStyle::Lava, 0.3, 1.0).unwrap();
+        paint_image_with_palette(&mut image, TrippyStyle::Lava, 0.3, 1.0, &[], 1.0).unwrap();
         let ImageData::Rgba8(out) = &image.data else {
             panic!("rgba8");
         };
@@ -2279,6 +2584,237 @@ mod tests {
         for name in TRIPPY_STYLE_NAMES {
             let style = TrippyStyle::from_name(name).expect("listed style parses");
             assert_eq!(style.as_str(), *name);
+        }
+    }
+
+    #[test]
+    fn moo_is_repeatable_and_keeps_bold_patches_at_swatch_and_texture_sizes() {
+        for size in [64_u32, 256] {
+            let png = trippy_preview_sprite(TrippyStyle::Moo, 0.0, 0.0, 1.0, 1, size).unwrap();
+            assert_eq!(
+                png,
+                trippy_preview_sprite(TrippyStyle::Moo, 0.0, 0.0, 1.0, 1, size).unwrap()
+            );
+            let image = image::load_from_memory(&png).unwrap().to_rgb8();
+            let total = image.pixels().count();
+            let dark = image.pixels().filter(|pixel| pixel[0] < 70).count();
+            let light = image.pixels().filter(|pixel| pixel[0] > 200).count();
+            assert!(
+                dark > total / 4 && dark < total * 3 / 4,
+                "dark coverage at {size}: {dark}/{total}"
+            );
+            assert!(
+                light > total / 4,
+                "hide coverage at {size}: {light}/{total}"
+            );
+            assert!(
+                dark + light
+                    > if size == 64 {
+                        total * 4 / 5
+                    } else {
+                        total * 19 / 20
+                    },
+                "patches have soft interiors at {size}"
+            );
+            let variation =
+                trippy_preview_sprite(TrippyStyle::Moo, 0.25, 0.0, 1.0, 1, size).unwrap();
+            assert_ne!(png, variation);
+            let transitions: usize = image
+                .rows()
+                .map(|row| {
+                    let values: Vec<bool> = row.map(|pixel| pixel[0] < 100).collect();
+                    values.windows(2).filter(|pair| pair[0] != pair[1]).count()
+                })
+                .sum();
+            assert!(
+                transitions < total / 4,
+                "patches became fine speckle at {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn moo_tiles_across_both_edges_with_default_and_custom_colors() {
+        for phase in [0.0, 0.17, 0.93] {
+            for palette in [
+                Vec::new(),
+                vec![[240, 80, 130], [230, 230, 220]],
+                vec![[170, 30, 60], [40, 40, 100], [220, 200, 160]],
+                vec![[255, 0, 0], [0, 255, 0], [0, 0, 255], [220, 220, 220]],
+            ] {
+                for position in 0..=128_u16 {
+                    let t = f32::from(position) / 128.0;
+                    for (a, b) in [
+                        (moo(0.0, t, phase, &palette), moo(1.0, t, phase, &palette)),
+                        (moo(t, 0.0, phase, &palette), moo(t, 1.0, phase, &palette)),
+                    ] {
+                        assert!(
+                            a.into_iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1),
+                            "seam at {t}, phase {phase}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn moo_custom_colors_use_every_stop_and_match_the_baked_pixels() {
+        for palette in [
+            vec![[255, 0, 0], [0, 0, 255]],
+            vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+            vec![[255, 0, 0], [0, 255, 0], [0, 0, 255], [220, 220, 220]],
+        ] {
+            let mut image = Image {
+                width: 64,
+                height: 64,
+                data: ImageData::Rgba8(vec![255; 64 * 64 * 4]),
+            };
+            paint_image_with_palette(&mut image, TrippyStyle::Moo, 0.3, 1.0, &palette, 1.0)
+                .unwrap();
+            let png = trippy_preview_sprite_with_palette(
+                TrippyStyle::Moo,
+                0.3,
+                0.0,
+                1.0,
+                1,
+                64,
+                &palette,
+            )
+            .unwrap();
+            let preview = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert_eq!(rgba8(&image), preview.as_raw());
+            for color in palette {
+                assert!(
+                    preview.pixels().any(|pixel| pixel.0[..3] == color),
+                    "missing palette stop {color:?}"
+                );
+            }
+        }
+        assert_eq!(TrippyStyle::from_name("cow").unwrap(), TrippyStyle::Moo);
+        assert_eq!(
+            TrippyStyle::from_name("cowprint").unwrap(),
+            TrippyStyle::Moo
+        );
+    }
+
+    #[test]
+    fn moo_part_export_keeps_native_layout_and_packed_alpha() {
+        let source = zero_alpha_bc7();
+        let exported = edit_part_texture(
+            &source,
+            &TrippySkinOptions {
+                style: TrippyStyle::Moo,
+                scroll: 0.5,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments::default(),
+        );
+        let before = morphic::inspect(&source).unwrap();
+        let after = morphic::inspect(&exported).unwrap();
+        assert_eq!(
+            (
+                after.format,
+                after.width,
+                after.height,
+                after.mip_count,
+                after.flags
+            ),
+            (
+                before.format,
+                before.width,
+                before.height,
+                before.mip_count,
+                before.flags
+            )
+        );
+        let image = morphic::decode(&exported).unwrap();
+        let pixels = rgba8(&image).as_chunks::<4>().0;
+        // BC7 quantizes packed alpha along with color, as in the other part-export checks.
+        assert!(pixels.iter().all(|pixel| pixel[3] <= 8));
+        assert!(pixels.iter().filter(|pixel| pixel[0] < 70).count() > pixels.len() / 4);
+        assert!(pixels.iter().filter(|pixel| pixel[0] > 200).count() > pixels.len() / 4);
+    }
+
+    #[test]
+    fn moo_density_matches_preview_bake_and_periodic_edges() {
+        let palette = [[240, 70, 140], [240, 235, 220]];
+        for scale in [0.25, 0.5, 1.0, 1.25, 2.5, 8.0] {
+            let mut image = Image {
+                width: 64,
+                height: 64,
+                data: ImageData::Rgba8(vec![255; 64 * 64 * 4]),
+            };
+            paint_image_with_palette(&mut image, TrippyStyle::Moo, 0.17, 1.0, &palette, scale)
+                .unwrap();
+            let png = trippy_preview_sprite_scaled(
+                TrippyStyle::Moo,
+                0.17,
+                0.0,
+                1.0,
+                1,
+                64,
+                &palette,
+                scale,
+            )
+            .unwrap();
+            assert_eq!(
+                rgba8(&image),
+                image::load_from_memory(&png).unwrap().to_rgba8().as_raw()
+            );
+            for position in 0..=128_u16 {
+                let t = f32::from(position) / 128.0;
+                for (a, b) in [
+                    (
+                        moo_sample(0.0, t, 0.17, &palette, scale, 1.0 / 256.0),
+                        moo_sample(1.0, t, 0.17, &palette, scale, 1.0 / 256.0),
+                    ),
+                    (
+                        moo_sample(t, 0.0, 0.17, &palette, scale, 1.0 / 256.0),
+                        moo_sample(t, 1.0, 0.17, &palette, scale, 1.0 / 256.0),
+                    ),
+                ] {
+                    assert!(
+                        a.into_iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1),
+                        "seam at density {scale}, position {t}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn moo_density_is_discrete_and_other_styles_do_not_change() {
+        let preview = |style, scale| {
+            trippy_preview_sprite_scaled(style, 0.0, 0.0, 1.0, 1, 64, &[], scale).unwrap()
+        };
+        assert_eq!(
+            preview(TrippyStyle::Moo, 1.0),
+            preview(TrippyStyle::Moo, 1.03)
+        );
+        assert_ne!(
+            preview(TrippyStyle::Moo, 1.0),
+            preview(TrippyStyle::Moo, 1.1)
+        );
+        assert_ne!(
+            preview(TrippyStyle::Moo, 0.5),
+            preview(TrippyStyle::Moo, 2.0)
+        );
+        for style in [TrippyStyle::Gradient, TrippyStyle::Lava, TrippyStyle::Camo] {
+            assert_eq!(preview(style, 1.0), preview(style, 4.0));
+        }
+        for invalid in [0.24, 8.01, f32::NAN, f32::INFINITY] {
+            assert!(trippy_preview_sprite_scaled(
+                TrippyStyle::Moo,
+                0.0,
+                0.0,
+                1.0,
+                1,
+                64,
+                &[],
+                invalid
+            )
+            .is_err());
         }
     }
 

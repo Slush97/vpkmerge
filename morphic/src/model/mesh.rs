@@ -159,11 +159,16 @@ pub fn lod0_indices(data: &Value, embedded: &[EmbeddedMesh]) -> Result<Vec<usize
 /// heroes carry a single implicit group) keep every mesh, so this is a no-op for
 /// them. Applied AFTER `lod0_indices`, intersecting both filters.
 pub fn filter_default_mesh_group(data: &Value, indices: Vec<usize>) -> Vec<usize> {
+    filter_mesh_group(data, indices, None)
+}
+
+pub fn filter_mesh_group(data: &Value, indices: Vec<usize>, selection: Option<u64>) -> Vec<usize> {
     let to_u64 = |v: &Value| {
         v.as_uint()
             .or_else(|| v.as_int().and_then(|i| u64::try_from(i).ok()))
     };
-    let Some(default) = data.get("m_nDefaultMeshGroupMask").and_then(to_u64) else {
+    let Some(default) = selection.or_else(|| data.get("m_nDefaultMeshGroupMask").and_then(to_u64))
+    else {
         return indices; // no body groups -> keep everything
     };
     let Some(masks) = data.get("m_refMeshGroupMasks").and_then(Value::as_array) else {

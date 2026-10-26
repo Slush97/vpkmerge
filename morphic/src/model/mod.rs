@@ -25,7 +25,9 @@ mod pose;
 mod skeleton;
 mod topology;
 mod uvmask;
+mod variant;
 mod vbib;
+pub use variant::ModelVariant;
 
 #[cfg(test)]
 mod tests;
@@ -181,6 +183,11 @@ impl mesh::BlockSource for Resource<'_> {
 /// LOD0 meshes with positions/normals/uv/joints/weights. Does not resolve
 /// materials/textures (M4) or write a `.glb` (M5).
 pub fn decode(bytes: &[u8]) -> Result<Model, DecodeError> {
+    decode_variant(bytes, &ModelVariant::default())
+}
+
+/// Decode one authored form, preserving the source model and its animation rig.
+pub fn decode_variant(bytes: &[u8], variant: &ModelVariant) -> Result<Model, DecodeError> {
     let resource = Resource::parse(bytes)?;
 
     let data = crate::kv3::decode(resource.data_block()?)?;
@@ -194,13 +201,35 @@ pub fn decode(bytes: &[u8]) -> Result<Model, DecodeError> {
     let lod0 = mesh::lod0_indices(&data, &embedded)?;
     // Drop body-group variants that are not in the default selection (alt heads,
     // props, "sleeping" sets, UI-only meshes); no-op for single-group models.
-    let lod0 = mesh::filter_default_mesh_group(&data, lod0);
+    let lod0 = match variant.mesh_mask(&data)? {
+        Some(mask) => mesh::filter_mesh_group(&data, lod0, Some(mask)),
+        None => mesh::filter_default_mesh_group(&data, lod0),
+    };
+    let materials = variant.material_map(&data)?;
 
     let mut meshes = Vec::with_capacity(lod0.len());
     for i in lod0 {
         let em = &embedded[i];
+        // Legacy skins can omit body masks. Keep their normal preview's old
+        // alt-form fallback, while explicit authored selections retain that geometry.
+        if variant.mesh_group.is_none() && glb::is_alt_form(&em.name) {
+            continue;
+        }
         let remap = skeleton::remap_table(&data, em.mesh_index);
-        meshes.push(mesh::assemble(em, &resource, remap.as_deref())?);
+        let mut part = mesh::assemble(em, &resource, remap.as_deref())?;
+        for primitive in &mut part.primitives {
+            if let Some(material) = materials.get(&primitive.material) {
+                primitive.material.clone_from(material);
+            }
+            if let Some(material) = &variant.material_override {
+                primitive.material.clone_from(material);
+            }
+        }
+        if variant.mesh_group.is_none() {
+            part.primitives
+                .retain(|primitive| !glb::is_alt_form(&primitive.material));
+        }
+        meshes.push(part);
     }
 
     // Best-effort: a model whose animation blocks fail to decode still exports

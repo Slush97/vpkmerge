@@ -34,8 +34,8 @@ fn open(paths: &[PathBuf]) -> Result<Vec<valve_pak::VPK>> {
         .collect()
 }
 
-/// Apply uniform roughness and metalness to one material. Bound masks are cloned,
-/// preserving the normal map's red/green channels and leaving shared textures alone.
+/// Apply uniform roughness and metalness to one material. Clone the packed masks,
+/// including opaque PBR color alpha (metalness), without changing shared textures.
 ///
 /// # Errors
 /// Rejects unsupported shaders, animated finish bindings, missing textures and invalid values.
@@ -64,6 +64,8 @@ pub fn finish_material(
     let entry = compiled(entry);
     let original = read(&paks, &entry)?;
     let tree = morphic::decode_kv3_resource(&original)?;
+    let material = morphic::material::parse(&original)?;
+    let packed_metalness = color_alpha_is_metalness(&material);
     ensure!(
         tree.get("m_shaderName").and_then(Value::as_str) == Some("pbr.vfx"),
         "Only pbr.vfx supports workshop finishes"
@@ -104,6 +106,7 @@ pub fn finish_material(
     {
         let slot = param.get("m_name").and_then(Value::as_str).unwrap_or("");
         let (channel, value) = match slot {
+            "g_tColor" if packed_metalness => (3, metalness),
             "g_tNormalRoughness" => (2, roughness),
             "g_tRoughness" => (0, roughness),
             "g_tMetalness" | "g_tMetalnessMask" => (0, metalness),
@@ -114,7 +117,6 @@ pub fn finish_material(
             .and_then(Value::as_str)
             .context("Missing finish texture binding")?;
         let original_texture = read(&paks, &compiled(texture))?;
-        let flags = morphic::inspect(&original_texture)?.flags;
         let mut image = morphic::decode(&original_texture)?;
         flatten_channel(&mut image, channel, value)?;
         // Full material path scopes cloned masks to this part, even when several parts
@@ -122,10 +124,11 @@ pub fn finish_material(
         let path = format!(
             "materials/grimoire/finish/{}/{slot}.vtex",
             entry.trim_end_matches(".vmat_c")
-        );
+        )
+        .to_ascii_lowercase();
         files.push((
             compiled(&path),
-            morphic::encode_vtex_png_rgba8888(&image, flags)?,
+            crate::trippy::encode_part_texture(&original_texture, &image)?,
         ));
         bindings.push((slot.to_string(), path));
     }
@@ -134,11 +137,7 @@ pub fn finish_material(
             .get("m_materialName")
             .and_then(Value::as_str)
             .context("Missing material name")?;
-        let refs: Vec<_> = bindings
-            .iter()
-            .map(|(slot, path)| (slot.as_str(), path.as_str()))
-            .collect();
-        bytes = morphic::compile_pbr_vmat(&bytes, name, &refs)?;
+        bytes = bind_finish_textures(&bytes, name, &bindings)?;
     }
     files.push((entry, bytes));
     let refs: Vec<_> = files
@@ -146,6 +145,289 @@ pub fn finish_material(
         .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
         .collect();
     crate::pack(&refs, output)
+}
+
+fn color_alpha_is_metalness(material: &morphic::material::Material) -> bool {
+    material.alpha_mode() == morphic::material::AlphaMode::Opaque
+        && material
+            .int_params
+            .get("F_BLEND_MODE")
+            .copied()
+            .unwrap_or(0)
+            == 0
+}
+
+/// Change a static PBR part's blend mode without interpreting its packed metalness as opacity.
+///
+/// # Errors
+/// Rejects unsupported shaders, cutouts, dynamic alpha bindings, invalid values and missing textures.
+pub fn surface_material(
+    paths: &[PathBuf],
+    entry: &str,
+    mode: &str,
+    opacity: f64,
+    output: &Path,
+) -> Result<()> {
+    ensure!(
+        matches!(mode, "translucent" | "ghost"),
+        "Unknown surface mode"
+    );
+    ensure!(
+        opacity.is_finite() && (0.0..=1.0).contains(&opacity),
+        "Opacity must be between 0 and 1"
+    );
+    ensure!(
+        (entry.starts_with("materials/") || entry.starts_with("models/"))
+            && !entry.contains("..")
+            && !entry.contains('\\')
+            && !entry.contains(':'),
+        "Invalid material path"
+    );
+    let paks = open(paths)?;
+    let entry = compiled(entry);
+    let original = read(&paks, &entry)?;
+    let material = morphic::material::parse(&original)?;
+    ensure!(
+        material.shader_name == "pbr.vfx",
+        "Only pbr.vfx supports workshop surfaces"
+    );
+    ensure!(
+        material
+            .int_params
+            .get("F_ALPHA_TEST")
+            .copied()
+            .unwrap_or(0)
+            == 0,
+        "Cutout materials cannot change surface mode"
+    );
+    let tree = morphic::decode_kv3_resource(&original)?;
+    for group in ["m_dynamicParams", "m_dynamicTextureParams"] {
+        let dynamic = tree.get(group).and_then(Value::as_array).unwrap_or(&[]);
+        ensure!(
+            !dynamic
+                .iter()
+                .filter_map(|v| v.get("m_name").and_then(Value::as_str))
+                .any(|name| {
+                    let name = name.to_ascii_lowercase();
+                    ["opacity", "transluc", "alpha", "glass"]
+                        .iter()
+                        .any(|part| name.contains(part))
+                }),
+            "Animated transparency parameters cannot be overridden"
+        );
+    }
+    let SurfaceTextures {
+        mut files,
+        bindings,
+    } = surface_textures(&paks, &entry, mode, &material)?;
+    let edits = surface_edits(mode, opacity);
+    let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
+    ensure!(
+        stats.failed.is_empty(),
+        "Surface parameters could not be patched: {:?}",
+        stats.failed
+    );
+    if !bindings.is_empty() {
+        let name = tree
+            .get("m_materialName")
+            .and_then(Value::as_str)
+            .context("Missing material name")?;
+        bytes = bind_finish_textures(&bytes, name, &bindings)?;
+    }
+    files.push((entry, bytes));
+    crate::pack(
+        &files
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect::<Vec<_>>(),
+        output,
+    )
+}
+
+fn surface_edits(mode: &str, opacity: f64) -> [VmatEdit; 8] {
+    [
+        VmatEdit::Int {
+            name: "F_TRANSLUCENT".into(),
+            value: 1,
+        },
+        VmatEdit::Int {
+            name: "F_ADVANCED_TRANSLUCENCY".into(),
+            value: i64::from(mode == "ghost"),
+        },
+        VmatEdit::Int {
+            name: "F_GLASS".into(),
+            value: 0,
+        },
+        VmatEdit::Int {
+            name: "F_ADDITIVE_BLEND".into(),
+            value: 0,
+        },
+        VmatEdit::Int {
+            name: "g_nTranslucencyBlendMode1".into(),
+            value: 0,
+        },
+        VmatEdit::Float {
+            name: "g_flOpacityScale1".into(),
+            value: opacity,
+        },
+        VmatEdit::Float {
+            name: "g_flAlphaAnglePower1".into(),
+            value: if mode == "ghost" { 2.0 } else { 0.0 },
+        },
+        VmatEdit::Vector {
+            name: "g_flAlphaAngleScaleBias1".into(),
+            value: if mode == "ghost" {
+                [-1.0, 1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0, 0.0]
+            },
+        },
+    ]
+}
+
+struct SurfaceTextures {
+    files: Vec<(String, Vec<u8>)>,
+    bindings: Vec<(String, String)>,
+}
+
+fn surface_textures(
+    paks: &[valve_pak::VPK],
+    entry: &str,
+    mode: &str,
+    material: &morphic::material::Material,
+) -> Result<SurfaceTextures> {
+    let color_path = material
+        .texture("g_tColor")
+        .context("A bound g_tColor is required for surface edits")?;
+    let color_bytes = read(paks, &compiled(color_path))?;
+    let stem = format!(
+        "materials/grimoire/surface/{}",
+        entry.trim_end_matches(".vmat_c")
+    )
+    .to_ascii_lowercase();
+    let mut files = Vec::<(String, Vec<u8>)>::new();
+    let mut bindings = Vec::<(String, String)>::new();
+    let already_blended = material
+        .int_params
+        .get("F_TRANSLUCENT")
+        .copied()
+        .unwrap_or(0)
+        != 0
+        || material
+            .int_params
+            .get("F_ADVANCED_TRANSLUCENCY")
+            .copied()
+            .unwrap_or(0)
+            != 0
+        || material
+            .int_params
+            .get("F_BLEND_MODE")
+            .copied()
+            .unwrap_or(0)
+            != 0;
+    if !already_blended {
+        let mut color = morphic::decode(&color_bytes)?;
+        let mut metalness = morphic::decode(&color_bytes)?;
+        let morphic::ImageData::Rgba8(pixels) = &mut metalness.data else {
+            bail!("HDR surface color is unsupported")
+        };
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            *pixel = [pixel[3], pixel[3], pixel[3], 255];
+        }
+        flatten_channel(&mut color, 3, 1.0)?;
+        let path = format!("{stem}/color.vtex");
+        files.push((
+            compiled(&path),
+            crate::trippy::encode_part_texture(&color_bytes, &color)?,
+        ));
+        bindings.push(("g_tColor".into(), path));
+        if material.texture("g_tMetalness").is_none() {
+            if let Some(path) = material.texture("g_tMetalnessMask") {
+                bindings.push(("g_tMetalness".into(), path.into()));
+            } else {
+                let path = format!("{stem}/metalness.vtex");
+                files.push((
+                    compiled(&path),
+                    crate::trippy::encode_part_texture(&color_bytes, &metalness)?,
+                ));
+                bindings.push(("g_tMetalness".into(), path));
+            }
+        }
+    }
+    if mode == "ghost" && material.texture("g_tAltTranslucency").is_none() {
+        let mask = morphic::Image {
+            width: 1,
+            height: 1,
+            data: morphic::ImageData::Rgba8(vec![255; 4]),
+        };
+        let path = format!("{stem}/alttranslucency.vtex");
+        files.push((
+            compiled(&path),
+            crate::trippy::encode_part_texture(&color_bytes, &mask)?,
+        ));
+        bindings.push(("g_tAltTranslucency".into(), path));
+    }
+    Ok(SurfaceTextures { files, bindings })
+}
+
+fn bind_finish_textures(
+    bytes: &[u8],
+    name: &str,
+    bindings: &[(String, String)],
+) -> Result<Vec<u8>> {
+    let mut tree = morphic::decode_kv3_resource(bytes)?;
+    let params = tree
+        .get_mut("m_textureParams")
+        .and_then(|value| {
+            if let Value::Array(params) = value {
+                Some(params)
+            } else {
+                None
+            }
+        })
+        .context("Material has no texture parameter table")?;
+    let mut inserted = false;
+    for (slot, path) in bindings {
+        if !params
+            .iter()
+            .any(|param| param.get("m_name").and_then(Value::as_str) == Some(slot))
+        {
+            params.push(Value::Object(vec![
+                ("m_name".into(), Value::String(slot.clone())),
+                ("m_pValue".into(), Value::String(path.clone())),
+            ]));
+            inserted = true;
+        }
+    }
+    // Appended slots borrow the existing texture entry's native Resource flag.
+    let donor = if inserted {
+        morphic::encode_kv3_resource_like(bytes, &tree)?
+    } else {
+        bytes.to_vec()
+    };
+    let refs: Vec<_> = bindings
+        .iter()
+        .map(|(slot, path)| (slot.as_str(), path.as_str()))
+        .collect();
+    let changed = morphic::compile_pbr_vmat(&donor, name, &refs)?;
+    let resource = morphic::resource::Resource::parse(&changed)?;
+    let index = resource
+        .blocks()
+        .iter()
+        .position(|block| block.kind == *b"RERL")
+        .context("Material has no resource reference list")?;
+    let mut references = morphic::resource::read_rerl(
+        resource
+            .get_block_by_index(index)
+            .context("Material references")?,
+    )?;
+    for (_, path) in bindings {
+        if !references.iter().any(|(_, name)| name == path) {
+            references.push((morphic::resource::resource_id(path), path.clone()));
+        }
+    }
+    references.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(resource.rebuild_with_block(index, &morphic::resource::write_rerl(&references))?)
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -290,7 +572,8 @@ fn movement_roots(pak: &valve_pak::VPK, kind: &str) -> Result<Vec<String>> {
     } else {
         pak.file_paths()
             .filter(|path| {
-                path.starts_with("particles/abilities/melee/")
+                (path.starts_with("particles/abilities/melee/")
+                    || path.starts_with("particles/abilities/melee_"))
                     && path.ends_with(".vpcf_c")
                     && path
                         .rsplit('/')
@@ -601,6 +884,33 @@ fn collect_colors(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heavy_melee_includes_the_generic_swing_outside_the_melee_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let paths = [
+            "particles/abilities/melee_swing_heavy.vpcf_c",
+            "particles/abilities/melee_swing_heavy_ring.vpcf_c",
+            "particles/abilities/melee/melee_heavy_activate.vpcf_c",
+            "particles/abilities/melee_swing_light.vpcf_c",
+            "particles/abilities/baba/baba_witching_hour_melee_swing_heavy.vpcf_c",
+        ];
+        crate::pack(
+            &paths
+                .iter()
+                .map(|path| (*path, b"fixture".as_slice()))
+                .collect::<Vec<_>>(),
+            &source,
+        )
+        .unwrap();
+        let pak = valve_pak::open(&source).unwrap();
+        let roots = movement_roots(&pak, "heavy-melee").unwrap();
+        assert!(roots.contains(&paths[0].to_string()));
+        assert!(roots.contains(&paths[1].to_string()));
+        assert!(roots.contains(&paths[2].to_string()));
+        assert!(!roots.contains(&paths[3].to_string()));
+        assert!(!roots.contains(&paths[4].to_string()));
+    }
     use super::*;
     #[test]
     fn stamp_texture_keeps_gpu_format_mips_and_transparency() {
@@ -758,6 +1068,21 @@ mod tests {
             Some("PF_TYPE_PARTICLE_AGE_NORMALIZED")
         );
     }
+    fn assert_texture_pixels(paks: &[valve_pak::VPK], path: &str, expected: [u8; 4]) {
+        let image = morphic::decode(&read(paks, &compiled(path)).unwrap()).unwrap();
+        let morphic::ImageData::Rgba8(pixels) = image.data else {
+            panic!()
+        };
+        for pixel in pixels.as_chunks::<4>().0 {
+            for (actual, expected) in pixel.iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 3,
+                    "Unexpected channel in {path}: {pixel:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn finish_clones_a_bound_mask_without_changing_shared_source() {
         let donor = std::fs::read(format!(
@@ -767,12 +1092,17 @@ mod tests {
         .unwrap();
         let tree = morphic::decode_kv3_resource(&donor).unwrap();
         let pixels = morphic::Image {
-            width: 1,
-            height: 1,
-            data: morphic::ImageData::Rgba8(vec![127, 140, 200, 255]),
+            width: 8,
+            height: 8,
+            data: morphic::ImageData::Rgba8([127, 140, 200, 0].repeat(64)),
         };
-        let texture =
-            morphic::encode_vtex_png_rgba8888(&pixels, morphic::TextureFlags::empty()).unwrap();
+        let template = std::fs::read(format!(
+            "{}/../morphic/fixtures/bc7/gradient_dev_02_color_psd_73660177.vtex_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let texture = morphic::resize_mip_chain(&template, &pixels).unwrap();
+        let source_info = morphic::inspect(&texture).unwrap();
         let mut files = vec![("materials/test/part.vmat_c".to_string(), donor.clone())];
         for param in tree
             .get("m_textureParams")
@@ -817,15 +1147,286 @@ mod tests {
             .unwrap();
         let path = normal.get("m_pValue").and_then(Value::as_str).unwrap();
         assert!(path.starts_with("materials/grimoire/finish/materials/test/part/"));
-        let mask = morphic::decode(&read(&paks, &compiled(path)).unwrap()).unwrap();
-        let morphic::ImageData::Rgba8(bytes) = mask.data else {
-            panic!()
-        };
-        assert_eq!(bytes, [127, 140, 128, 255]);
+        assert_eq!(
+            path,
+            path.to_ascii_lowercase(),
+            "Engine resource paths must be lowercase"
+        );
+        let material_bytes = read(&paks, "materials/test/part.vmat_c").unwrap();
+        let resource = morphic::resource::Resource::parse(&material_bytes).unwrap();
+        let refs = morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
+        assert!(
+            refs.iter()
+                .any(|(id, name)| name == path && *id == morphic::resource::resource_id(path)),
+            "Cloned finish textures must be precached by the material"
+        );
+        let encoded = read(&paks, &compiled(path)).unwrap();
+        let mask_info = morphic::inspect(&encoded).unwrap();
+        assert_eq!(mask_info.format, source_info.format);
+        assert_eq!(mask_info.flags, source_info.flags);
+        assert_eq!(mask_info.mip_count, source_info.mip_count);
+        assert_texture_pixels(&paks, path, [127, 140, 128, 0]);
         // Material shaders and all unrelated flags stay on the byte-faithful path.
         assert_eq!(edited.get("m_shaderName"), tree.get("m_shaderName"));
         assert_eq!(edited.get("m_intParams"), tree.get("m_intParams"));
+        let color_path = params
+            .iter()
+            .find(|param| param.get("m_name").and_then(Value::as_str) == Some("g_tColor"))
+            .unwrap()
+            .get("m_pValue")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_texture_pixels(&paks, color_path, [127, 140, 200, 255]);
     }
+    #[test]
+    fn transparent_finishes_keep_the_authored_opacity_texture() {
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let texture = morphic::encode_vtex_png_rgba8888(
+            &morphic::Image {
+                width: 1,
+                height: 1,
+                data: morphic::ImageData::Rgba8(vec![100, 120, 150, 37]),
+            },
+            morphic::TextureFlags::empty(),
+        )
+        .unwrap();
+        let parsed = morphic::material::parse(donor).unwrap();
+        for flag in ["F_TRANSLUCENT", "F_ALPHA_TEST", "F_BLEND_MODE"] {
+            let (material, stats) = patch_vmat_params(
+                donor,
+                &[VmatEdit::Int {
+                    name: flag.into(),
+                    value: 1,
+                }],
+            )
+            .unwrap();
+            assert!(stats.failed.is_empty());
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("source_dir.vpk");
+            let output = dir.path().join("finish_dir.vpk");
+            let mut files = vec![("models/test/part.vmat_c".to_string(), material)];
+            for path in parsed.texture_params.values() {
+                files.push((compiled(path), texture.clone()));
+            }
+            crate::pack(
+                &files
+                    .iter()
+                    .map(|(entry, data)| (entry.as_str(), data.as_slice()))
+                    .collect::<Vec<_>>(),
+                &source,
+            )
+            .unwrap();
+            finish_material(&[source], "models/test/part.vmat", 0.1, 1.0, &output).unwrap();
+            let pak = open(&[output]).unwrap();
+            let edited =
+                morphic::material::parse(&read(&pak, "models/test/part.vmat_c").unwrap()).unwrap();
+            assert_eq!(
+                edited.texture("g_tColor"),
+                parsed.texture("g_tColor"),
+                "{flag} uses color alpha for opacity"
+            );
+        }
+    }
+
+    fn surface_source(dir: &Path, edits: &[VmatEdit]) -> PathBuf {
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let (bytes, stats) = patch_vmat_params(donor, edits).unwrap();
+        assert!(stats.failed.is_empty());
+        let material = morphic::material::parse(&bytes).unwrap();
+        let image = morphic::Image {
+            width: 8,
+            height: 8,
+            data: morphic::ImageData::Rgba8([100, 120, 150, 37].repeat(64)),
+        };
+        let template =
+            include_bytes!("../../morphic/fixtures/bc7/gradient_dev_02_color_psd_73660177.vtex_c");
+        let texture = morphic::resize_mip_chain(template, &image).unwrap();
+        let mut files = vec![("models/test/part.vmat_c".to_string(), bytes)];
+        for path in material.texture_params.values() {
+            files.push((compiled(path), texture.clone()));
+        }
+        let source = dir.join("source_dir.vpk");
+        crate::pack(
+            &files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+            &source,
+        )
+        .unwrap();
+        source
+    }
+
+    fn assert_surface_resource_flags(bytes: &[u8]) {
+        let resource = morphic::resource::Resource::parse(bytes).unwrap();
+        let (tree, flags) = morphic::kv3::decode_flagged(resource.data_block().unwrap()).unwrap();
+        for (index, param) in tree
+            .get("m_textureParams")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            if ["g_tMetalness", "g_tAltTranslucency"]
+                .contains(&param.get("m_name").unwrap().as_str().unwrap())
+            {
+                assert_eq!(
+                    flags.get(&vec![
+                        Seg::Key("m_textureParams".into()),
+                        Seg::Index(index),
+                        Seg::Key("m_pValue".into())
+                    ]),
+                    Some(&1),
+                    "Inserted texture paths must retain the native Resource flag"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surface_separates_opaque_metalness_from_opacity_and_registers_native_textures() {
+        for mode in ["translucent", "ghost"] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = surface_source(dir.path(), &[]);
+            let before = std::fs::read(&source).unwrap();
+            let output = dir.path().join("surface_dir.vpk");
+            surface_material(
+                std::slice::from_ref(&source),
+                "models/test/part.vmat",
+                mode,
+                0.35,
+                &output,
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), before);
+            let paks = open(&[output.clone(), source.clone()]).unwrap();
+            let bytes = read(&paks, "models/test/part.vmat_c").unwrap();
+            let mat = morphic::material::parse(&bytes).unwrap();
+            assert_eq!(mat.int_params["F_TRANSLUCENT"], 1);
+            assert_eq!(
+                mat.int_params["F_ADVANCED_TRANSLUCENCY"],
+                i64::from(mode == "ghost")
+            );
+            assert!((mat.float_params["g_flOpacityScale1"] - 0.35).abs() < 0.00001);
+            assert!(
+                (mat.float_params["g_flAlphaAnglePower1"]
+                    - if mode == "ghost" { 2.0 } else { 0.0 })
+                .abs()
+                    < 0.00001
+            );
+            let resource = morphic::resource::Resource::parse(&bytes).unwrap();
+            let refs =
+                morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
+            assert_surface_resource_flags(&bytes);
+            for (slot, expected) in [
+                ("g_tColor", [100_u8, 120, 150, 255]),
+                ("g_tMetalness", [37, 37, 37, 255]),
+            ] {
+                let path = mat.texture(slot).unwrap();
+                assert!(path.starts_with("materials/grimoire/surface/models/test/part/"));
+                assert!(refs.contains(&(morphic::resource::resource_id(path), path.into())));
+                let encoded = read(&paks, &compiled(path)).unwrap();
+                assert_eq!(
+                    morphic::inspect(&encoded).unwrap().format,
+                    morphic::TextureFormat::Bc7
+                );
+                assert_texture_pixels(&paks, path, expected);
+            }
+            if mode == "ghost" {
+                let mask = mat.texture("g_tAltTranslucency").unwrap();
+                assert!(refs.contains(&(morphic::resource::resource_id(mask), mask.into())));
+                let image = morphic::decode(&read(&paks, &compiled(mask)).unwrap()).unwrap();
+                assert_eq!((image.width, image.height), (1, 1));
+            }
+            let finish = dir.path().join("finish_dir.vpk");
+            finish_material(
+                &[output, source],
+                "models/test/part.vmat",
+                0.2,
+                1.0,
+                &finish,
+            )
+            .unwrap();
+            let finished = open(&[finish]).unwrap();
+            let after =
+                morphic::material::parse(&read(&finished, "models/test/part.vmat_c").unwrap())
+                    .unwrap();
+            assert_eq!(after.texture("g_tColor"), mat.texture("g_tColor"));
+            let metal = morphic::decode(
+                &read(&finished, &compiled(after.texture("g_tMetalness").unwrap())).unwrap(),
+            )
+            .unwrap();
+            let morphic::ImageData::Rgba8(pixels) = metal.data else {
+                panic!()
+            };
+            assert!(pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[0] >= 252));
+        }
+    }
+
+    #[test]
+    fn surface_preserves_existing_blended_opacity_and_rejects_cutouts_or_dynamic_alpha() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = surface_source(
+            dir.path(),
+            &[VmatEdit::Int {
+                name: "F_TRANSLUCENT".into(),
+                value: 1,
+            }],
+        );
+        let paks = open(std::slice::from_ref(&source)).unwrap();
+        let original =
+            morphic::material::parse(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        let output = dir.path().join("surface_dir.vpk");
+        surface_material(
+            std::slice::from_ref(&source),
+            "models/test/part.vmat",
+            "ghost",
+            0.35,
+            &output,
+        )
+        .unwrap();
+        let paks = open(&[output]).unwrap();
+        let edited =
+            morphic::material::parse(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        assert_eq!(edited.texture("g_tColor"), original.texture("g_tColor"));
+        let source = surface_source(
+            dir.path(),
+            &[VmatEdit::Int {
+                name: "F_ALPHA_TEST".into(),
+                value: 1,
+            }],
+        );
+        assert!(surface_material(
+            std::slice::from_ref(&source),
+            "models/test/part.vmat",
+            "ghost",
+            0.35,
+            &dir.path().join("cutout_dir.vpk")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Cutout"));
+        let source = surface_source(
+            dir.path(),
+            &[VmatEdit::expr("g_flOpacityScale1", "time()").unwrap()],
+        );
+        assert!(surface_material(
+            &[source],
+            "models/test/part.vmat",
+            "ghost",
+            0.35,
+            &dir.path().join("dynamic_dir.vpk")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Animated"));
+    }
+
     #[test]
     fn roughness_preserves_normal_and_alpha() {
         let mut image = morphic::Image {

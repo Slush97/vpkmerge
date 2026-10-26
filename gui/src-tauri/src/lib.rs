@@ -502,9 +502,11 @@ async fn build_trippy_addon(
 
     let skin_options = vpkmerge_core::trippy::TrippySkinOptions {
         style,
+        palette: Vec::new(),
         intensity: intensity.unwrap_or(1.0),
         phase: phase.unwrap_or(0.0),
         scroll: scroll.unwrap_or(1.0),
+        scale: 1.0,
         include_body,
         include_weapons: include_skin_weapons,
     };

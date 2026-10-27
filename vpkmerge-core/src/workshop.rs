@@ -357,6 +357,34 @@ pub fn surface_material(
     opacity: f64,
     output: &Path,
 ) -> Result<()> {
+    surface_material_in(paths, entry, mode, opacity, None, output)
+}
+
+/// Make only the white of `mask` (a white-on-black UV PNG) see-through at `opacity`, leaving the
+/// rest of the part as it was. The material turns translucent with its opacity scale untouched, and
+/// the color alpha carries the area: 1 outside it, `opacity` inside. A part that already blends keeps
+/// its own alpha, scaled down inside the area.
+///
+/// # Errors
+/// Rejects unsupported shaders, cutouts, animated transparency, invalid values and missing textures.
+pub fn surface_area_material(
+    paths: &[PathBuf],
+    entry: &str,
+    opacity: f64,
+    mask: &[u8],
+    output: &Path,
+) -> Result<()> {
+    surface_material_in(paths, entry, "translucent", opacity, Some(mask), output)
+}
+
+fn surface_material_in(
+    paths: &[PathBuf],
+    entry: &str,
+    mode: &str,
+    opacity: f64,
+    mask: Option<&[u8]>,
+    output: &Path,
+) -> Result<()> {
     ensure!(
         matches!(mode, "translucent" | "ghost"),
         "Unknown surface mode"
@@ -405,11 +433,19 @@ pub fn surface_material(
             "Animated transparency parameters cannot be overridden"
         );
     }
+    let area = mask.map(|png| (png, opacity));
     let SurfaceTextures {
         mut files,
         bindings,
-    } = surface_textures(&paks, &entry, mode, &material)?;
-    let edits = surface_edits(mode, opacity);
+    } = surface_textures(&paks, &entry, mode, &material, area)?;
+    // An area keeps the part's own opacity scale: its alpha already carries the see-through texels.
+    let edits: Vec<VmatEdit> = surface_edits(mode, opacity)
+        .into_iter()
+        .filter(|edit| {
+            area.is_none()
+                || !matches!(edit, VmatEdit::Float { name, .. } if name == "g_flOpacityScale1")
+        })
+        .collect();
     let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
     ensure!(
         stats.failed.is_empty(),
@@ -479,11 +515,44 @@ struct SurfaceTextures {
     bindings: Vec<(String, String)>,
 }
 
+/// Scale color alpha toward `opacity` by the mask's white, resized to the image.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn scale_alpha(image: &mut morphic::Image, png: &[u8], opacity: f64) -> Result<()> {
+    let (width, height) = (image.width, image.height);
+    let morphic::ImageData::Rgba8(pixels) = &mut image.data else {
+        bail!("HDR surface color is unsupported")
+    };
+    let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .context("Decoding surface mask PNG")?
+        .to_luma8();
+    let weights = if decoded.dimensions() == (width, height) {
+        decoded
+    } else {
+        image::imageops::resize(
+            &decoded,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    for (pixel, weight) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(weights.as_raw())
+    {
+        let factor = 1.0 + (opacity - 1.0) * f64::from(*weight) / 255.0;
+        pixel[3] = (f64::from(pixel[3]) * factor).round() as u8;
+    }
+    Ok(())
+}
+
 fn surface_textures(
     paks: &[valve_pak::VPK],
     entry: &str,
     mode: &str,
     material: &morphic::material::Material,
+    area: Option<(&[u8], f64)>,
 ) -> Result<SurfaceTextures> {
     let color_path = material
         .texture("g_tColor")
@@ -520,6 +589,18 @@ fn surface_textures(
         // game renders as a red wireframe. Without one, the see-through part loses its metalness.
         let mut color = morphic::decode(&color_bytes)?;
         flatten_channel(&mut color, 3, 1.0)?;
+        if let Some((png, opacity)) = area {
+            scale_alpha(&mut color, png, opacity)?;
+        }
+        let path = format!("{stem}/color.vtex");
+        files.push((
+            compiled(&path),
+            crate::trippy::encode_part_texture(&color_bytes, &color)?,
+        ));
+        bindings.push(("g_tColor".into(), path));
+    } else if let Some((png, opacity)) = area {
+        let mut color = morphic::decode(&color_bytes)?;
+        scale_alpha(&mut color, png, opacity)?;
         let path = format!("{stem}/color.vtex");
         files.push((
             compiled(&path),
@@ -1593,6 +1674,57 @@ mod tests {
                     "Inserted texture paths must retain the native Resource flag"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn surface_area_turns_only_the_mask_see_through() {
+        let mask =
+            image::GrayImage::from_fn(8, 8, |x, _| image::Luma([if x < 4 { 255 } else { 0 }]));
+        let mut png = Vec::new();
+        mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        // Opaque part (color alpha 37 is packed metalness), then a part that already blends at alpha 37.
+        for (edits, inside, outside) in [
+            (vec![], 77, 255),
+            (
+                vec![VmatEdit::Int {
+                    name: "F_TRANSLUCENT".into(),
+                    value: 1,
+                }],
+                11,
+                37,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = surface_source(dir.path(), &edits);
+            let output = dir.path().join("area_dir.vpk");
+            surface_area_material(
+                std::slice::from_ref(&source),
+                "models/test/part.vmat",
+                0.3,
+                &png,
+                &output,
+            )
+            .unwrap();
+            let paks = open(&[output, source]).unwrap();
+            let bytes = read(&paks, "models/test/part.vmat_c").unwrap();
+            let material = morphic::material::parse(&bytes).unwrap();
+            assert_eq!(material.int_params["F_TRANSLUCENT"], 1);
+            assert!(
+                !material.float_params.contains_key("g_flOpacityScale1")
+                    || (material.float_params["g_flOpacityScale1"] - 1.0).abs() < 1e-6,
+                "the part keeps its own opacity scale"
+            );
+            let color = material.texture("g_tColor").unwrap();
+            assert!(color.starts_with("materials/grimoire/surface/"));
+            let image = morphic::decode(&read(&paks, &compiled(color)).unwrap()).unwrap();
+            let morphic::ImageData::Rgba8(pixels) = image.data else {
+                panic!()
+            };
+            let alpha = |x: usize| pixels[(4 * image.width as usize + x) * 4 + 3];
+            assert!(alpha(1).abs_diff(inside) <= 4, "inside {}", alpha(1));
+            assert!(alpha(6).abs_diff(outside) <= 4, "outside {}", alpha(6));
         }
     }
 

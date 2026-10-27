@@ -94,6 +94,9 @@ enum WorkshopCommand {
         mode: String,
         #[arg(long)]
         opacity: f64,
+        /// White-on-black UV mask PNG: only this area turns see-through (translucent mode only).
+        #[arg(long)]
+        mask: Option<PathBuf>,
         #[arg(long)]
         encode_vpk: PathBuf,
     },
@@ -111,6 +114,7 @@ fn rgb(color: &str) -> Result<[f64; 3]> {
     Ok([channel(0), channel(2), channel(4)])
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run(args: WorkshopArgs) -> Result<()> {
     match args.command {
         WorkshopCommand::Motions {
@@ -202,7 +206,25 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             entry,
             mode,
             opacity,
+            mask,
             encode_vpk,
-        } => vpkmerge_core::workshop::surface_material(&vpk, &entry, &mode, opacity, &encode_vpk),
+        } => match mask {
+            Some(mask) => {
+                anyhow::ensure!(
+                    mode == "translucent",
+                    "--mask only works with --mode translucent"
+                );
+                vpkmerge_core::workshop::surface_area_material(
+                    &vpk,
+                    &entry,
+                    opacity,
+                    &std::fs::read(mask)?,
+                    &encode_vpk,
+                )
+            }
+            None => {
+                vpkmerge_core::workshop::surface_material(&vpk, &entry, &mode, opacity, &encode_vpk)
+            }
+        },
     }
 }

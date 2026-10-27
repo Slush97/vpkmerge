@@ -164,6 +164,7 @@ pub enum GlowAnimation {
 ///
 /// # Errors
 /// Rejects unsupported shaders, animated self-illumination, invalid values and missing textures.
+#[allow(clippy::too_many_lines)]
 pub fn glow_material(
     paths: &[PathBuf],
     entry: &str,

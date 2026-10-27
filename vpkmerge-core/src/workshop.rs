@@ -267,6 +267,12 @@ pub fn glow_material(
         "Animated self-illumination cannot be overridden"
     );
     let material = morphic::material::parse(&original)?;
+    // The mask must go into a slot the material already has: adding a slot rewrites the material,
+    // which the game renders as a red wireframe.
+    ensure!(
+        material.texture("g_tSelfIllumMask").is_some(),
+        "This part has no glow mask slot"
+    );
     let template_path = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
         .into_iter()
         .find_map(|slot| material.texture(slot))

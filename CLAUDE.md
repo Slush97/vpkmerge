@@ -678,8 +678,10 @@ Deadlock heroes render through an NPR path built into `pbr.vfx`
 (`F_USE_NPR_LIGHTING=1` on 502/605 hero materials), and the toon controls
 (solid outlines, unlit) plus the specular side (sheen, glass) are all plain
 per-material params. `vpkmerge_core::vmat_style` sets or inserts them
-byte-faithfully (tagless 0/1 values fall back to a full re-encode on
-non-blobbed materials) and packs an addon VPK.
+byte-faithfully and packs an addon VPK. It never re-encodes a material: the game
+renders a re-encoded `.vmat_c` as a red wireframe. A tagless 0/1 float or vector
+(nothing to patch in place) rides a constant dynamic expression instead, and an
+int that cannot change in place fails (see `docs/skin-editing.md`).
 
 `vpkmerge vmat --vpk <VPK> [--base <VPK>] (--hero CODENAME | --entry PATH...)
 [--list] [--preset gem|glass|pbr|unlit|ink] [--tint COLOR] [--set-int NAME=V]
@@ -728,9 +730,9 @@ in-game (2026-06-16) before the fix. `verify_v5_size_invariants` now guards both
 totals at pack time so a drift fails the edit instead of the game. `--set-expr`
 overriding an existing param takes the same path. The multi-blob fix is guarded
 offline by `verify_v5_size_invariants`; in-game rendering of the fixed path has
-not been independently re-confirmed. Other
-blobbed-`.vmat_c` edits that need the *re-encode* fallback (a tagless scalar with no
-data lane) still fail loudly, since an uncompressed re-emit renders red wireframe.
+not been independently re-confirmed. A tagless
+scalar with no data lane rides a constant expression on blobbed materials too, so
+nothing is ever re-encoded (an uncompressed re-emit renders red wireframe).
 480 shipped pak01 materials use these (430 on
 `pbr.vfx`); engine-supplied entity attributes (`$ent_health`, `$ent_age`,
 `$ent_origin`, ... + scene-side `$camera_origin`) enumerate from `strings` over

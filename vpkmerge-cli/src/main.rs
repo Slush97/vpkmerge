@@ -1141,6 +1141,10 @@ struct TrippySkinCmd {
     /// Source HSV value multiplier. Requires --material.
     #[arg(long, default_value_t = 1.0)]
     brightness: f64,
+
+    /// Paint the selected material in this RGB color, retaining luminance detail.
+    #[arg(long, value_parser = parse_pattern_color, requires = "material")]
+    repaint: Option<[u8; 3]>,
 }
 
 #[derive(Args)]
@@ -4873,6 +4877,7 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
                 hue: args.hue_shift,
                 saturation: args.saturation,
                 brightness: args.brightness,
+                repaint: args.repaint,
             },
             &args.encode_vpk,
         );

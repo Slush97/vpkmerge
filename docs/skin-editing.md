@@ -14,6 +14,8 @@ The CLI also contains a Ghost recipe for research. It is experimental: current i
 
 `trippy-skin --style moo --scale 1.5` and `trippy-preview --style moo --scale 1.5` use the same procedural cow-print sampler. Moo has smaller asymmetric patches, narrow white gaps and antialiasing tied to output resolution. Custom palettes retain their two-to-four color roles.
 
+`trippy-skin --material ... --repaint ffffff` paints the entire color texture, lifting dark pixels while retaining some luminance detail. It preserves packed alpha and neutralizes the material tint. Color-only edits leave existing scroll and lighting parameters intact. Repaint does not use the material's tint mask.
+
 Scale ranges from 0.25 to 8. For Moo, it selects a whole periodic cell density based on nine cells per axis at 1x. Rounding density keeps fractional UI values seamless. Other pattern styles ignore this control and keep their previous output. Omitting Scale preserves the default value of 1. Texture scrolling remains a separate operation; this does not add gameplay-reactive animation.
 
 ![Moo at default density](screenshots/skin-editor-feedback/moo-default.png)

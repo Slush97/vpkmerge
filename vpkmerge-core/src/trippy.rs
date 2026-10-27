@@ -426,6 +426,8 @@ pub struct MaterialColorAdjustments {
     pub hue: f64,
     pub saturation: f64,
     pub brightness: f64,
+    /// Optional full-part paint color, applied after the pattern and adjustments.
+    pub repaint: Option<[u8; 3]>,
 }
 
 impl Default for MaterialColorAdjustments {
@@ -434,6 +436,7 @@ impl Default for MaterialColorAdjustments {
             hue: 0.0,
             saturation: 1.0,
             brightness: 1.0,
+            repaint: None,
         }
     }
 }
@@ -488,6 +491,22 @@ pub fn adjust_material_pixels(pixels: &mut [u8], value: &MaterialColorAdjustment
     }
 }
 
+/// Paint the selected part while keeping some of its luminance detail and its alpha mask.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn repaint_material_pixels(pixels: &mut [u8], target: [u8; 3]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let luminance = (0.2126 * f64::from(pixel[0])
+            + 0.7152 * f64::from(pixel[1])
+            + 0.0722 * f64::from(pixel[2]))
+            / 255.0;
+        let detail = 0.65 + 0.35 * luminance;
+        for channel in 0..3 {
+            pixel[channel] = (f64::from(target[channel]) * detail).round() as u8;
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 pub fn edit_material_to_addon(
     vpk: &Path,
     base: Option<&Path>,
@@ -542,7 +561,12 @@ pub fn edit_material_to_addon(
         options.scale,
     )?;
     match &mut image.data {
-        ImageData::Rgba8(pixels) => adjust_material_pixels(pixels, color),
+        ImageData::Rgba8(pixels) => {
+            adjust_material_pixels(pixels, color);
+            if let Some(target) = color.repaint {
+                repaint_material_pixels(pixels, target);
+            }
+        }
         ImageData::Rgba16F(_) => anyhow::bail!("Selected color texture is not RGBA8"),
     }
     let painted = encode_part_texture(&source, &image)?;
@@ -566,7 +590,30 @@ pub fn edit_material_to_addon(
     ];
     let changed =
         morphic::patch_kv3_resource_strings_adding(&bytes, &[(redirect, isolated.clone())])?;
-    let changed = patch_trippy_material_params(&changed, &value, options, false)?;
+    let mut changed = if options.intensity > 0.0 {
+        patch_trippy_material_params(&changed, &value, options, false)?
+    } else {
+        changed
+    };
+    if color.repaint.is_some() {
+        let edits = [
+            crate::vmat_style::VmatEdit::Vector {
+                name: "g_vColorTint1".into(),
+                value: [1.0, 1.0, 1.0, 0.0],
+            },
+            crate::vmat_style::VmatEdit::Int {
+                name: "g_nTextureColorTintMode1".into(),
+                value: 0,
+            },
+        ];
+        let (patched, stats) = crate::vmat_style::patch_vmat_params(&changed, &edits)?;
+        anyhow::ensure!(
+            stats.failed.is_empty(),
+            "Paint tint parameters could not be set: {:?}",
+            stats.failed
+        );
+        changed = patched;
+    }
     let resource = morphic::resource::Resource::parse(&changed)?;
     let rerl_index = resource
         .blocks()
@@ -2133,6 +2180,7 @@ mod tests {
                 hue: 120.0,
                 saturation: 1.0,
                 brightness: 0.5,
+                repaint: None,
             },
         );
         assert_eq!(pixels, vec![0, 128, 0, 19, 0, 0, 128, 128, 40, 40, 40, 0]);
@@ -2143,9 +2191,22 @@ mod tests {
                 hue: -180.0,
                 saturation: 0.0,
                 brightness: 1.5,
+                repaint: None,
             },
         );
         assert_eq!(gray, vec![240, 240, 240, 255]);
+    }
+
+    #[test]
+    fn repaint_lifts_dark_pixels_keeps_detail_and_alpha() {
+        let mut pixels = vec![0, 0, 0, 0, 128, 128, 128, 71, 255, 255, 255, 255];
+        repaint_material_pixels(&mut pixels, [255, 255, 255]);
+        assert_eq!(
+            pixels,
+            vec![166, 166, 166, 0, 211, 211, 211, 71, 255, 255, 255, 255]
+        );
+        repaint_material_pixels(&mut pixels, [0, 0, 0]);
+        assert_eq!(pixels, vec![0, 0, 0, 0, 0, 0, 0, 71, 0, 0, 0, 255]);
     }
 
     #[test]
@@ -2193,6 +2254,140 @@ mod tests {
         let refs = morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
         assert!(refs.iter().any(|(_, path)| path == isolated));
         assert_eq!(std::fs::read(&source).unwrap(), before);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn repaint_export_neutralizes_material_tint_and_keeps_color_alpha() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let out = dir.path().join("paint_dir.vpk");
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let tint = [
+            crate::vmat_style::VmatEdit::Vector {
+                name: "g_vColorTint1".into(),
+                value: [0.2, 0.4, 0.8, 0.0],
+            },
+            crate::vmat_style::VmatEdit::Int {
+                name: "g_nTextureColorTintMode1".into(),
+                value: 1,
+            },
+            crate::vmat_style::VmatEdit::Vector {
+                name: "g_vAlbedoScrollSpeed1".into(),
+                value: [0.7, 0.4, 0.0, 0.0],
+            },
+            crate::vmat_style::VmatEdit::Float {
+                name: "g_flSelfIllumScale1".into(),
+                value: 3.25,
+            },
+        ];
+        let (donor, stats) = crate::vmat_style::patch_vmat_params(donor, &tint).unwrap();
+        assert!(stats.failed.is_empty());
+        let original = morphic::material::parse(&donor).unwrap();
+        let texture = zero_alpha_bc7();
+        crate::pack(
+            &[
+                ("models/test/a.vmat_c", donor.as_slice()),
+                (
+                    &compiled_resource_path(original.texture("g_tColor").unwrap()),
+                    texture.as_slice(),
+                ),
+            ],
+            &source,
+        )
+        .unwrap();
+        edit_material_to_addon(
+            &source,
+            None,
+            "models/test/a.vmat",
+            &TrippySkinOptions {
+                intensity: 0.0,
+                scroll: 0.0,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments {
+                repaint: Some([255, 255, 255]),
+                ..MaterialColorAdjustments::default()
+            },
+            &out,
+        )
+        .unwrap();
+        let vpks = open_vpks(&out, None).unwrap();
+        let material =
+            morphic::material::parse(&read_entry(&vpks, "models/test/a.vmat_c").unwrap()).unwrap();
+        for (actual, expected) in material.vector_params["g_vColorTint1"]
+            .iter()
+            .zip([1.0, 1.0, 1.0, 0.0])
+        {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        }
+        assert_eq!(material.int_params["g_nTextureColorTintMode1"], 0);
+        let scroll = material.vector_params["g_vAlbedoScrollSpeed1"];
+        assert!((scroll[0] - 0.7).abs() < 0.0001 && (scroll[1] - 0.4).abs() < 0.0001);
+        assert!((material.float_params["g_flSelfIllumScale1"] - 3.25).abs() < 0.0001);
+        let texture = read_entry(
+            &vpks,
+            &compiled_resource_path(material.texture("g_tColor").unwrap()),
+        )
+        .unwrap();
+        let image = morphic::decode(&texture).unwrap();
+        let ImageData::Rgba8(pixels) = image.data else {
+            panic!("expected RGBA8");
+        };
+        assert!(pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 0 && pixel[0] >= 160));
+
+        // HSV-only edits must leave the source animation and lighting intact too.
+        let adjust_out = dir.path().join("adjust_dir.vpk");
+        edit_material_to_addon(
+            &source,
+            None,
+            "models/test/a.vmat",
+            &TrippySkinOptions {
+                style: TrippyStyle::Holo,
+                intensity: 0.0,
+                scroll: 0.0,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments {
+                hue: 30.0,
+                ..MaterialColorAdjustments::default()
+            },
+            &adjust_out,
+        )
+        .unwrap();
+        let adjust_vpks = open_vpks(&adjust_out, None).unwrap();
+        let adjusted =
+            morphic::material::parse(&read_entry(&adjust_vpks, "models/test/a.vmat_c").unwrap())
+                .unwrap();
+        assert!((adjusted.vector_params["g_vAlbedoScrollSpeed1"][0] - 0.7).abs() < 0.0001);
+        assert!((adjusted.float_params["g_flSelfIllumScale1"] - 3.25).abs() < 0.0001);
+
+        // A selected pattern still sets its own animation and material parameters.
+        let pattern_out = dir.path().join("pattern_dir.vpk");
+        edit_material_to_addon(
+            &source,
+            None,
+            "models/test/a.vmat",
+            &TrippySkinOptions {
+                style: TrippyStyle::Holo,
+                intensity: 1.0,
+                scroll: 0.5,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments::default(),
+            &pattern_out,
+        )
+        .unwrap();
+        let pattern_vpks = open_vpks(&pattern_out, None).unwrap();
+        let pattern =
+            morphic::material::parse(&read_entry(&pattern_vpks, "models/test/a.vmat_c").unwrap())
+                .unwrap();
+        assert!((pattern.vector_params["g_vAlbedoScrollSpeed1"][0] - 0.04).abs() < 0.0001);
+        assert!((pattern.float_params["g_flSelfIllumScale1"] - 5.5).abs() < 0.0001);
     }
 
     /// A 64x64 BC7 color map whose alpha is 0 everywhere, like a hero color
@@ -2365,6 +2560,7 @@ mod tests {
                 hue: 90.0,
                 saturation: 1.0,
                 brightness: 1.0,
+                repaint: None,
             },
         );
 

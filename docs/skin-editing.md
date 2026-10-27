@@ -6,9 +6,15 @@ The skin editor needs consistent results across the generated texture, model pre
 
 `workshop finish` writes roughness to the packed normal/roughness channel and metalness to the material's actual metalness source. It preserves opacity on blended materials. Cloned textures receive lowercase paths and valid resource references.
 
-`workshop surface --mode translucent --opacity 0.35` converts a supported static PBR material to ordinary alpha translucency. Opaque color alpha can store metalness, so conversion moves that channel into a real metalness texture before normalizing color alpha for opacity. This composes with pattern and tint edits before the finish pass. Cutout and dynamically controlled transparency materials are rejected.
+`workshop surface --mode translucent --opacity 0.35` converts a supported static PBR material to ordinary alpha translucency. Opaque color alpha can store metalness. Conversion keeps it only when the material already binds a `g_tMetalness` slot; otherwise the see-through part loses its metalness, because adding a slot breaks the material in game (see below). This composes with pattern and tint edits before the finish pass. Cutout and dynamically controlled transparency materials are rejected.
 
-The CLI also contains a Ghost recipe for research. It is experimental: current in-game tests produced solid-red materials on some parts. It is not a supported editor preset. Glass and sheen remain separate research candidates.
+The CLI also contains a Ghost recipe for research. It is experimental: it inserts a `g_tAltTranslucency` slot, which renders as a red wireframe in game. It is not a supported editor preset. Glass and sheen remain separate research candidates.
+
+## Material edits never re-encode
+
+The game renders a `.vmat_c` re-encoded from scratch as a red wireframe. In-game evidence: Abrams' head after a glow edit and Apollo's translucent sword, both of which store self-illumination values as tagless KV3 scalars (an exact 0 or 1 with no data bytes, so there is nothing to patch in place), plus the earlier soul-container probes. Values patched in place and parameters inserted next to existing ones load fine.
+
+So `patch_vmat_params` never re-encodes. A float or vector that cannot change in place becomes a constant dynamic expression (`m_dynamicParams`, the way shipped animated materials drive values), which overrides the stored value. An int (a static combo flag) or attribute that cannot change in place fails with an error instead of producing a broken material. Workshop edits also never add a texture slot: binding a slot the material does not have forces the same re-encode.
 
 ## Moo and density
 

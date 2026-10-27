@@ -533,13 +533,73 @@ fn paint_material_image(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
 pub fn edit_material_to_addon(
     vpk: &Path,
     base: Option<&Path>,
     material: &str,
     options: &TrippySkinOptions,
     color: &MaterialColorAdjustments,
+    out: &Path,
+) -> Result<()> {
+    edit_material_region_to_addon(vpk, base, material, options, color, None, out)
+}
+
+/// Blend `painted` over `original` through a white-on-black `mask`, keeping the original alpha.
+///
+/// The mask is resized to the texture, so a renderer can bake it at any resolution. Hero
+/// color maps keep a mask in alpha, so only RGB takes the edit.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn blend_material_region(original: &Image, painted: &mut Image, mask: &[u8]) -> Result<()> {
+    let (ImageData::Rgba8(source), ImageData::Rgba8(pixels)) = (&original.data, &mut painted.data)
+    else {
+        anyhow::bail!("Selected color texture is not RGBA8");
+    };
+    anyhow::ensure!(
+        (original.width, original.height) == (painted.width, painted.height),
+        "Region mask texture sizes differ"
+    );
+    let decoded = image::load_from_memory_with_format(mask, image::ImageFormat::Png)
+        .context("Decoding region mask PNG")?
+        .to_luma8();
+    let weights = if decoded.dimensions() == (painted.width, painted.height) {
+        decoded
+    } else {
+        image::imageops::resize(
+            &decoded,
+            painted.width,
+            painted.height,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    for ((pixel, source), weight) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(source.as_chunks::<4>().0)
+        .zip(weights.as_raw())
+    {
+        let weight = f32::from(*weight) / 255.0;
+        for channel in 0..3 {
+            let from = f32::from(source[channel]);
+            pixel[channel] = (from + (f32::from(pixel[channel]) - from) * weight).round() as u8;
+        }
+        pixel[3] = source[3];
+    }
+    Ok(())
+}
+
+/// Edit one material's isolated color texture, limited to `mask` when one is given.
+///
+/// A masked edit leaves material-wide parameters alone: a region cannot scroll on its own,
+/// and neutralizing the tint for a region's paint would recolor the rest of the part.
+#[allow(clippy::too_many_lines)]
+pub fn edit_material_region_to_addon(
+    vpk: &Path,
+    base: Option<&Path>,
+    material: &str,
+    options: &TrippySkinOptions,
+    color: &MaterialColorAdjustments,
+    mask: Option<&[u8]>,
     out: &Path,
 ) -> Result<()> {
     validate_pattern_palette(&options.palette)?;
@@ -579,7 +639,11 @@ pub fn edit_material_to_addon(
             data: ImageData::Rgba8(color.repeat(256 * 256)),
         };
     }
+    let original = mask.map(|_| image.clone());
     paint_material_image(&mut image, options, color)?;
+    if let (Some(mask), Some(original)) = (mask, &original) {
+        blend_material_region(original, &mut image, mask)?;
+    }
     let painted = encode_part_texture(&source, &image)?;
     let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
@@ -601,12 +665,12 @@ pub fn edit_material_to_addon(
     ];
     let changed =
         morphic::patch_kv3_resource_strings_adding(&bytes, &[(redirect, isolated.clone())])?;
-    let mut changed = if options.intensity > 0.0 {
+    let mut changed = if options.intensity > 0.0 && mask.is_none() {
         patch_trippy_material_params(&changed, &value, options, false)?
     } else {
         changed
     };
-    if color.repaint.is_some() {
+    if color.repaint.is_some() && mask.is_none() {
         let edits = [
             crate::vmat_style::VmatEdit::Vector {
                 name: "g_vColorTint1".into(),
@@ -2430,6 +2494,92 @@ mod tests {
                 .unwrap();
         assert!((pattern.vector_params["g_vAlbedoScrollSpeed1"][0] - 0.04).abs() < 0.0001);
         assert!((pattern.float_params["g_flSelfIllumScale1"] - 5.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn masked_repaint_changes_only_the_region_and_keeps_material_params() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let out = dir.path().join("region_dir.vpk");
+        let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
+        let tint = [
+            crate::vmat_style::VmatEdit::Vector {
+                name: "g_vColorTint1".into(),
+                value: [0.2, 0.4, 0.8, 0.0],
+            },
+            crate::vmat_style::VmatEdit::Int {
+                name: "g_nTextureColorTintMode1".into(),
+                value: 1,
+            },
+        ];
+        let (donor, stats) = crate::vmat_style::patch_vmat_params(donor, &tint).unwrap();
+        assert_eq!(stats.failed, Vec::<String>::new());
+        let original = morphic::material::parse(&donor).unwrap();
+        crate::pack(
+            &[
+                ("models/test/a.vmat_c", donor.as_slice()),
+                (
+                    &compiled_resource_path(original.texture("g_tColor").unwrap()),
+                    zero_alpha_bc7().as_slice(),
+                ),
+            ],
+            &source,
+        )
+        .unwrap();
+        // A 16x16 mask covering the left half, so the blend also has to resize it.
+        let mask =
+            image::GrayImage::from_fn(16, 16, |x, _| image::Luma([if x < 8 { 255 } else { 0 }]));
+        let mut png = Vec::new();
+        mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        edit_material_region_to_addon(
+            &source,
+            None,
+            "models/test/a.vmat",
+            &TrippySkinOptions {
+                intensity: 0.0,
+                scroll: 0.0,
+                ..TrippySkinOptions::default()
+            },
+            &MaterialColorAdjustments {
+                repaint: Some([255, 0, 0]),
+                ..MaterialColorAdjustments::default()
+            },
+            Some(&png),
+            &out,
+        )
+        .unwrap();
+        let vpks = open_vpks(&out, None).unwrap();
+        let material =
+            morphic::material::parse(&read_entry(&vpks, "models/test/a.vmat_c").unwrap()).unwrap();
+        for (actual, expected) in material.vector_params["g_vColorTint1"]
+            .iter()
+            .zip([0.2, 0.4, 0.8, 0.0])
+        {
+            assert!((actual - expected).abs() < 0.0001);
+        }
+        assert_eq!(material.int_params["g_nTextureColorTintMode1"], 1);
+        let texture = read_entry(
+            &vpks,
+            &compiled_resource_path(material.texture("g_tColor").unwrap()),
+        )
+        .unwrap();
+        let image = morphic::decode(&texture).unwrap();
+        let ImageData::Rgba8(pixels) = image.data else {
+            panic!("expected RGBA8");
+        };
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            let x = index % 64;
+            assert!(pixel[3] <= 2, "alpha keeps the source mask: {pixel:?}");
+            if x < 28 {
+                assert!(
+                    pixel[0] >= 160 && pixel[2] <= 24,
+                    "painted at {x}: {pixel:?}"
+                );
+            } else if x >= 36 {
+                assert!(pixel[2].abs_diff(160) <= 16, "untouched at {x}: {pixel:?}");
+            }
+        }
     }
 
     /// A 64x64 BC7 color map whose alpha is 0 everywhere, like a hero color

@@ -1145,6 +1145,11 @@ struct TrippySkinCmd {
     /// Paint the selected material in this RGB color, retaining luminance detail.
     #[arg(long, value_parser = parse_pattern_color, requires = "material")]
     repaint: Option<[u8; 3]>,
+
+    /// Limit the edit to the white area of this UV mask PNG (any size; resized to the
+    /// texture). The rest of the texture and every material parameter stay unchanged.
+    #[arg(long, value_name = "PNG", requires = "material")]
+    mask: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -4868,7 +4873,12 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
         include_weapons,
     };
     if let Some(material) = &args.material {
-        return vpkmerge_core::trippy::edit_material_to_addon(
+        let mask = args
+            .mask
+            .as_ref()
+            .map(|path| std::fs::read(path).with_context(|| format!("reading {}", path.display())))
+            .transpose()?;
+        return vpkmerge_core::trippy::edit_material_region_to_addon(
             &args.vpk,
             args.base.as_deref(),
             material,
@@ -4879,6 +4889,7 @@ fn run_trippy_skin(args: &TrippySkinCmd) -> Result<()> {
                 brightness: args.brightness,
                 repaint: args.repaint,
             },
+            mask.as_deref(),
             &args.encode_vpk,
         );
     }

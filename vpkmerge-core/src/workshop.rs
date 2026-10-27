@@ -147,6 +147,158 @@ pub fn finish_material(
     crate::pack(&refs, output)
 }
 
+/// How a glowing part animates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlowAnimation {
+    Steady,
+    /// Brightness rises and falls about every two seconds.
+    Pulse,
+    /// The glow color cycles through the spectrum.
+    Rainbow,
+}
+
+/// Turn on a part's self-illumination, limited to the white of `mask` (whole part without one).
+///
+/// Works on materials that never shipped `F_SELF_ILLUM`: it switches the feature on, binds a mask
+/// cloned at a part-scoped path and drives the glow through dynamic expressions for animation.
+///
+/// # Errors
+/// Rejects unsupported shaders, animated self-illumination, invalid values and missing textures.
+pub fn glow_material(
+    paths: &[PathBuf],
+    entry: &str,
+    mask: Option<&[u8]>,
+    color: [f64; 3],
+    strength: f64,
+    animation: GlowAnimation,
+    output: &Path,
+) -> Result<()> {
+    ensure!(
+        strength.is_finite() && (0.0..=50.0).contains(&strength),
+        "Glow strength must be between 0 and 50"
+    );
+    ensure!(
+        color
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+        "Glow color channels must be between 0 and 1"
+    );
+    ensure!(
+        !entry.contains("..") && !entry.contains('\\') && !entry.contains(':'),
+        "Invalid material path"
+    );
+    let paks = open(paths)?;
+    let entry = compiled(entry);
+    let original = read(&paks, &entry)?;
+    let tree = morphic::decode_kv3_resource(&original)?;
+    ensure!(
+        tree.get("m_shaderName").and_then(Value::as_str) == Some("pbr.vfx"),
+        "Only pbr.vfx supports workshop glow"
+    );
+    let dynamic = tree
+        .get("m_dynamicParams")
+        .and_then(Value::as_array)
+        .unwrap_or(&[]);
+    ensure!(
+        !dynamic.iter().any(|v| v
+            .get("m_name")
+            .and_then(Value::as_str)
+            .is_some_and(|n| n.contains("SelfIllum"))),
+        "Animated self-illumination cannot be overridden"
+    );
+    let material = morphic::material::parse(&original)?;
+    let template_path = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
+        .into_iter()
+        .find_map(|slot| material.texture(slot))
+        .context("Material has no color texture to size the glow mask from")?;
+    let template = read(&paks, &compiled(template_path))?;
+    let info = morphic::inspect(&template)?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    let luma = match mask {
+        Some(png) => {
+            let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+                .context("Decoding glow mask PNG")?
+                .to_luma8();
+            image::imageops::resize(
+                &decoded,
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
+            .into_raw()
+        }
+        None => vec![255; (width * height) as usize],
+    };
+    // Every channel carries the mask, so it reads the same whichever one the shader samples.
+    let pixels = luma.iter().flat_map(|&v| [v, v, v, 255]).collect();
+    let glow_mask = morphic::Image {
+        width,
+        height,
+        data: morphic::ImageData::Rgba8(pixels),
+    };
+    let mut edits = vec![
+        VmatEdit::Int {
+            name: "F_SELF_ILLUM".into(),
+            value: 1,
+        },
+        VmatEdit::Float {
+            name: "g_flSelfIllumAlbedoFactor1".into(),
+            value: 0.0,
+        },
+        VmatEdit::Vector {
+            name: "g_vSelfIllumScrollSpeed1".into(),
+            value: [0.0, 0.0, 0.0, 0.0],
+        },
+    ];
+    edits.push(if animation == GlowAnimation::Pulse {
+        VmatEdit::expr(
+            "g_flSelfIllumScale1",
+            &format!("{strength} * (0.5 * sin(3 * time()) + 0.5)"),
+        )?
+    } else {
+        VmatEdit::Float {
+            name: "g_flSelfIllumScale1".into(),
+            value: strength,
+        }
+    });
+    edits.push(if animation == GlowAnimation::Rainbow {
+        VmatEdit::expr(
+            "g_vSelfIllumTint1",
+            "float3(0.5 + 0.5 * sin(2 * time()), 0.5 + 0.5 * sin(2 * time() + 2.094), 0.5 + 0.5 * sin(2 * time() + 4.189))",
+        )?
+    } else {
+        VmatEdit::Vector { name: "g_vSelfIllumTint1".into(), value: [color[0], color[1], color[2], 0.0] }
+    });
+    let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
+    ensure!(
+        stats.failed.is_empty(),
+        "Glow parameters could not be patched: {:?}",
+        stats.failed
+    );
+    let path = format!(
+        "materials/grimoire/glow/{}/selfillum.vtex",
+        entry.trim_end_matches(".vmat_c")
+    )
+    .to_ascii_lowercase();
+    let name = tree
+        .get("m_materialName")
+        .and_then(Value::as_str)
+        .context("Missing material name")?;
+    bytes = bind_finish_textures(
+        &bytes,
+        name,
+        &[("g_tSelfIllumMask".to_string(), path.clone())],
+    )?;
+    let texture = crate::trippy::encode_part_texture(&template, &glow_mask)?;
+    crate::pack(
+        &[
+            (entry.as_str(), bytes.as_slice()),
+            (compiled(&path).as_str(), texture.as_slice()),
+        ],
+        output,
+    )
+}
+
 fn color_alpha_is_metalness(material: &morphic::material::Material) -> bool {
     material.alpha_mode() == morphic::material::AlphaMode::Opaque
         && material

@@ -59,6 +59,26 @@ enum WorkshopCommand {
         #[arg(long)]
         encode_vpk: PathBuf,
     },
+    /// Make a part glow, optionally only inside a mask, steady, pulsing or cycling through colors.
+    Glow {
+        /// Source VPKs in highest-priority-first order, including base game fallback.
+        #[arg(long, required = true)]
+        vpk: Vec<PathBuf>,
+        #[arg(long)]
+        entry: String,
+        /// White-on-black UV mask PNG limiting the glow; omit to glow the whole part.
+        #[arg(long)]
+        mask: Option<PathBuf>,
+        /// Glow color as RRGGBB.
+        #[arg(long, default_value = "33ccff")]
+        color: String,
+        #[arg(long, default_value_t = 4.0)]
+        strength: f64,
+        #[arg(long, value_parser = ["steady", "pulse", "rainbow"], default_value = "steady")]
+        animation: String,
+        #[arg(long)]
+        encode_vpk: PathBuf,
+    },
     /// Set transparency while separating opacity from an opaque part's packed metalness.
     ///
     /// Ghost is an experimental research recipe and is not supported by the skin editor.
@@ -120,6 +140,38 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             },
             &encode_vpk,
         ),
+        WorkshopCommand::Glow {
+            vpk,
+            entry,
+            mask,
+            color,
+            strength,
+            animation,
+            encode_vpk,
+        } => {
+            let hex = color.trim_start_matches('#');
+            anyhow::ensure!(
+                hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()),
+                "--color must be RRGGBB"
+            );
+            let channel = |at: usize| {
+                f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0)) / 255.0
+            };
+            let mask = mask.map(std::fs::read).transpose()?;
+            vpkmerge_core::workshop::glow_material(
+                &vpk,
+                &entry,
+                mask.as_deref(),
+                [channel(0), channel(2), channel(4)],
+                strength,
+                match animation.as_str() {
+                    "pulse" => vpkmerge_core::workshop::GlowAnimation::Pulse,
+                    "rainbow" => vpkmerge_core::workshop::GlowAnimation::Rainbow,
+                    _ => vpkmerge_core::workshop::GlowAnimation::Steady,
+                },
+                &encode_vpk,
+            )
+        }
         WorkshopCommand::Finish {
             vpk,
             entry,

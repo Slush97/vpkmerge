@@ -25,6 +25,12 @@ Every texture-side edit takes an optional `--mask <PNG>`: a white-on-black UV ma
 - `workshop surface --mode translucent --mask`: color alpha becomes the area's opacity inside the mask and stays solid outside; the material's opacity scale is untouched.
 - `workshop glow [--mask] --color RRGGBB --strength N --animation steady|pulse|rainbow --speed X [--paint-colors]`: turns on self-illumination with the mask (whole part without one) bound into the material's existing `g_tSelfIllumMask` slot. Pulse and rainbow are dynamic expressions on `g_flSelfIllumScale1` and `g_vSelfIllumTint1`; `--paint-colors` sets the albedo factor so the part glows in its own texture colors. A material has one glow color, so a part has one glow. Verified in game on parts that never shipped glow (Abrams' coat, Vyper's body).
 
+Glow expressions can also read the hero: `$ent_health` is the health fraction (0 to 1). A head glow set to `$ent_health < 0.5 ? float3(1, 0, 0) : float3(0, 1, 0)` stayed green at full health and turned red below half in game.
+
+![Pulsing glow on Abrams' coat](screenshots/area-edits/glow-pulse-coat.png)
+![Rainbow glow on Vyper](screenshots/area-edits/glow-rainbow-vyper.png)
+![Glow reading hero health: green at full, red below half](screenshots/area-edits/glow-health.png)
+
 ## Moo and density
 
 `trippy-skin --style moo --scale 1.5` and `trippy-preview --style moo --scale 1.5` use the same procedural cow-print sampler. Moo has smaller asymmetric patches, narrow white gaps and antialiasing tied to output resolution. Custom palettes retain their two-to-four color roles.

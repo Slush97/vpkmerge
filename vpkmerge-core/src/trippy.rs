@@ -426,7 +426,7 @@ pub struct MaterialColorAdjustments {
     pub hue: f64,
     pub saturation: f64,
     pub brightness: f64,
-    /// Optional full-part paint color, applied after the pattern and adjustments.
+    /// Optional full-part paint color, applied to the base texture before the pattern and adjustments.
     pub repaint: Option<[u8; 3]>,
 }
 
@@ -506,6 +506,33 @@ pub fn repaint_material_pixels(pixels: &mut [u8], target: [u8; 3]) {
     }
 }
 
+/// Paint a selected part's color texture. The full-part paint goes on the base first so a
+/// pattern keeps its own colors on top; the color adjustments then apply to the result.
+fn paint_material_image(
+    image: &mut Image,
+    options: &TrippySkinOptions,
+    color: &MaterialColorAdjustments,
+) -> Result<()> {
+    let ImageData::Rgba8(pixels) = &mut image.data else {
+        anyhow::bail!("Selected color texture is not RGBA8");
+    };
+    if let Some(target) = color.repaint {
+        repaint_material_pixels(pixels, target);
+    }
+    paint_image_with_palette(
+        image,
+        options.style,
+        options.phase,
+        options.intensity,
+        &options.palette,
+        options.scale,
+    )?;
+    if let ImageData::Rgba8(pixels) = &mut image.data {
+        adjust_material_pixels(pixels, color);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn edit_material_to_addon(
     vpk: &Path,
@@ -552,23 +579,7 @@ pub fn edit_material_to_addon(
             data: ImageData::Rgba8(color.repeat(256 * 256)),
         };
     }
-    paint_image_with_palette(
-        &mut image,
-        options.style,
-        options.phase,
-        options.intensity,
-        &options.palette,
-        options.scale,
-    )?;
-    match &mut image.data {
-        ImageData::Rgba8(pixels) => {
-            adjust_material_pixels(pixels, color);
-            if let Some(target) = color.repaint {
-                repaint_material_pixels(pixels, target);
-            }
-        }
-        ImageData::Rgba16F(_) => anyhow::bail!("Selected color texture is not RGBA8"),
-    }
+    paint_material_image(&mut image, options, color)?;
     let painted = encode_part_texture(&source, &image)?;
     let hash = entry.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
@@ -2207,6 +2218,37 @@ mod tests {
         );
         repaint_material_pixels(&mut pixels, [0, 0, 0]);
         assert_eq!(pixels, vec![0, 0, 0, 0, 0, 0, 0, 71, 0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn repaint_goes_under_the_pattern_so_pattern_colors_survive() {
+        let mut image = Image {
+            width: 4,
+            height: 4,
+            data: ImageData::Rgba8([0, 0, 0, 77].repeat(16)),
+        };
+        let options = TrippySkinOptions {
+            style: TrippyStyle::Gradient,
+            palette: vec![[0, 0, 255], [0, 0, 255]],
+            intensity: 0.5,
+            ..TrippySkinOptions::default()
+        };
+        let color = MaterialColorAdjustments {
+            repaint: Some([255, 255, 255]),
+            ..MaterialColorAdjustments::default()
+        };
+        paint_material_image(&mut image, &options, &color).unwrap();
+        let ImageData::Rgba8(pixels) = &image.data else {
+            unreachable!()
+        };
+        // Painting after the pattern would flatten it to gray (equal channels).
+        // Painting first leaves a blue pattern over the white-painted base.
+        for pixel in pixels.as_chunks::<4>().0 {
+            assert_eq!(pixel[0], pixel[1]);
+            assert!(pixel[0] > 60, "painted base shows through: {pixel:?}");
+            assert!(pixel[2] > pixel[0] + 100, "pattern stays blue: {pixel:?}");
+            assert_eq!(pixel[3], 77);
+        }
     }
 
     #[test]

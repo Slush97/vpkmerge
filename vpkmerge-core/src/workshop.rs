@@ -1200,7 +1200,7 @@ mod tests {
                 }],
             )
             .unwrap();
-            assert!(stats.failed.is_empty());
+            assert_eq!(stats.failed, Vec::<String>::new());
             let dir = tempfile::tempdir().unwrap();
             let source = dir.path().join("source_dir.vpk");
             let output = dir.path().join("finish_dir.vpk");
@@ -1231,7 +1231,7 @@ mod tests {
     fn surface_source(dir: &Path, edits: &[VmatEdit]) -> PathBuf {
         let donor = include_bytes!("../../morphic/fixtures/material/vindicta_headv2.vmat_c");
         let (bytes, stats) = patch_vmat_params(donor, edits).unwrap();
-        assert!(stats.failed.is_empty());
+        assert_eq!(stats.failed, Vec::<String>::new());
         let material = morphic::material::parse(&bytes).unwrap();
         let image = morphic::Image {
             width: 8,

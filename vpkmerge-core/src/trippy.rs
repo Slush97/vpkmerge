@@ -2282,7 +2282,7 @@ mod tests {
             },
         ];
         let (donor, stats) = crate::vmat_style::patch_vmat_params(donor, &tint).unwrap();
-        assert!(stats.failed.is_empty());
+        assert_eq!(stats.failed, Vec::<String>::new());
         let original = morphic::material::parse(&donor).unwrap();
         let texture = zero_alpha_bc7();
         crate::pack(

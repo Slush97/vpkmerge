@@ -56,6 +56,9 @@ enum WorkshopCommand {
         roughness: f64,
         #[arg(long)]
         metalness: f64,
+        /// White-on-black UV mask PNG limiting the finish to an area; omit for the whole part.
+        #[arg(long)]
+        mask: Option<PathBuf>,
         #[arg(long)]
         encode_vpk: PathBuf,
     },
@@ -94,6 +97,18 @@ enum WorkshopCommand {
         #[arg(long)]
         encode_vpk: PathBuf,
     },
+}
+
+/// Parse `RRGGBB` (optionally `#`-prefixed) into 0..1 channels.
+fn rgb(color: &str) -> Result<[f64; 3]> {
+    let hex = color.trim_start_matches('#');
+    anyhow::ensure!(
+        hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        "--color must be RRGGBB"
+    );
+    let channel =
+        |at: usize| f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0)) / 255.0;
+    Ok([channel(0), channel(2), channel(4)])
 }
 
 pub fn run(args: WorkshopArgs) -> Result<()> {
@@ -149,20 +164,12 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             animation,
             encode_vpk,
         } => {
-            let hex = color.trim_start_matches('#');
-            anyhow::ensure!(
-                hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()),
-                "--color must be RRGGBB"
-            );
-            let channel = |at: usize| {
-                f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0)) / 255.0
-            };
             let mask = mask.map(std::fs::read).transpose()?;
             vpkmerge_core::workshop::glow_material(
                 &vpk,
                 &entry,
                 mask.as_deref(),
-                [channel(0), channel(2), channel(4)],
+                rgb(&color)?,
                 strength,
                 match animation.as_str() {
                     "pulse" => vpkmerge_core::workshop::GlowAnimation::Pulse,
@@ -177,14 +184,19 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             entry,
             roughness,
             metalness,
+            mask,
             encode_vpk,
-        } => vpkmerge_core::workshop::finish_material(
-            &vpk,
-            &entry,
-            roughness,
-            metalness,
-            &encode_vpk,
-        ),
+        } => {
+            let mask = mask.map(std::fs::read).transpose()?;
+            vpkmerge_core::workshop::finish_material(
+                &vpk,
+                &entry,
+                roughness,
+                metalness,
+                mask.as_deref(),
+                &encode_vpk,
+            )
+        }
         WorkshopCommand::Surface {
             vpk,
             entry,

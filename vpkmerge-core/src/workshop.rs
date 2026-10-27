@@ -37,13 +37,19 @@ fn open(paths: &[PathBuf]) -> Result<Vec<valve_pak::VPK>> {
 /// Apply uniform roughness and metalness to one material. Clone the packed masks,
 /// including opaque PBR color alpha (metalness), without changing shared textures.
 ///
+/// With `mask` (a white-on-black UV PNG) only the white of the mask takes the finish:
+/// the material constants stay, and each finish texture is blended toward the values,
+/// upscaled to the color texture's size first so tiny default masks can carry an area.
+///
 /// # Errors
 /// Rejects unsupported shaders, animated finish bindings, missing textures and invalid values.
+#[allow(clippy::too_many_lines)]
 pub fn finish_material(
     paths: &[PathBuf],
     entry: &str,
     roughness: f64,
     metalness: f64,
+    mask: Option<&[u8]>,
     output: &Path,
 ) -> Result<()> {
     ensure!(
@@ -81,22 +87,40 @@ pub fn finish_material(
             .is_some_and(|n| n.contains("Roughness") || n.contains("Metalness"))),
         "Animated finish parameters cannot be overridden"
     );
-    let edits = [
-        VmatEdit::Vector {
-            name: "TextureRoughness1".into(),
-            value: [roughness, roughness, roughness, 0.0],
-        },
-        VmatEdit::Vector {
-            name: "TextureMetalness1".into(),
-            value: [metalness, metalness, metalness, 0.0],
-        },
-    ];
-    let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
-    ensure!(
-        stats.failed.is_empty(),
-        "Material finish parameters could not be patched: {:?}",
-        stats.failed
-    );
+    // An area keeps the material's own values outside the mask, so only a whole-part
+    // finish touches the constants.
+    let (mut bytes, area) = if let Some(png) = mask {
+        let color = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
+            .into_iter()
+            .find_map(|slot| material.texture(slot))
+            .context("Material has no color texture to size the finish mask from")?;
+        let info = morphic::inspect(&read(&paks, &compiled(color))?)?;
+        let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .context("Decoding finish mask PNG")?
+            .to_luma8();
+        (
+            original.clone(),
+            Some((decoded, u32::from(info.width), u32::from(info.height))),
+        )
+    } else {
+        let edits = [
+            VmatEdit::Vector {
+                name: "TextureRoughness1".into(),
+                value: [roughness, roughness, roughness, 0.0],
+            },
+            VmatEdit::Vector {
+                name: "TextureMetalness1".into(),
+                value: [metalness, metalness, metalness, 0.0],
+            },
+        ];
+        let (patched, stats) = patch_vmat_params(&original, &edits)?;
+        ensure!(
+            stats.failed.is_empty(),
+            "Material finish parameters could not be patched: {:?}",
+            stats.failed
+        );
+        (patched, None)
+    };
     let mut files = Vec::<(String, Vec<u8>)>::new();
     let mut bindings = Vec::<(String, String)>::new();
     for param in tree
@@ -118,7 +142,15 @@ pub fn finish_material(
             .context("Missing finish texture binding")?;
         let original_texture = read(&paks, &compiled(texture))?;
         let mut image = morphic::decode(&original_texture)?;
-        flatten_channel(&mut image, channel, value)?;
+        match &area {
+            Some((mask, width, height)) => {
+                if image.width < *width || image.height < *height {
+                    image = upscale(&image, *width, *height)?;
+                }
+                blend_channel(&mut image, channel, value, mask)?;
+            }
+            None => flatten_channel(&mut image, channel, value)?,
+        }
         // Full material path scopes cloned masks to this part, even when several parts
         // originally sampled the same normal map.
         let path = format!(
@@ -132,6 +164,10 @@ pub fn finish_material(
         ));
         bindings.push((slot.to_string(), path));
     }
+    ensure!(
+        area.is_none() || !bindings.is_empty(),
+        "This part has no finish textures to paint an area into"
+    );
     if !bindings.is_empty() {
         let name = tree
             .get("m_materialName")
@@ -565,6 +601,62 @@ fn bind_finish_textures(
     }
     references.sort_by(|a, b| a.1.cmp(&b.1));
     Ok(resource.rebuild_with_block(index, &morphic::resource::write_rerl(&references))?)
+}
+
+/// Blend one channel toward `value` by the mask's white, resized to the image.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn blend_channel(
+    image: &mut morphic::Image,
+    channel: usize,
+    value: f64,
+    mask: &image::GrayImage,
+) -> Result<()> {
+    let (width, height) = (image.width, image.height);
+    let morphic::ImageData::Rgba8(pixels) = &mut image.data else {
+        bail!("HDR finish masks are unsupported")
+    };
+    let resized;
+    let weights = if mask.dimensions() == (width, height) {
+        mask
+    } else {
+        resized =
+            image::imageops::resize(mask, width, height, image::imageops::FilterType::Triangle);
+        &resized
+    };
+    let target = value * 255.0;
+    for (pixel, weight) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(weights.as_raw())
+    {
+        let weight = f64::from(*weight) / 255.0;
+        let current = f64::from(pixel[channel]);
+        pixel[channel] = (current + (target - current) * weight).round() as u8;
+    }
+    Ok(())
+}
+
+/// Upscale a finish texture so an area mask has texels to land in.
+fn upscale(image: &morphic::Image, width: u32, height: u32) -> Result<morphic::Image> {
+    let morphic::ImageData::Rgba8(pixels) = &image.data else {
+        bail!("HDR finish masks are unsupported")
+    };
+    let source = image::RgbaImage::from_raw(image.width, image.height, pixels.clone())
+        .context("Finish texture size does not match its pixels")?;
+    Ok(morphic::Image {
+        width,
+        height,
+        data: morphic::ImageData::Rgba8(
+            image::imageops::resize(
+                &source,
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
+            .into_raw(),
+        ),
+    })
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1221,6 +1313,88 @@ mod tests {
     }
 
     #[test]
+    fn masked_finish_changes_only_the_area() {
+        let donor = std::fs::read(format!(
+            "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let tree = morphic::decode_kv3_resource(&donor).unwrap();
+        let template = std::fs::read(format!(
+            "{}/../morphic/fixtures/bc7/gradient_dev_02_color_psd_73660177.vtex_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let texture = morphic::resize_mip_chain(
+            &template,
+            &morphic::Image {
+                width: 16,
+                height: 16,
+                data: morphic::ImageData::Rgba8([127, 140, 200, 255].repeat(256)),
+            },
+        )
+        .unwrap();
+        let mut files = vec![("materials/test/part.vmat_c".to_string(), donor.clone())];
+        for param in tree
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap()
+        {
+            let path = param.get("m_pValue").and_then(Value::as_str).unwrap();
+            files.push((compiled(path), texture.clone()));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let output = dir.path().join("finish_dir.vpk");
+        crate::pack(
+            &files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+            &source,
+        )
+        .unwrap();
+        // Left half of the UV square is the area.
+        let mask =
+            image::GrayImage::from_fn(16, 16, |x, _| image::Luma([if x < 8 { 255 } else { 0 }]));
+        let mut png = Vec::new();
+        mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        finish_material(
+            std::slice::from_ref(&source),
+            "materials/test/part.vmat",
+            0.2,
+            1.0,
+            Some(&png),
+            &output,
+        )
+        .unwrap();
+        let paks = open(&[output]).unwrap();
+        let edited =
+            morphic::decode_kv3_resource(&read(&paks, "materials/test/part.vmat_c").unwrap())
+                .unwrap();
+        // Outside the area the material keeps its own finish constants.
+        assert_eq!(edited.get("m_vectorParams"), tree.get("m_vectorParams"));
+        let normal = edited
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_tNormalRoughness"))
+            .and_then(|p| p.get("m_pValue"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(normal.starts_with("materials/grimoire/finish/"));
+        let image = morphic::decode(&read(&paks, &compiled(normal)).unwrap()).unwrap();
+        let morphic::ImageData::Rgba8(pixels) = image.data else {
+            panic!()
+        };
+        let at = |x: usize, y: usize| pixels[(y * 16 + x) * 4 + 2];
+        assert!(at(2, 8).abs_diff(51) <= 4, "area roughness {}", at(2, 8));
+        assert!(at(13, 8).abs_diff(200) <= 4, "kept roughness {}", at(13, 8));
+    }
+
+    #[test]
     fn finish_clones_a_bound_mask_without_changing_shared_source() {
         let donor = std::fs::read(format!(
             "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
@@ -1266,6 +1440,7 @@ mod tests {
             "materials/test/part.vmat",
             0.5,
             1.0,
+            None,
             &output,
         )
         .unwrap();
@@ -1353,7 +1528,7 @@ mod tests {
                 &source,
             )
             .unwrap();
-            finish_material(&[source], "models/test/part.vmat", 0.1, 1.0, &output).unwrap();
+            finish_material(&[source], "models/test/part.vmat", 0.1, 1.0, None, &output).unwrap();
             let pak = open(&[output]).unwrap();
             let edited =
                 morphic::material::parse(&read(&pak, "models/test/part.vmat_c").unwrap()).unwrap();
@@ -1480,6 +1655,7 @@ mod tests {
                 "models/test/part.vmat",
                 0.2,
                 1.0,
+                None,
                 &finish,
             )
             .unwrap();

@@ -193,6 +193,20 @@ pub enum GlowAnimation {
     Rainbow,
 }
 
+/// How a painted glow looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowStyle {
+    /// Glow color, 0..1 per channel. Ignored by rainbow and by `paint_colors`.
+    pub color: [f64; 3],
+    /// Self-illumination scale, 0..50.
+    pub strength: f64,
+    pub animation: GlowAnimation,
+    /// Pulse and rainbow speed multiplier, 0.1..10 (1 is about a two second pulse).
+    pub speed: f64,
+    /// Glow in the part's own texture colors instead of `color`.
+    pub paint_colors: bool,
+}
+
 /// Turn on a part's self-illumination, limited to the white of `mask` (whole part without one).
 ///
 /// Works on materials that never shipped `F_SELF_ILLUM`: it switches the feature on, binds a mask
@@ -205,14 +219,23 @@ pub fn glow_material(
     paths: &[PathBuf],
     entry: &str,
     mask: Option<&[u8]>,
-    color: [f64; 3],
-    strength: f64,
-    animation: GlowAnimation,
+    style: &GlowStyle,
     output: &Path,
 ) -> Result<()> {
+    let GlowStyle {
+        color,
+        strength,
+        animation,
+        speed,
+        paint_colors,
+    } = *style;
     ensure!(
         strength.is_finite() && (0.0..=50.0).contains(&strength),
         "Glow strength must be between 0 and 50"
+    );
+    ensure!(
+        speed.is_finite() && (0.1..=10.0).contains(&speed),
+        "Glow speed must be between 0.1 and 10"
     );
     ensure!(
         color
@@ -278,9 +301,15 @@ pub fn glow_material(
             name: "F_SELF_ILLUM".into(),
             value: 1,
         },
-        VmatEdit::Float {
-            name: "g_flSelfIllumAlbedoFactor1".into(),
-            value: 0.0,
+        // 1 lights the part in its own texture colors, 0 in the tint. Compressed materials often store
+        // the factor as a tagless 0 that cannot become 1 in place, so 1 rides a constant expression.
+        if paint_colors {
+            VmatEdit::expr("g_flSelfIllumAlbedoFactor1", "1")?
+        } else {
+            VmatEdit::Float {
+                name: "g_flSelfIllumAlbedoFactor1".into(),
+                value: 0.0,
+            }
         },
         VmatEdit::Vector {
             name: "g_vSelfIllumScrollSpeed1".into(),
@@ -290,7 +319,7 @@ pub fn glow_material(
     edits.push(if animation == GlowAnimation::Pulse {
         VmatEdit::expr(
             "g_flSelfIllumScale1",
-            &format!("{strength} * (0.5 * sin(3 * time()) + 0.5)"),
+            &format!("{strength} * (0.5 * sin({} * time()) + 0.5)", 3.0 * speed),
         )?
     } else {
         VmatEdit::Float {
@@ -299,12 +328,14 @@ pub fn glow_material(
         }
     });
     edits.push(if animation == GlowAnimation::Rainbow {
+        let rate = 2.0 * speed;
         VmatEdit::expr(
             "g_vSelfIllumTint1",
-            "float3(0.5 + 0.5 * sin(2 * time()), 0.5 + 0.5 * sin(2 * time() + 2.094), 0.5 + 0.5 * sin(2 * time() + 4.189))",
+            &format!("float3(0.5 + 0.5 * sin({rate} * time()), 0.5 + 0.5 * sin({rate} * time() + 2.094), 0.5 + 0.5 * sin({rate} * time() + 4.189))"),
         )?
     } else {
-        VmatEdit::Vector { name: "g_vSelfIllumTint1".into(), value: [color[0], color[1], color[2], 0.0] }
+        let tint = if paint_colors { [1.0; 3] } else { color };
+        VmatEdit::Vector { name: "g_vSelfIllumTint1".into(), value: [tint[0], tint[1], tint[2], 0.0] }
     });
     let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
     ensure!(
@@ -1689,6 +1720,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn glow_paints_in_texture_colors_and_runs_at_the_chosen_speed() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = surface_source(dir.path(), &[]);
+        let output = dir.path().join("glow_dir.vpk");
+        let style = GlowStyle {
+            color: [0.2, 0.8, 1.0],
+            strength: 6.0,
+            animation: GlowAnimation::Pulse,
+            speed: 2.0,
+            paint_colors: true,
+        };
+        glow_material(
+            std::slice::from_ref(&source),
+            "models/test/part.vmat",
+            None,
+            &style,
+            &output,
+        )
+        .unwrap();
+        let paks = open(&[output, source]).unwrap();
+        let tree =
+            morphic::decode_kv3_resource(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        let material =
+            morphic::material::parse(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        assert_eq!(material.int_params["F_SELF_ILLUM"], 1);
+        assert!(
+            tree.get("m_dynamicParams")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|p| p.get("m_name").and_then(Value::as_str)
+                    == Some("g_flSelfIllumAlbedoFactor1"))
+        );
+        // The texture's own colors light up, so the tint stays white.
+        assert_eq!(
+            material.vector_params["g_vSelfIllumTint1"][..3],
+            [1.0, 1.0, 1.0]
+        );
+        let attrs: Vec<String> = Vec::new();
+        let pulse = tree
+            .get("m_dynamicParams")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_flSelfIllumScale1"))
+            .and_then(|p| match p.get("m_value") {
+                Some(Value::Binary(bytes)) => morphic::vfx_expr::decompile(bytes, &attrs).ok(),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            pulse.contains("6 * time()") || pulse.contains("6*time()"),
+            "{pulse}"
+        );
+        assert!(glow_material(
+            &[dir.path().join("source_dir.vpk")],
+            "models/test/part.vmat",
+            None,
+            &GlowStyle {
+                speed: 0.0,
+                ..style
+            },
+            &dir.path().join("x_dir.vpk")
+        )
+        .is_err());
     }
 
     #[test]

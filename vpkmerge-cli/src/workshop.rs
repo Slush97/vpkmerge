@@ -79,6 +79,12 @@ enum WorkshopCommand {
         strength: f64,
         #[arg(long, value_parser = ["steady", "pulse", "rainbow"], default_value = "steady")]
         animation: String,
+        /// Pulse and rainbow speed, 1 is about a two second pulse.
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Glow in the part's own texture colors instead of --color.
+        #[arg(long)]
+        paint_colors: bool,
         #[arg(long)]
         encode_vpk: PathBuf,
     },
@@ -166,20 +172,27 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             color,
             strength,
             animation,
+            speed,
+            paint_colors,
             encode_vpk,
         } => {
             let mask = mask.map(std::fs::read).transpose()?;
-            vpkmerge_core::workshop::glow_material(
-                &vpk,
-                &entry,
-                mask.as_deref(),
-                rgb(&color)?,
+            let style = vpkmerge_core::workshop::GlowStyle {
+                color: rgb(&color)?,
                 strength,
-                match animation.as_str() {
+                animation: match animation.as_str() {
                     "pulse" => vpkmerge_core::workshop::GlowAnimation::Pulse,
                     "rainbow" => vpkmerge_core::workshop::GlowAnimation::Rainbow,
                     _ => vpkmerge_core::workshop::GlowAnimation::Steady,
                 },
+                speed,
+                paint_colors,
+            };
+            vpkmerge_core::workshop::glow_material(
+                &vpk,
+                &entry,
+                mask.as_deref(),
+                &style,
                 &encode_vpk,
             )
         }

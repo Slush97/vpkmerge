@@ -491,19 +491,51 @@ pub fn adjust_material_pixels(pixels: &mut [u8], value: &MaterialColorAdjustment
     }
 }
 
-/// Paint the selected part while keeping some of its luminance detail and its alpha mask.
+fn luminance(pixel: [u8; 4]) -> f64 {
+    (0.2126 * f64::from(pixel[0]) + 0.7152 * f64::from(pixel[1]) + 0.0722 * f64::from(pixel[2]))
+        / 255.0
+}
+
+/// Paint the selected part with `target` while keeping its light and dark detail and its alpha.
+///
+/// Detail is relative to the painted texels' mean luminance (weighted by `weights`, one byte per
+/// texel, when only an area is painted), so the area averages to the picked color even on a dark
+/// texture. Grimoire's preview (`repaintSkinPixels`) uses the same formula.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn repaint_material_pixels(pixels: &mut [u8], target: [u8; 3]) {
+pub fn repaint_material_pixels(pixels: &mut [u8], target: [u8; 3], weights: Option<&[u8]>) {
+    let texels = pixels.as_chunks::<4>().0;
+    let (sum, total) =
+        texels
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(sum, total), (index, pixel)| {
+                let weight = weights.map_or(1.0, |weights| f64::from(weights[index]) / 255.0);
+                (sum + luminance(*pixel) * weight, total + weight)
+            });
+    let mean = if total > 0.0 { sum / total } else { 0.5 };
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        let luminance = (0.2126 * f64::from(pixel[0])
-            + 0.7152 * f64::from(pixel[1])
-            + 0.0722 * f64::from(pixel[2]))
-            / 255.0;
-        let detail = 0.65 + 0.35 * luminance;
+        let detail = (1.0 + 0.5 * (luminance(*pixel) - mean)).clamp(0.5, 1.5);
         for channel in 0..3 {
-            pixel[channel] = (f64::from(target[channel]) * detail).round() as u8;
+            pixel[channel] = (f64::from(target[channel]) * detail).round().min(255.0) as u8;
         }
     }
+}
+
+/// A white-on-black mask PNG as one weight byte per texel of a `width` x `height` texture.
+fn mask_weights(mask: &[u8], width: u32, height: u32) -> Result<image::GrayImage> {
+    let decoded = image::load_from_memory_with_format(mask, image::ImageFormat::Png)
+        .context("Decoding region mask PNG")?
+        .to_luma8();
+    Ok(if decoded.dimensions() == (width, height) {
+        decoded
+    } else {
+        image::imageops::resize(
+            &decoded,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
+    })
 }
 
 /// Paint a selected part's color texture. The full-part paint goes on the base first so a
@@ -512,12 +544,13 @@ fn paint_material_image(
     image: &mut Image,
     options: &TrippySkinOptions,
     color: &MaterialColorAdjustments,
+    weights: Option<&[u8]>,
 ) -> Result<()> {
     let ImageData::Rgba8(pixels) = &mut image.data else {
         anyhow::bail!("Selected color texture is not RGBA8");
     };
     if let Some(target) = color.repaint {
-        repaint_material_pixels(pixels, target);
+        repaint_material_pixels(pixels, target, weights);
     }
     paint_image_with_palette(
         image,
@@ -558,19 +591,7 @@ pub fn blend_material_region(original: &Image, painted: &mut Image, mask: &[u8])
         (original.width, original.height) == (painted.width, painted.height),
         "Region mask texture sizes differ"
     );
-    let decoded = image::load_from_memory_with_format(mask, image::ImageFormat::Png)
-        .context("Decoding region mask PNG")?
-        .to_luma8();
-    let weights = if decoded.dimensions() == (painted.width, painted.height) {
-        decoded
-    } else {
-        image::imageops::resize(
-            &decoded,
-            painted.width,
-            painted.height,
-            image::imageops::FilterType::Triangle,
-        )
-    };
+    let weights = mask_weights(mask, painted.width, painted.height)?;
     for ((pixel, source), weight) in pixels
         .as_chunks_mut::<4>()
         .0
@@ -640,7 +661,16 @@ pub fn edit_material_region_to_addon(
         };
     }
     let original = mask.map(|_| image.clone());
-    paint_material_image(&mut image, options, color)?;
+    // An area's paint averages to the picked color over the area, not the whole texture.
+    let weights = mask
+        .map(|mask| mask_weights(mask, image.width, image.height))
+        .transpose()?;
+    paint_material_image(
+        &mut image,
+        options,
+        color,
+        weights.as_ref().map(|w| w.as_raw().as_slice()),
+    )?;
     if let (Some(mask), Some(original)) = (mask, &original) {
         blend_material_region(original, &mut image, mask)?;
     }
@@ -2275,13 +2305,22 @@ mod tests {
     #[test]
     fn repaint_lifts_dark_pixels_keeps_detail_and_alpha() {
         let mut pixels = vec![0, 0, 0, 0, 128, 128, 128, 71, 255, 255, 255, 255];
-        repaint_material_pixels(&mut pixels, [255, 255, 255]);
+        // Mean luminance is about 0.5: the middle texel gets the picked color exactly.
+        repaint_material_pixels(&mut pixels, [200, 100, 50], None);
         assert_eq!(
             pixels,
-            vec![166, 166, 166, 0, 211, 211, 211, 71, 255, 255, 255, 255]
+            vec![150, 75, 37, 0, 200, 100, 50, 71, 250, 125, 62, 255]
         );
-        repaint_material_pixels(&mut pixels, [0, 0, 0]);
+        repaint_material_pixels(&mut pixels, [0, 0, 0], None);
         assert_eq!(pixels, vec![0, 0, 0, 0, 0, 0, 0, 71, 0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn repaint_averages_to_the_picked_color_over_a_dark_area() {
+        // A dark texture with one darker texel outside the area.
+        let mut pixels = vec![30, 30, 30, 255, 30, 30, 30, 255, 0, 0, 0, 255];
+        repaint_material_pixels(&mut pixels, [239, 68, 68], Some(&[255, 255, 0]));
+        assert_eq!(&pixels[..8], &[239, 68, 68, 255, 239, 68, 68, 255]);
     }
 
     #[test]
@@ -2301,7 +2340,7 @@ mod tests {
             repaint: Some([255, 255, 255]),
             ..MaterialColorAdjustments::default()
         };
-        paint_material_image(&mut image, &options, &color).unwrap();
+        paint_material_image(&mut image, &options, &color, None).unwrap();
         let ImageData::Rgba8(pixels) = &image.data else {
             unreachable!()
         };
@@ -2440,11 +2479,14 @@ mod tests {
         let ImageData::Rgba8(pixels) = image.data else {
             panic!("expected RGBA8");
         };
-        assert!(pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|pixel| pixel[3] == 0 && pixel[0] >= 160));
+        // Alpha survives, and the part averages to the picked white.
+        let texels = pixels.as_chunks::<4>().0;
+        let worst = texels.iter().map(|pixel| pixel[3]).max().unwrap();
+        // BC7 spends a bit or two of alpha on the busier painted RGB.
+        assert!(worst <= 2, "alpha {worst}");
+        let mean = texels.iter().map(|pixel| f64::from(pixel[0])).sum::<f64>()
+            / f64::from(u32::try_from(texels.len()).unwrap());
+        assert!(mean >= 220.0, "mean {mean}");
 
         // HSV-only edits must leave the source animation and lighting intact too.
         let adjust_out = dir.path().join("adjust_dir.vpk");

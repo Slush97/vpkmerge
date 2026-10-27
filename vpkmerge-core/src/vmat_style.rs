@@ -485,43 +485,36 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
         }
     }
 
+    // A material re-encoded from scratch renders as a red wireframe in game (Apollo's translucent
+    // sword, the Abrams head glow, the soul-container probes), so an edit that cannot change in place
+    // never triggers one. An existing dynamic expression is swapped byte-faithfully (its bytecode is
+    // a blob, content-keyed on the current bytes); a float or vector rides a constant dynamic
+    // expression, which overrides the stored value the way shipped animated materials do, and a
+    // second edit of that value swaps the expression. Anything else (a static-combo int, an
+    // attribute) cannot change and fails loudly.
     if !needs_reencode.is_empty() {
-        if morphic::kv3_resource_has_blobs(&working).unwrap_or(true) {
-            // A blob-bearing material refuses the re-encode fallback. Changing an
-            // *existing* dynamic expression lands here: its bytecode IS a binary
-            // blob. Replace that blob byte-faithfully (content-keyed on the current
-            // bytecode), keeping the block compressed, instead of re-encoding the
-            // whole material. Any edit that is not such an Expr swap still fails.
-            let mut still_failed = Vec::new();
-            for e in &needs_reencode {
-                match replace_expr_blob(&working, e) {
-                    Some(Ok(bytes)) => {
-                        working = bytes;
-                        stats.set += 1;
+        let blobbed = morphic::kv3_resource_has_blobs(&working).unwrap_or(true);
+        for edit in &needs_reencode {
+            if blobbed {
+                if let Some(result) = replace_expr_blob(&working, edit) {
+                    match result {
+                        Ok(bytes) => {
+                            working = bytes;
+                            stats.set += 1;
+                        }
+                        Err(msg) => stats.failed.push(msg),
                     }
-                    Some(Err(msg)) => still_failed.push(msg),
-                    None => still_failed.push(e.name().to_string()),
+                    continue;
                 }
             }
-            stats.failed.extend(still_failed);
-        } else {
-            // A material re-encoded from scratch renders as a red wireframe in game (Apollo's
-            // translucent sword, the Abrams head glow, the soul-container probes), so tagless values
-            // never trigger one. A float or vector rides a constant dynamic expression instead, which
-            // overrides the stored value the way shipped animated materials do. Anything else (a
-            // static-combo int, an attribute) cannot change and fails loudly.
-            let mut converted = Vec::new();
-            for edit in &needs_reencode {
-                match constant_expression(edit) {
-                    Some(expr) => converted.push(expr?),
-                    None => stats.failed.push(edit.name().to_string()),
+            match constant_expression(edit) {
+                Some(expr) => {
+                    let (bytes, inner) = patch_vmat_params(&working, &[expr?])?;
+                    working = bytes;
+                    stats.set += inner.set + inner.inserted;
+                    stats.failed.extend(inner.failed);
                 }
-            }
-            if !converted.is_empty() {
-                let (bytes, inner) = patch_vmat_params(&working, &converted)?;
-                working = bytes;
-                stats.set += inner.set + inner.inserted;
-                stats.failed.extend(inner.failed);
+                None => stats.failed.push(edit.name().to_string()),
             }
         }
     }
@@ -1053,6 +1046,46 @@ mod tests {
             .get(i)?
             .get("m_nValue")?
             .as_int()
+    }
+
+    /// The decompiled constant a tagless value now rides, if any.
+    fn constant_of(bytes: &[u8], name: &str) -> Option<String> {
+        let root = morphic::decode_kv3_resource(bytes).ok()?;
+        let i = param_index(&root, "m_dynamicParams", name)?;
+        let value = root
+            .get("m_dynamicParams")?
+            .as_array()?
+            .get(i)?
+            .get("m_value")?;
+        morphic::vfx_expr::decompile(expr_bytes(value)?.as_slice(), &Vec::<String>::new()).ok()
+    }
+
+    #[test]
+    fn tagless_values_ride_a_constant_expression_that_later_edits_replace() {
+        // The fixture stores g_flSelfIllumAlbedoFactor1 as a tagless scalar: nothing to patch.
+        let set = |bytes: &[u8], value: f64| {
+            let (out, stats) = patch_vmat_params(
+                bytes,
+                &[VmatEdit::Float {
+                    name: "g_flSelfIllumAlbedoFactor1".into(),
+                    value,
+                }],
+            )
+            .unwrap();
+            assert_eq!(stats.failed, Vec::<String>::new());
+            out
+        };
+        let first = set(&fixture(), 0.37);
+        assert_eq!(
+            constant_of(&first, "g_flSelfIllumAlbedoFactor1").as_deref(),
+            Some("0.37")
+        );
+        // A second edit swaps the expression instead of failing on the blob it introduced.
+        let second = set(&first, 0.63);
+        assert_eq!(
+            constant_of(&second, "g_flSelfIllumAlbedoFactor1").as_deref(),
+            Some("0.63")
+        );
     }
 
     #[test]

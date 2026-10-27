@@ -476,27 +476,13 @@ fn surface_material_in(
         bindings,
     } = surface_textures(&paks, &entry, mode, &material, area)?;
     // An area keeps the part's own opacity scale: its alpha already carries the see-through texels.
-    let mut edits: Vec<VmatEdit> = surface_edits(mode, opacity)
+    let edits: Vec<VmatEdit> = surface_edits(mode, opacity)
         .into_iter()
         .filter(|edit| {
             area.is_none()
                 || !matches!(edit, VmatEdit::Float { name, .. } if name == "g_flOpacityScale1")
         })
         .collect();
-    // NPR heroes draw their outline as a solid-colored shell behind the mesh. A see-through surface
-    // shows that whole shell through itself (a red sword instead of a glass one), so the outline goes.
-    if material
-        .int_params
-        .get("F_SOLID_COLOR_OUTLINE")
-        .copied()
-        .unwrap_or(0)
-        != 0
-    {
-        edits.push(VmatEdit::Int {
-            name: "F_SOLID_COLOR_OUTLINE".into(),
-            value: 0,
-        });
-    }
     let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
     ensure!(
         stats.failed.is_empty(),
@@ -1803,21 +1789,14 @@ mod tests {
         let mut png = Vec::new();
         mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let outline = || VmatEdit::Int {
-            name: "F_SOLID_COLOR_OUTLINE".into(),
-            value: 1,
-        };
         // Opaque part (color alpha 37 is packed metalness), then a part that already blends at alpha 37.
         for (edits, inside, outside) in [
-            (vec![outline()], 77, 255),
+            (vec![], 77, 255),
             (
-                vec![
-                    outline(),
-                    VmatEdit::Int {
-                        name: "F_TRANSLUCENT".into(),
-                        value: 1,
-                    },
-                ],
+                vec![VmatEdit::Int {
+                    name: "F_TRANSLUCENT".into(),
+                    value: 1,
+                }],
                 11,
                 37,
             ),
@@ -1837,10 +1816,6 @@ mod tests {
             let bytes = read(&paks, "models/test/part.vmat_c").unwrap();
             let material = morphic::material::parse(&bytes).unwrap();
             assert_eq!(material.int_params["F_TRANSLUCENT"], 1);
-            assert_eq!(
-                material.int_params["F_SOLID_COLOR_OUTLINE"], 0,
-                "a see-through part drops its outline shell"
-            );
             assert!(
                 !material.float_params.contains_key("g_flOpacityScale1")
                     || (material.float_params["g_flOpacityScale1"] - 1.0).abs() < 1e-6,

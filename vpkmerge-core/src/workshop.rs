@@ -326,14 +326,10 @@ fn surface_textures(
             .unwrap_or(0)
             != 0;
     if !already_blended {
+        // Color alpha becomes opacity. Packed metalness moves only into a g_tMetalness slot the
+        // material already binds: adding a texture slot rewrites the whole material, which the
+        // game renders as a red wireframe. Without one, the see-through part loses its metalness.
         let mut color = morphic::decode(&color_bytes)?;
-        let mut metalness = morphic::decode(&color_bytes)?;
-        let morphic::ImageData::Rgba8(pixels) = &mut metalness.data else {
-            bail!("HDR surface color is unsupported")
-        };
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            *pixel = [pixel[3], pixel[3], pixel[3], 255];
-        }
         flatten_channel(&mut color, 3, 1.0)?;
         let path = format!("{stem}/color.vtex");
         files.push((
@@ -341,18 +337,6 @@ fn surface_textures(
             crate::trippy::encode_part_texture(&color_bytes, &color)?,
         ));
         bindings.push(("g_tColor".into(), path));
-        if material.texture("g_tMetalness").is_none() {
-            if let Some(path) = material.texture("g_tMetalnessMask") {
-                bindings.push(("g_tMetalness".into(), path.into()));
-            } else {
-                let path = format!("{stem}/metalness.vtex");
-                files.push((
-                    compiled(&path),
-                    crate::trippy::encode_part_texture(&color_bytes, &metalness)?,
-                ));
-                bindings.push(("g_tMetalness".into(), path));
-            }
-        }
     }
     if mode == "ghost" && material.texture("g_tAltTranslucency").is_none() {
         let mask = morphic::Image {
@@ -1285,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_separates_opaque_metalness_from_opacity_and_registers_native_textures() {
+    fn surface_turns_color_alpha_into_opacity_without_adding_texture_slots() {
         for mode in ["translucent", "ghost"] {
             let dir = tempfile::tempdir().unwrap();
             let source = surface_source(dir.path(), &[]);
@@ -1319,26 +1303,24 @@ mod tests {
             let refs =
                 morphic::resource::read_rerl(resource.find_block(*b"RERL").unwrap()).unwrap();
             assert_surface_resource_flags(&bytes);
-            for (slot, expected) in [
-                ("g_tColor", [100_u8, 120, 150, 255]),
-                ("g_tMetalness", [37, 37, 37, 255]),
-            ] {
-                let path = mat.texture(slot).unwrap();
-                assert!(path.starts_with("materials/grimoire/surface/models/test/part/"));
-                assert!(refs.contains(&(morphic::resource::resource_id(path), path.into())));
-                let encoded = read(&paks, &compiled(path)).unwrap();
-                assert_eq!(
-                    morphic::inspect(&encoded).unwrap().format,
-                    morphic::TextureFormat::Bc7
-                );
-                assert_texture_pixels(&paks, path, expected);
-            }
+            // No new slot: adding one rewrites the material, which renders as a red wireframe.
+            assert!(mat.texture("g_tMetalness").is_none());
+            let path = mat.texture("g_tColor").unwrap();
+            assert!(path.starts_with("materials/grimoire/surface/models/test/part/"));
+            assert!(refs.contains(&(morphic::resource::resource_id(path), path.into())));
+            let encoded = read(&paks, &compiled(path)).unwrap();
+            assert_eq!(
+                morphic::inspect(&encoded).unwrap().format,
+                morphic::TextureFormat::Bc7
+            );
+            assert_texture_pixels(&paks, path, [100, 120, 150, 255]);
             if mode == "ghost" {
                 let mask = mat.texture("g_tAltTranslucency").unwrap();
                 assert!(refs.contains(&(morphic::resource::resource_id(mask), mask.into())));
                 let image = morphic::decode(&read(&paks, &compiled(mask)).unwrap()).unwrap();
                 assert_eq!((image.width, image.height), (1, 1));
             }
+            // A finish afterwards still reads opacity from color alpha and adds no metalness slot.
             let finish = dir.path().join("finish_dir.vpk");
             finish_material(
                 &[output, source],
@@ -1353,18 +1335,7 @@ mod tests {
                 morphic::material::parse(&read(&finished, "models/test/part.vmat_c").unwrap())
                     .unwrap();
             assert_eq!(after.texture("g_tColor"), mat.texture("g_tColor"));
-            let metal = morphic::decode(
-                &read(&finished, &compiled(after.texture("g_tMetalness").unwrap())).unwrap(),
-            )
-            .unwrap();
-            let morphic::ImageData::Rgba8(pixels) = metal.data else {
-                panic!()
-            };
-            assert!(pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .all(|pixel| pixel[0] >= 252));
+            assert!(after.texture("g_tMetalness").is_none());
         }
     }
 

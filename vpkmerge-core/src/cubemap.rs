@@ -115,6 +115,16 @@ pub fn export_cubemap_hdr(
     from_vpk: Option<&Path>,
     out_dir: &Path,
 ) -> Result<Vec<CubemapFaceReport>> {
+    export_cubemap_hdr_at(input, from_vpk, out_dir, 0)
+}
+
+/// Export one explicitly selected cube from a cubemap array, preserving face order.
+pub fn export_cubemap_hdr_at(
+    input: &Path,
+    from_vpk: Option<&Path>,
+    out_dir: &Path,
+    slice: u16,
+) -> Result<Vec<CubemapFaceReport>> {
     let bytes = match from_vpk {
         Some(vpk) => crate::read_vpk_entry(vpk, &input.to_string_lossy())?,
         None => std::fs::read(input).with_context(|| format!("reading {}", input.display()))?,
@@ -134,6 +144,13 @@ pub fn export_cubemap_hdr(
         );
     }
 
+    if slice >= info.depth {
+        bail!(
+            "cubemap slice {slice} is outside array depth {}",
+            info.depth
+        );
+    }
+
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
 
@@ -143,7 +160,7 @@ pub fn export_cubemap_hdr(
             &bytes,
             &DecodeOptions {
                 mip: 0,
-                slice: 0,
+                slice,
                 face,
             },
         )
@@ -281,6 +298,51 @@ fn float_to_rgbe(rgb: [f32; 3]) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exports_the_selected_cube_array_slice() {
+        let mut bytes = vec![0u8; 80];
+        bytes[4..6].copy_from_slice(&12u16.to_le_bytes());
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(b"DATA");
+        bytes[20..24].copy_from_slice(&12u32.to_le_bytes());
+        bytes[24..28].copy_from_slice(&48u32.to_le_bytes());
+        bytes[32..34].copy_from_slice(&1u16.to_le_bytes());
+        bytes[34..36].copy_from_slice(
+            &(TextureFlags::CUBE_TEXTURE | TextureFlags::TEXTURE_ARRAY)
+                .bits()
+                .to_le_bytes(),
+        );
+        bytes[52..54].copy_from_slice(&1u16.to_le_bytes());
+        bytes[54..56].copy_from_slice(&1u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&4u16.to_le_bytes());
+        bytes[58] = 4;
+        bytes[59] = 1;
+        for slice in 0u8..4 {
+            for face in 0..6 {
+                let tag = slice * 40 + face;
+                bytes.extend_from_slice(&[tag, tag, tag, 255]);
+            }
+        }
+        let size = u32::try_from(bytes.len()).unwrap();
+        bytes[0..4].copy_from_slice(&size.to_le_bytes());
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("synthetic.vtex_c");
+        let out = temp.path().join("selected");
+        std::fs::write(&input, &bytes).unwrap();
+        let reports = export_cubemap_hdr_at(&input, None, &out, 2).unwrap();
+        assert_eq!(reports.len(), 6);
+        for (face, name) in (0u8..).zip(CUBEMAP_FACE_NAMES) {
+            let hdr = std::fs::read(out.join(format!("{name}.hdr"))).unwrap();
+            let expected = srgb_to_linear(80 + face);
+            assert_eq!(&hdr[hdr.len() - 4..], &float_to_rgbe([expected; 3]));
+        }
+        assert!(export_cubemap_hdr_at(&input, None, &out, 4).is_err());
+        let first = export_cubemap_hdr(&input, None, &temp.path().join("first")).unwrap();
+        assert!(first[0].mean_luminance.abs() < f64::EPSILON);
+    }
 
     #[test]
     fn texture_export_limits_size_and_rejects_cubemaps() {

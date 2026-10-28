@@ -19,15 +19,7 @@ pub fn decode_image(
     pixels: &[u8],
     opts: &DecodeOptions,
 ) -> Result<Image, DecodeError> {
-    // face and mip are validated and sliced in pixel_data. 3D depth / array
-    // slices (rest of M10) are still pending; reject any non-zero slice here.
-    if opts.slice != 0 {
-        return Err(DecodeError::InvalidTarget {
-            mip: opts.mip,
-            slice: opts.slice,
-            face: opts.face,
-        });
-    }
+    // pixel_data has already validated and selected this mip, slice and face.
     // Decoders work in terms of width/height; pass them the mip-adjusted
     // dims rather than the texture's mip-0 dims.
     let (mw, mh) = mip_dims(info.width, info.height, opts.mip);

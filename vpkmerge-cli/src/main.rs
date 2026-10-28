@@ -949,6 +949,9 @@ struct CubemapCmd {
     /// Directory to write the six face files into (created if missing).
     #[arg(long = "out-dir", value_name = "DIR")]
     out_dir: PathBuf,
+    /// Cube index in a cubemap array, defaults to the first cube.
+    #[arg(long, default_value_t = 0)]
+    slice: u16,
 }
 
 #[derive(Args)]
@@ -3716,8 +3719,12 @@ fn run_cubemap(args: &CubemapCmd) -> Result<()> {
         Some(vpk) => format!("{} @ {}", args.input.display(), vpk.display()),
         None => args.input.display().to_string(),
     };
-    let reports =
-        vpkmerge_core::export_cubemap_hdr(&args.input, args.from_vpk.as_deref(), &args.out_dir)?;
+    let reports = vpkmerge_core::export_cubemap_hdr_at(
+        &args.input,
+        args.from_vpk.as_deref(),
+        &args.out_dir,
+        args.slice,
+    )?;
     eprintln!("{label}: {} faces decoded at mip 0", reports.len());
     for r in &reports {
         eprintln!(

@@ -92,11 +92,17 @@ fn no_lod_does_not_synthesize_levels() {
 
 #[test]
 fn bc3_alpha_rounding_and_sub_block_mip_tails_match_vrf() {
+    check_bc3_alpha(255, 0, [255, 0, 219, 182, 146, 109, 73, 36]);
+    check_bc3_alpha(0, 255, [0, 255, 51, 102, 153, 204, 0, 255]);
+}
+
+fn check_bc3_alpha(a: u8, b: u8, expected: [u8; 8]) {
     let mut bytes = texture(8, 8, 4, false);
     bytes.truncate(68);
     bytes[54] = 2;
     let mut block = [0u8; 16];
-    block[0] = 255;
+    block[0] = a;
+    block[1] = b;
     block[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
     let indices = (0..16).fold(0u64, |bits, pixel| bits | ((pixel % 8) << (pixel * 3)));
     block[2..8].copy_from_slice(&indices.to_le_bytes()[..6]);
@@ -115,8 +121,28 @@ fn bc3_alpha_rounding_and_sub_block_mip_tails_match_vrf() {
         panic!("RGBA8");
     };
     let alpha: Vec<_> = rgba.chunks_exact(4).map(|p| p[3]).collect();
-    assert_eq!(alpha, [255, 0, 219, 182, 146, 109, 73, 36].repeat(2));
+    assert_eq!(alpha, expected.repeat(2));
     assert!(rgba.chunks_exact(4).all(|p| p[..3] == [255, 255, 255]));
+}
+
+#[test]
+fn bc1_three_color_mode_keeps_vrf_opaque_black() {
+    let mut bytes = texture(4, 4, 1, false);
+    bytes.truncate(68);
+    bytes[54] = 1;
+    // Black and white endpoints, all pixels use three-color mode index 3.
+    bytes.extend_from_slice(&[0, 0, 255, 255, 255, 255, 255, 255]);
+    let levels = decode_stored_mips(&bytes).unwrap();
+    let ImageData::Rgba8(rgba) = &levels[0].data else {
+        panic!("RGBA8");
+    };
+    assert_eq!(rgba, &[0, 0, 0, 255].repeat(16));
+    // The existing preview retains its punch-through alpha behavior.
+    let preview = morphic::decode(&bytes).unwrap();
+    let ImageData::Rgba8(rgba) = preview.data else {
+        panic!("RGBA8");
+    };
+    assert_eq!(rgba, [0, 0, 0, 0].repeat(16));
 }
 
 #[test]

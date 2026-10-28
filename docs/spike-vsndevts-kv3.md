@@ -153,3 +153,32 @@ Residual risk to watch even on success: we keep the *original* `RED2` dependency
 Swapping a clip to a path **not** already listed in `RED2` (e.g. a truly custom
 `.vsnd_c`) may need `RED2` regeneration. The staged test deliberately swaps to paths
 already in `RED2` to test the format first; a custom-asset swap is the natural follow-up.
+
+
+## Stored KV3 format in JSON
+
+`soundevents` also reads compiled particle systems and other resources with binary
+KV3 DATA. Add `--with-format` to return the stored schema alongside its data:
+
+```sh
+vpkmerge soundevents particles/abilities/abrams/abrams_ambient_book_glow.vpcf_c --from-vpk pak01_dir.vpk --with-format
+```
+
+```json
+{
+  "format": {
+    "name": "vpcf61",
+    "guid": "39d3ce1d-9442-4407-9b78-8317145b1732"
+  },
+  "data": {}
+}
+```
+
+`data` is the full original JSON projection, including any requested edits. The
+empty object above is a placeholder. No format upgrades are applied. The format
+is the source DATA block's schema identifier, independent of the binary KV3
+encoding version. Binary v1..=5 stores a GUID; names are resolved with VRF's
+`KV3IDLookup` table. Unknown GUIDs retain their canonical lowercase GUID string
+and report `"name": null`, so callers can handle newer schemas explicitly.
+Without the flag, stdout stays byte-for-byte compatible with the existing JSON
+output. The flag cannot be combined with `--encode` or `--encode-vpk`.

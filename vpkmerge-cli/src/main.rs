@@ -840,13 +840,19 @@ impl From<GlowArg> for SoulGlow {
 
 #[derive(Args)]
 struct SoundeventsCmd {
-    /// Path to a `.vsndevts_c` file, or (with --from-vpk) an entry path inside a VPK.
+    /// Compiled resource with KV3 DATA, such as `.vsndevts_c` or `.vpcf_c`.
+    /// With --from-vpk, INPUT is an entry path inside the VPK.
     input: PathBuf,
 
     /// Read INPUT as an entry path inside this VPK instead of a file on disk
     /// (e.g. `--from-vpk pak01_dir.vpk soundevents/hero/gigawatt.vsndevts_c`).
     #[arg(long, value_name = "VPK")]
     from_vpk: Option<PathBuf>,
+
+    /// Wrap JSON as {"format":{"name":"vpcf61","guid":"..."},"data":...}.
+    /// Name is null for unknown GUIDs. DATA is unchanged; no upgrades are applied.
+    #[arg(long, conflicts_with_all = ["encode", "encode_vpk"])]
+    with_format: bool,
 
     /// After applying edits, re-encode (uncompressed v4) to this loose file.
     #[arg(long, value_name = "FILE")]
@@ -3454,6 +3460,7 @@ fn run_soundevents(args: SoundeventsCmd) -> Result<()> {
         vpk_entry,
         swap_vsnd,
         set,
+        with_format,
     } = args;
 
     let label = match &from_vpk {
@@ -3543,7 +3550,14 @@ fn run_soundevents(args: SoundeventsCmd) -> Result<()> {
             );
         }
     } else {
-        let json = serde_json::to_string_pretty(&se.to_json()).context("serializing JSON")?;
+        let data = se.to_json();
+        let output = if with_format {
+            let format = se.format()?;
+            serde_json::json!({"format": {"name": format.name(), "guid": format.guid()}, "data": data})
+        } else {
+            data
+        };
+        let json = serde_json::to_string_pretty(&output).context("serializing JSON")?;
         println!("{json}");
     }
     Ok(())

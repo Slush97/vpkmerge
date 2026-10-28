@@ -64,13 +64,8 @@ pub(super) fn decode_wire(data: &[u8]) -> Result<Document, DecodeError> {
     })
 }
 
-/// Parse the header, decompress the buffers, carve the typed lanes, then hand
-/// `read` the context positioned at the root type byte.
-#[allow(clippy::too_many_lines)]
-fn with_root<T>(
-    data: &[u8],
-    read: impl FnOnce(&mut Ctx) -> Result<T, DecodeError>,
-) -> Result<T, DecodeError> {
+/// Validate the binary magic and return the supported encoding version.
+pub(super) fn version(data: &[u8]) -> Result<u32, DecodeError> {
     let mut h = Cursor::new(data);
     let magic = h.u32()?;
     let version = magic & 0xFF;
@@ -78,7 +73,19 @@ fn with_root<T>(
         return Err(DecodeError::UnsupportedKv3(magic));
     }
 
-    let _format_guid = h.bytes(16)?;
+    Ok(version)
+}
+
+/// Parse the header, decompress the buffers, carve the typed lanes, then hand
+/// `read` the context positioned at the root type byte.
+#[allow(clippy::too_many_lines)]
+fn with_root<T>(
+    data: &[u8],
+    read: impl FnOnce(&mut Ctx) -> Result<T, DecodeError>,
+) -> Result<T, DecodeError> {
+    let version = version(data)?;
+    let mut h = Cursor::new(data);
+    h.bytes(20)?; // magic + format GUID
     let compression = h.u32()?;
 
     // Header counts. Field presence is version-gated exactly as in VRF.

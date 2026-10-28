@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `soundevents --with-format` wraps JSON as `{ "format": { "name": "vpcf61", "guid": "39d3ce1d-9442-4407-9b78-8317145b1732" }, "data": ... }`. The name identifies the stored KV3 schema, resolved from its GUID using VRF's format table; unknown GUIDs have `name: null`. No upgrades are applied. Default JSON output is unchanged. The flag conflicts with `--encode` and `--encode-vpk`.
+- `morphic::kv3::Format` exposes `name()` and canonical lowercase `guid()`, and validates binary KV3 v1..=5 headers. `SoundEvents::format()` exposes the original DATA block's identifier.
+
 ## v0.28.0
 
 Area edits and glow for Grimoire's Door Stuck skin editor: an edit can cover only part of a skin part, and a part can glow. Contributed by @oldreceipt (#76).

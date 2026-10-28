@@ -70,6 +70,12 @@ impl SoundEvents {
         })
     }
 
+    /// Stored KV3 schema identifier, independent of the binary encoding version.
+    pub fn format(&self) -> Result<morphic::kv3::Format> {
+        let resource = morphic::resource::Resource::parse(&self.original)?;
+        Ok(morphic::kv3::Format::from_payload(resource.data_block()?)?)
+    }
+
     /// Event names in file order.
     #[must_use]
     pub fn event_names(&self) -> Vec<&str> {

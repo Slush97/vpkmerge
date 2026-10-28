@@ -98,6 +98,9 @@ enum Command {
     /// Decode a 2D texture to linear Radiance HDR without clipping bright pixels.
     TextureHdr(TextureHdrCmd),
 
+    /// Export all volume slices to a VTV1 RGBA pixel buffer, preserving data channels.
+    TextureVolume(TextureVolumeCmd),
+
     /// Recolor a hero's full ability VFX (particles + color textures + baked
     /// vertex colors) to one hue and pack it into a single addon VPK. The
     /// one-call bridge for a mod manager: composes all three recolor mechanisms
@@ -952,6 +955,15 @@ struct CubemapCmd {
     /// Cube index in a cubemap array, defaults to the first cube.
     #[arg(long, default_value_t = 0)]
     slice: u16,
+}
+
+#[derive(Args)]
+struct TextureVolumeCmd {
+    input: PathBuf,
+    #[arg(long)]
+    from_vpk: Option<PathBuf>,
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Args)]
@@ -2110,6 +2122,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Cubemap(args)) => run_cubemap(&args),
+        Some(Command::TextureVolume(args)) => vpkmerge_core::cubemap::export_texture_volume(
+            &args.input,
+            args.from_vpk.as_deref(),
+            &args.out,
+        ),
         Some(Command::TextureHdr(args)) => vpkmerge_core::cubemap::export_texture_hdr(
             &args.input,
             args.from_vpk.as_deref(),

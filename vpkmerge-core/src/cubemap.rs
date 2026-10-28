@@ -87,6 +87,65 @@ pub fn export_texture_hdr(
     Ok(())
 }
 
+/// Export mip-zero volume pixels without color conversion. VTV1 header: magic,
+/// width, height, depth and component type (1 = UNORM8, 2 = float16), all u32 LE.
+/// Pixels follow in Z/Y/X/RGBA order, preserving alpha and HDR values.
+pub fn export_texture_volume(input: &Path, from_vpk: Option<&Path>, out: &Path) -> Result<()> {
+    let bytes = match from_vpk {
+        Some(vpk) => crate::read_vpk_entry(vpk, &input.to_string_lossy())?,
+        None => std::fs::read(input)?,
+    };
+    let volume = texture_volume_bytes(&bytes)?;
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(out, volume)?;
+    Ok(())
+}
+
+fn texture_volume_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
+    let info = morphic::inspect(bytes)?;
+    if !info.flags.contains(TextureFlags::VOLUME_TEXTURE)
+        || info.flags.contains(TextureFlags::CUBE_TEXTURE)
+    {
+        bail!("Expected a volume texture");
+    }
+    let mut result = b"VTV1".to_vec();
+    result.extend_from_slice(&u32::from(info.width).to_le_bytes());
+    result.extend_from_slice(&u32::from(info.height).to_le_bytes());
+    result.extend_from_slice(&u32::from(info.depth).to_le_bytes());
+    let mut component_type = None;
+    for slice in 0..info.depth {
+        let image = morphic::decode_at(
+            bytes,
+            &DecodeOptions {
+                slice,
+                ..Default::default()
+            },
+        )?;
+        let kind = match &image.data {
+            ImageData::Rgba8(_) => 1u32,
+            ImageData::Rgba16F(_) => 2u32,
+        };
+        if component_type.is_none() {
+            result.extend_from_slice(&kind.to_le_bytes());
+            component_type = Some(kind);
+        }
+        if component_type != Some(kind) {
+            bail!("Inconsistent volume component types");
+        }
+        match image.data {
+            ImageData::Rgba8(pixels) => result.extend_from_slice(&pixels),
+            ImageData::Rgba16F(pixels) => {
+                for value in pixels {
+                    result.extend_from_slice(&value.to_bits().to_le_bytes());
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Per-face summary returned by [`export_cubemap_hdr`], so a caller can print
 /// an orientation sanity table (the `+Y`/`py` face should be the sky).
 #[derive(Debug, Clone)]
@@ -397,6 +456,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn volume_pack_preserves_each_slice_and_data_channel() {
+        let mut bytes = vec![0u8; 80];
+        bytes[4..6].copy_from_slice(&12u16.to_le_bytes());
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(b"DATA");
+        bytes[20..24].copy_from_slice(&12u32.to_le_bytes());
+        bytes[24..28].copy_from_slice(&48u32.to_le_bytes());
+        bytes[32..34].copy_from_slice(&1u16.to_le_bytes());
+        bytes[34..36].copy_from_slice(&TextureFlags::VOLUME_TEXTURE.bits().to_le_bytes());
+        bytes[52..54].copy_from_slice(&2u16.to_le_bytes());
+        bytes[54..56].copy_from_slice(&1u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
+        bytes[58] = 4;
+        bytes[59] = 1;
+        let pixels = [
+            0, 20, 120, 255, 1, 2, 3, 4, 32, 64, 128, 192, 7, 8, 9, 10, 251, 252, 253, 254, 80, 81,
+            82, 83,
+        ];
+        bytes.extend_from_slice(&pixels);
+        let size = u32::try_from(bytes.len()).unwrap();
+        bytes[..4].copy_from_slice(&size.to_le_bytes());
+        let packed = texture_volume_bytes(&bytes).unwrap();
+        assert_eq!(&packed[..4], b"VTV1");
+        for (i, expected) in [2u32, 1, 3, 1].iter().enumerate() {
+            assert_eq!(&packed[4 + i * 4..8 + i * 4], &expected.to_le_bytes());
+        }
+        assert_eq!(&packed[20..], &pixels);
+        bytes[34..36].copy_from_slice(&0u16.to_le_bytes());
+        assert!(texture_volume_bytes(&bytes).is_err());
     }
 
     #[test]

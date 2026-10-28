@@ -37,13 +37,19 @@ fn open(paths: &[PathBuf]) -> Result<Vec<valve_pak::VPK>> {
 /// Apply uniform roughness and metalness to one material. Clone the packed masks,
 /// including opaque PBR color alpha (metalness), without changing shared textures.
 ///
+/// With `mask` (a white-on-black UV PNG) only the white of the mask takes the finish:
+/// the material constants stay, and each finish texture is blended toward the values,
+/// upscaled to the color texture's size first so tiny default masks can carry an area.
+///
 /// # Errors
 /// Rejects unsupported shaders, animated finish bindings, missing textures and invalid values.
+#[allow(clippy::too_many_lines)]
 pub fn finish_material(
     paths: &[PathBuf],
     entry: &str,
     roughness: f64,
     metalness: f64,
+    mask: Option<&[u8]>,
     output: &Path,
 ) -> Result<()> {
     ensure!(
@@ -81,22 +87,40 @@ pub fn finish_material(
             .is_some_and(|n| n.contains("Roughness") || n.contains("Metalness"))),
         "Animated finish parameters cannot be overridden"
     );
-    let edits = [
-        VmatEdit::Vector {
-            name: "TextureRoughness1".into(),
-            value: [roughness, roughness, roughness, 0.0],
-        },
-        VmatEdit::Vector {
-            name: "TextureMetalness1".into(),
-            value: [metalness, metalness, metalness, 0.0],
-        },
-    ];
-    let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
-    ensure!(
-        stats.failed.is_empty(),
-        "Material finish parameters could not be patched: {:?}",
-        stats.failed
-    );
+    // An area keeps the material's own values outside the mask, so only a whole-part
+    // finish touches the constants.
+    let (mut bytes, area) = if let Some(png) = mask {
+        let color = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
+            .into_iter()
+            .find_map(|slot| material.texture(slot))
+            .context("Material has no color texture to size the finish mask from")?;
+        let info = morphic::inspect(&read(&paks, &compiled(color))?)?;
+        let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .context("Decoding finish mask PNG")?
+            .to_luma8();
+        (
+            original.clone(),
+            Some((decoded, u32::from(info.width), u32::from(info.height))),
+        )
+    } else {
+        let edits = [
+            VmatEdit::Vector {
+                name: "TextureRoughness1".into(),
+                value: [roughness, roughness, roughness, 0.0],
+            },
+            VmatEdit::Vector {
+                name: "TextureMetalness1".into(),
+                value: [metalness, metalness, metalness, 0.0],
+            },
+        ];
+        let (patched, stats) = patch_vmat_params(&original, &edits)?;
+        ensure!(
+            stats.failed.is_empty(),
+            "Material finish parameters could not be patched: {:?}",
+            stats.failed
+        );
+        (patched, None)
+    };
     let mut files = Vec::<(String, Vec<u8>)>::new();
     let mut bindings = Vec::<(String, String)>::new();
     for param in tree
@@ -118,7 +142,15 @@ pub fn finish_material(
             .context("Missing finish texture binding")?;
         let original_texture = read(&paks, &compiled(texture))?;
         let mut image = morphic::decode(&original_texture)?;
-        flatten_channel(&mut image, channel, value)?;
+        match &area {
+            Some((mask, width, height)) => {
+                if image.width < *width || image.height < *height {
+                    image = upscale(&image, *width, *height)?;
+                }
+                blend_channel(&mut image, channel, value, mask)?;
+            }
+            None => flatten_channel(&mut image, channel, value)?,
+        }
         // Full material path scopes cloned masks to this part, even when several parts
         // originally sampled the same normal map.
         let path = format!(
@@ -132,6 +164,10 @@ pub fn finish_material(
         ));
         bindings.push((slot.to_string(), path));
     }
+    ensure!(
+        area.is_none() || !bindings.is_empty(),
+        "This part has no finish textures to paint an area into"
+    );
     if !bindings.is_empty() {
         let name = tree
             .get("m_materialName")
@@ -145,6 +181,196 @@ pub fn finish_material(
         .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
         .collect();
     crate::pack(&refs, output)
+}
+
+/// How a glowing part animates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlowAnimation {
+    Steady,
+    /// Brightness rises and falls about every two seconds.
+    Pulse,
+    /// The glow color cycles through the spectrum.
+    Rainbow,
+}
+
+/// How a painted glow looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowStyle {
+    /// Glow color, 0..1 per channel. Ignored by rainbow and by `paint_colors`.
+    pub color: [f64; 3],
+    /// Self-illumination scale, 0..50.
+    pub strength: f64,
+    pub animation: GlowAnimation,
+    /// Pulse and rainbow speed multiplier, 0.1..10 (1 is about a two second pulse).
+    pub speed: f64,
+    /// Glow in the part's own texture colors instead of `color`.
+    pub paint_colors: bool,
+}
+
+/// Turn on a part's self-illumination, limited to the white of `mask` (whole part without one).
+///
+/// Works on materials that never shipped `F_SELF_ILLUM`: it switches the feature on, binds a mask
+/// cloned at a part-scoped path and drives the glow through dynamic expressions for animation.
+///
+/// # Errors
+/// Rejects unsupported shaders, animated self-illumination, invalid values and missing textures.
+#[allow(clippy::too_many_lines)]
+pub fn glow_material(
+    paths: &[PathBuf],
+    entry: &str,
+    mask: Option<&[u8]>,
+    style: &GlowStyle,
+    output: &Path,
+) -> Result<()> {
+    let GlowStyle {
+        color,
+        strength,
+        animation,
+        speed,
+        paint_colors,
+    } = *style;
+    ensure!(
+        strength.is_finite() && (0.0..=50.0).contains(&strength),
+        "Glow strength must be between 0 and 50"
+    );
+    ensure!(
+        speed.is_finite() && (0.1..=10.0).contains(&speed),
+        "Glow speed must be between 0.1 and 10"
+    );
+    ensure!(
+        color
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+        "Glow color channels must be between 0 and 1"
+    );
+    ensure!(
+        !entry.contains("..") && !entry.contains('\\') && !entry.contains(':'),
+        "Invalid material path"
+    );
+    let paks = open(paths)?;
+    let entry = compiled(entry);
+    let original = read(&paks, &entry)?;
+    let tree = morphic::decode_kv3_resource(&original)?;
+    ensure!(
+        tree.get("m_shaderName").and_then(Value::as_str) == Some("pbr.vfx"),
+        "Only pbr.vfx supports workshop glow"
+    );
+    let dynamic = tree
+        .get("m_dynamicParams")
+        .and_then(Value::as_array)
+        .unwrap_or(&[]);
+    ensure!(
+        !dynamic.iter().any(|v| v
+            .get("m_name")
+            .and_then(Value::as_str)
+            .is_some_and(|n| n.contains("SelfIllum"))),
+        "Animated self-illumination cannot be overridden"
+    );
+    let material = morphic::material::parse(&original)?;
+    // The mask must go into a slot the material already has: adding a slot rewrites the material,
+    // which the game renders as a red wireframe.
+    ensure!(
+        material.texture("g_tSelfIllumMask").is_some(),
+        "This part has no glow mask slot"
+    );
+    let template_path = ["g_tColor", "g_tColorA", "g_tBaseColor", "g_tAlbedo"]
+        .into_iter()
+        .find_map(|slot| material.texture(slot))
+        .context("Material has no color texture to size the glow mask from")?;
+    let template = read(&paks, &compiled(template_path))?;
+    let info = morphic::inspect(&template)?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    let luma = match mask {
+        Some(png) => {
+            let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+                .context("Decoding glow mask PNG")?
+                .to_luma8();
+            image::imageops::resize(
+                &decoded,
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
+            .into_raw()
+        }
+        None => vec![255; (width * height) as usize],
+    };
+    // Every channel carries the mask, so it reads the same whichever one the shader samples.
+    let pixels = luma.iter().flat_map(|&v| [v, v, v, 255]).collect();
+    let glow_mask = morphic::Image {
+        width,
+        height,
+        data: morphic::ImageData::Rgba8(pixels),
+    };
+    let mut edits = vec![
+        VmatEdit::Int {
+            name: "F_SELF_ILLUM".into(),
+            value: 1,
+        },
+        // 1 lights the part in its own texture colors, 0 in the tint. Compressed materials often store
+        // the factor as a tagless 0 that cannot become 1 in place, so 1 rides a constant expression.
+        if paint_colors {
+            VmatEdit::expr("g_flSelfIllumAlbedoFactor1", "1")?
+        } else {
+            VmatEdit::Float {
+                name: "g_flSelfIllumAlbedoFactor1".into(),
+                value: 0.0,
+            }
+        },
+        VmatEdit::Vector {
+            name: "g_vSelfIllumScrollSpeed1".into(),
+            value: [0.0, 0.0, 0.0, 0.0],
+        },
+    ];
+    edits.push(if animation == GlowAnimation::Pulse {
+        VmatEdit::expr(
+            "g_flSelfIllumScale1",
+            &format!("{strength} * (0.5 * sin({} * time()) + 0.5)", 3.0 * speed),
+        )?
+    } else {
+        VmatEdit::Float {
+            name: "g_flSelfIllumScale1".into(),
+            value: strength,
+        }
+    });
+    edits.push(if animation == GlowAnimation::Rainbow {
+        let rate = 2.0 * speed;
+        VmatEdit::expr(
+            "g_vSelfIllumTint1",
+            &format!("float3(0.5 + 0.5 * sin({rate} * time()), 0.5 + 0.5 * sin({rate} * time() + 2.094), 0.5 + 0.5 * sin({rate} * time() + 4.189))"),
+        )?
+    } else {
+        let tint = if paint_colors { [1.0; 3] } else { color };
+        VmatEdit::Vector { name: "g_vSelfIllumTint1".into(), value: [tint[0], tint[1], tint[2], 0.0] }
+    });
+    let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
+    ensure!(
+        stats.failed.is_empty(),
+        "Glow parameters could not be patched: {:?}",
+        stats.failed
+    );
+    let path = format!(
+        "materials/grimoire/glow/{}/selfillum.vtex",
+        entry.trim_end_matches(".vmat_c")
+    )
+    .to_ascii_lowercase();
+    let name = tree
+        .get("m_materialName")
+        .and_then(Value::as_str)
+        .context("Missing material name")?;
+    bytes = bind_finish_textures(
+        &bytes,
+        name,
+        &[("g_tSelfIllumMask".to_string(), path.clone())],
+    )?;
+    let texture = crate::trippy::encode_part_texture(&template, &glow_mask)?;
+    crate::pack(
+        &[
+            (entry.as_str(), bytes.as_slice()),
+            (compiled(&path).as_str(), texture.as_slice()),
+        ],
+        output,
+    )
 }
 
 fn color_alpha_is_metalness(material: &morphic::material::Material) -> bool {
@@ -166,6 +392,34 @@ pub fn surface_material(
     entry: &str,
     mode: &str,
     opacity: f64,
+    output: &Path,
+) -> Result<()> {
+    surface_material_in(paths, entry, mode, opacity, None, output)
+}
+
+/// Make only the white of `mask` (a white-on-black UV PNG) see-through at `opacity`, leaving the
+/// rest of the part as it was. The material turns translucent with its opacity scale untouched, and
+/// the color alpha carries the area: 1 outside it, `opacity` inside. A part that already blends keeps
+/// its own alpha, scaled down inside the area.
+///
+/// # Errors
+/// Rejects unsupported shaders, cutouts, animated transparency, invalid values and missing textures.
+pub fn surface_area_material(
+    paths: &[PathBuf],
+    entry: &str,
+    opacity: f64,
+    mask: &[u8],
+    output: &Path,
+) -> Result<()> {
+    surface_material_in(paths, entry, "translucent", opacity, Some(mask), output)
+}
+
+fn surface_material_in(
+    paths: &[PathBuf],
+    entry: &str,
+    mode: &str,
+    opacity: f64,
+    mask: Option<&[u8]>,
     output: &Path,
 ) -> Result<()> {
     ensure!(
@@ -216,11 +470,19 @@ pub fn surface_material(
             "Animated transparency parameters cannot be overridden"
         );
     }
+    let area = mask.map(|png| (png, opacity));
     let SurfaceTextures {
         mut files,
         bindings,
-    } = surface_textures(&paks, &entry, mode, &material)?;
-    let edits = surface_edits(mode, opacity);
+    } = surface_textures(&paks, &entry, mode, &material, area)?;
+    // An area keeps the part's own opacity scale: its alpha already carries the see-through texels.
+    let edits: Vec<VmatEdit> = surface_edits(mode, opacity)
+        .into_iter()
+        .filter(|edit| {
+            area.is_none()
+                || !matches!(edit, VmatEdit::Float { name, .. } if name == "g_flOpacityScale1")
+        })
+        .collect();
     let (mut bytes, stats) = patch_vmat_params(&original, &edits)?;
     ensure!(
         stats.failed.is_empty(),
@@ -290,11 +552,44 @@ struct SurfaceTextures {
     bindings: Vec<(String, String)>,
 }
 
+/// Scale color alpha toward `opacity` by the mask's white, resized to the image.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn scale_alpha(image: &mut morphic::Image, png: &[u8], opacity: f64) -> Result<()> {
+    let (width, height) = (image.width, image.height);
+    let morphic::ImageData::Rgba8(pixels) = &mut image.data else {
+        bail!("HDR surface color is unsupported")
+    };
+    let decoded = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .context("Decoding surface mask PNG")?
+        .to_luma8();
+    let weights = if decoded.dimensions() == (width, height) {
+        decoded
+    } else {
+        image::imageops::resize(
+            &decoded,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    for (pixel, weight) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(weights.as_raw())
+    {
+        let factor = 1.0 + (opacity - 1.0) * f64::from(*weight) / 255.0;
+        pixel[3] = (f64::from(pixel[3]) * factor).round() as u8;
+    }
+    Ok(())
+}
+
 fn surface_textures(
     paks: &[valve_pak::VPK],
     entry: &str,
     mode: &str,
     material: &morphic::material::Material,
+    area: Option<(&[u8], f64)>,
 ) -> Result<SurfaceTextures> {
     let color_path = material
         .texture("g_tColor")
@@ -331,6 +626,18 @@ fn surface_textures(
         // game renders as a red wireframe. Without one, the see-through part loses its metalness.
         let mut color = morphic::decode(&color_bytes)?;
         flatten_channel(&mut color, 3, 1.0)?;
+        if let Some((png, opacity)) = area {
+            scale_alpha(&mut color, png, opacity)?;
+        }
+        let path = format!("{stem}/color.vtex");
+        files.push((
+            compiled(&path),
+            crate::trippy::encode_part_texture(&color_bytes, &color)?,
+        ));
+        bindings.push(("g_tColor".into(), path));
+    } else if let Some((png, opacity)) = area {
+        let mut color = morphic::decode(&color_bytes)?;
+        scale_alpha(&mut color, png, opacity)?;
         let path = format!("{stem}/color.vtex");
         files.push((
             compiled(&path),
@@ -412,6 +719,62 @@ fn bind_finish_textures(
     }
     references.sort_by(|a, b| a.1.cmp(&b.1));
     Ok(resource.rebuild_with_block(index, &morphic::resource::write_rerl(&references))?)
+}
+
+/// Blend one channel toward `value` by the mask's white, resized to the image.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn blend_channel(
+    image: &mut morphic::Image,
+    channel: usize,
+    value: f64,
+    mask: &image::GrayImage,
+) -> Result<()> {
+    let (width, height) = (image.width, image.height);
+    let morphic::ImageData::Rgba8(pixels) = &mut image.data else {
+        bail!("HDR finish masks are unsupported")
+    };
+    let resized;
+    let weights = if mask.dimensions() == (width, height) {
+        mask
+    } else {
+        resized =
+            image::imageops::resize(mask, width, height, image::imageops::FilterType::Triangle);
+        &resized
+    };
+    let target = value * 255.0;
+    for (pixel, weight) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(weights.as_raw())
+    {
+        let weight = f64::from(*weight) / 255.0;
+        let current = f64::from(pixel[channel]);
+        pixel[channel] = (current + (target - current) * weight).round() as u8;
+    }
+    Ok(())
+}
+
+/// Upscale a finish texture so an area mask has texels to land in.
+fn upscale(image: &morphic::Image, width: u32, height: u32) -> Result<morphic::Image> {
+    let morphic::ImageData::Rgba8(pixels) = &image.data else {
+        bail!("HDR finish masks are unsupported")
+    };
+    let source = image::RgbaImage::from_raw(image.width, image.height, pixels.clone())
+        .context("Finish texture size does not match its pixels")?;
+    Ok(morphic::Image {
+        width,
+        height,
+        data: morphic::ImageData::Rgba8(
+            image::imageops::resize(
+                &source,
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
+            .into_raw(),
+        ),
+    })
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1068,6 +1431,88 @@ mod tests {
     }
 
     #[test]
+    fn masked_finish_changes_only_the_area() {
+        let donor = std::fs::read(format!(
+            "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let tree = morphic::decode_kv3_resource(&donor).unwrap();
+        let template = std::fs::read(format!(
+            "{}/../morphic/fixtures/bc7/gradient_dev_02_color_psd_73660177.vtex_c",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let texture = morphic::resize_mip_chain(
+            &template,
+            &morphic::Image {
+                width: 16,
+                height: 16,
+                data: morphic::ImageData::Rgba8([127, 140, 200, 255].repeat(256)),
+            },
+        )
+        .unwrap();
+        let mut files = vec![("materials/test/part.vmat_c".to_string(), donor.clone())];
+        for param in tree
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap()
+        {
+            let path = param.get("m_pValue").and_then(Value::as_str).unwrap();
+            files.push((compiled(path), texture.clone()));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source_dir.vpk");
+        let output = dir.path().join("finish_dir.vpk");
+        crate::pack(
+            &files
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+            &source,
+        )
+        .unwrap();
+        // Left half of the UV square is the area.
+        let mask =
+            image::GrayImage::from_fn(16, 16, |x, _| image::Luma([if x < 8 { 255 } else { 0 }]));
+        let mut png = Vec::new();
+        mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        finish_material(
+            std::slice::from_ref(&source),
+            "materials/test/part.vmat",
+            0.2,
+            1.0,
+            Some(&png),
+            &output,
+        )
+        .unwrap();
+        let paks = open(&[output]).unwrap();
+        let edited =
+            morphic::decode_kv3_resource(&read(&paks, "materials/test/part.vmat_c").unwrap())
+                .unwrap();
+        // Outside the area the material keeps its own finish constants.
+        assert_eq!(edited.get("m_vectorParams"), tree.get("m_vectorParams"));
+        let normal = edited
+            .get("m_textureParams")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_tNormalRoughness"))
+            .and_then(|p| p.get("m_pValue"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(normal.starts_with("materials/grimoire/finish/"));
+        let image = morphic::decode(&read(&paks, &compiled(normal)).unwrap()).unwrap();
+        let morphic::ImageData::Rgba8(pixels) = image.data else {
+            panic!()
+        };
+        let at = |x: usize, y: usize| pixels[(y * 16 + x) * 4 + 2];
+        assert!(at(2, 8).abs_diff(51) <= 4, "area roughness {}", at(2, 8));
+        assert!(at(13, 8).abs_diff(200) <= 4, "kept roughness {}", at(13, 8));
+    }
+
+    #[test]
     fn finish_clones_a_bound_mask_without_changing_shared_source() {
         let donor = std::fs::read(format!(
             "{}/../morphic/fixtures/material/vindicta_headv2.vmat_c",
@@ -1113,6 +1558,7 @@ mod tests {
             "materials/test/part.vmat",
             0.5,
             1.0,
+            None,
             &output,
         )
         .unwrap();
@@ -1200,7 +1646,7 @@ mod tests {
                 &source,
             )
             .unwrap();
-            finish_material(&[source], "models/test/part.vmat", 0.1, 1.0, &output).unwrap();
+            finish_material(&[source], "models/test/part.vmat", 0.1, 1.0, None, &output).unwrap();
             let pak = open(&[output]).unwrap();
             let edited =
                 morphic::material::parse(&read(&pak, "models/test/part.vmat_c").unwrap()).unwrap();
@@ -1269,6 +1715,125 @@ mod tests {
     }
 
     #[test]
+    fn glow_paints_in_texture_colors_and_runs_at_the_chosen_speed() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = surface_source(dir.path(), &[]);
+        let output = dir.path().join("glow_dir.vpk");
+        let style = GlowStyle {
+            color: [0.2, 0.8, 1.0],
+            strength: 6.0,
+            animation: GlowAnimation::Pulse,
+            speed: 2.0,
+            paint_colors: true,
+        };
+        glow_material(
+            std::slice::from_ref(&source),
+            "models/test/part.vmat",
+            None,
+            &style,
+            &output,
+        )
+        .unwrap();
+        let paks = open(&[output, source]).unwrap();
+        let tree =
+            morphic::decode_kv3_resource(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        let material =
+            morphic::material::parse(&read(&paks, "models/test/part.vmat_c").unwrap()).unwrap();
+        assert_eq!(material.int_params["F_SELF_ILLUM"], 1);
+        assert!(
+            tree.get("m_dynamicParams")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|p| p.get("m_name").and_then(Value::as_str)
+                    == Some("g_flSelfIllumAlbedoFactor1"))
+        );
+        // The texture's own colors light up, so the tint stays white.
+        assert_eq!(
+            material.vector_params["g_vSelfIllumTint1"][..3],
+            [1.0, 1.0, 1.0]
+        );
+        let attrs: Vec<String> = Vec::new();
+        let pulse = tree
+            .get("m_dynamicParams")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|p| p.get("m_name").and_then(Value::as_str) == Some("g_flSelfIllumScale1"))
+            .and_then(|p| match p.get("m_value") {
+                Some(Value::Binary(bytes)) => morphic::vfx_expr::decompile(bytes, &attrs).ok(),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            pulse.contains("6 * time()") || pulse.contains("6*time()"),
+            "{pulse}"
+        );
+        assert!(glow_material(
+            &[dir.path().join("source_dir.vpk")],
+            "models/test/part.vmat",
+            None,
+            &GlowStyle {
+                speed: 0.0,
+                ..style
+            },
+            &dir.path().join("x_dir.vpk")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn surface_area_turns_only_the_mask_see_through() {
+        let mask =
+            image::GrayImage::from_fn(8, 8, |x, _| image::Luma([if x < 4 { 255 } else { 0 }]));
+        let mut png = Vec::new();
+        mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        // Opaque part (color alpha 37 is packed metalness), then a part that already blends at alpha 37.
+        for (edits, inside, outside) in [
+            (vec![], 77, 255),
+            (
+                vec![VmatEdit::Int {
+                    name: "F_TRANSLUCENT".into(),
+                    value: 1,
+                }],
+                11,
+                37,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = surface_source(dir.path(), &edits);
+            let output = dir.path().join("area_dir.vpk");
+            surface_area_material(
+                std::slice::from_ref(&source),
+                "models/test/part.vmat",
+                0.3,
+                &png,
+                &output,
+            )
+            .unwrap();
+            let paks = open(&[output, source]).unwrap();
+            let bytes = read(&paks, "models/test/part.vmat_c").unwrap();
+            let material = morphic::material::parse(&bytes).unwrap();
+            assert_eq!(material.int_params["F_TRANSLUCENT"], 1);
+            assert!(
+                !material.float_params.contains_key("g_flOpacityScale1")
+                    || (material.float_params["g_flOpacityScale1"] - 1.0).abs() < 1e-6,
+                "the part keeps its own opacity scale"
+            );
+            let color = material.texture("g_tColor").unwrap();
+            assert!(color.starts_with("materials/grimoire/surface/"));
+            let image = morphic::decode(&read(&paks, &compiled(color)).unwrap()).unwrap();
+            let morphic::ImageData::Rgba8(pixels) = image.data else {
+                panic!()
+            };
+            let alpha = |x: usize| pixels[(4 * image.width as usize + x) * 4 + 3];
+            assert!(alpha(1).abs_diff(inside) <= 4, "inside {}", alpha(1));
+            assert!(alpha(6).abs_diff(outside) <= 4, "outside {}", alpha(6));
+        }
+    }
+
+    #[test]
     fn surface_turns_color_alpha_into_opacity_without_adding_texture_slots() {
         for mode in ["translucent", "ghost"] {
             let dir = tempfile::tempdir().unwrap();
@@ -1327,6 +1892,7 @@ mod tests {
                 "models/test/part.vmat",
                 0.2,
                 1.0,
+                None,
                 &finish,
             )
             .unwrap();

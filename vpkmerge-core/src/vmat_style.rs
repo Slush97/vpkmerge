@@ -256,46 +256,30 @@ fn apply_in_place(
     }
 }
 
-/// Applies one edit to the decoded tree (the re-encode fallback path).
-fn apply_to_tree(tree: &mut Value, edit: &VmatEdit) -> bool {
-    let exists = param_index(tree, edit.table(), edit.name());
-    let Some(Value::Array(params)) = tree.get_mut(edit.table()) else {
-        return false;
-    };
-    match exists {
-        Some(i) => {
-            let value_key = match edit {
-                VmatEdit::Int { .. } | VmatEdit::IntAttribute { .. } => "m_nValue",
-                VmatEdit::Float { .. } | VmatEdit::FloatAttribute { .. } => "m_flValue",
-                VmatEdit::Vector { .. }
-                | VmatEdit::VectorAttribute { .. }
-                | VmatEdit::Expr { .. } => "m_value",
-                VmatEdit::EditExpr { .. } => {
-                    unreachable!("EditExpr is resolved to Expr before apply_to_tree")
-                }
-            };
-            let Some(slot) = params[i].get_mut(value_key) else {
-                return false;
-            };
-            *slot = match edit {
-                VmatEdit::Int { value, .. } | VmatEdit::IntAttribute { value, .. } => {
-                    Value::Int(*value)
-                }
-                VmatEdit::Float { value, .. } | VmatEdit::FloatAttribute { value, .. } => {
-                    Value::Double(*value)
-                }
-                VmatEdit::Vector { value, .. } | VmatEdit::VectorAttribute { value, .. } => {
-                    Value::Array(value.iter().map(|&c| Value::Double(c)).collect())
-                }
-                VmatEdit::Expr { bytecode, .. } => Value::Binary(bytecode.clone()),
-                VmatEdit::EditExpr { .. } => {
-                    unreachable!("EditExpr is resolved to Expr before apply_to_tree")
-                }
-            };
+/// The constant dynamic expression standing in for a float or vector edit whose stored value is
+/// tagless (no data bytes to patch). `None` for edits an expression cannot carry.
+fn constant_expression(edit: &VmatEdit) -> Option<Result<VmatEdit>> {
+    let number = |value: f64| format!("{value}");
+    let src = match edit {
+        VmatEdit::Float { value, .. } => number(*value),
+        VmatEdit::Vector { value, .. } if value[3] == 0.0 => {
+            format!(
+                "float3({}, {}, {})",
+                number(value[0]),
+                number(value[1]),
+                number(value[2])
+            )
         }
-        None => params.push(edit.as_object()),
-    }
-    true
+        VmatEdit::Vector { value, .. } => format!(
+            "float4({}, {}, {}, {})",
+            number(value[0]),
+            number(value[1]),
+            number(value[2]),
+            number(value[3])
+        ),
+        _ => return None,
+    };
+    Some(VmatEdit::expr(edit.name(), &src))
 }
 
 /// The attribute names a material declares in `m_renderAttributesUsed` (the
@@ -501,44 +485,37 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
         }
     }
 
+    // A material re-encoded from scratch renders as a red wireframe in game (Apollo's translucent
+    // sword, the Abrams head glow, the soul-container probes), so an edit that cannot change in place
+    // never triggers one. An existing dynamic expression is swapped byte-faithfully (its bytecode is
+    // a blob, content-keyed on the current bytes); a float or vector rides a constant dynamic
+    // expression, which overrides the stored value the way shipped animated materials do, and a
+    // second edit of that value swaps the expression. Anything else (a static-combo int, an
+    // attribute) cannot change and fails loudly.
     if !needs_reencode.is_empty() {
-        if morphic::kv3_resource_has_blobs(&working).unwrap_or(true) {
-            // A blob-bearing material refuses the re-encode fallback. Changing an
-            // *existing* dynamic expression lands here: its bytecode IS a binary
-            // blob. Replace that blob byte-faithfully (content-keyed on the current
-            // bytecode), keeping the block compressed, instead of re-encoding the
-            // whole material. Any edit that is not such an Expr swap still fails.
-            let mut still_failed = Vec::new();
-            for e in &needs_reencode {
-                match replace_expr_blob(&working, e) {
-                    Some(Ok(bytes)) => {
-                        working = bytes;
-                        stats.set += 1;
+        let blobbed = morphic::kv3_resource_has_blobs(&working).unwrap_or(true);
+        for edit in &needs_reencode {
+            if blobbed {
+                if let Some(result) = replace_expr_blob(&working, edit) {
+                    match result {
+                        Ok(bytes) => {
+                            working = bytes;
+                            stats.set += 1;
+                        }
+                        Err(msg) => stats.failed.push(msg),
                     }
-                    Some(Err(msg)) => still_failed.push(msg),
-                    None => still_failed.push(e.name().to_string()),
-                }
-            }
-            stats.failed.extend(still_failed);
-        } else {
-            let mut tree = morphic::decode_kv3_resource(&working)
-                .context("decoding material KV3 for re-encode fallback")?;
-            for edit in &needs_reencode {
-                if apply_to_tree(&mut tree, edit) {
-                    stats.set += 1;
-                } else {
-                    stats.failed.push(edit.name().to_string());
-                }
-            }
-            // ride the same re-encode for attribute registration
-            for attr in pending_attrs.drain(..) {
-                if attribute_edit_failed(&stats, attr) {
                     continue;
                 }
-                register_attribute_in_tree(&mut tree, attr);
             }
-            working = morphic::encode_kv3_resource(&working, &tree)
-                .context("re-encoding material to promote tagless params")?;
+            match constant_expression(edit) {
+                Some(expr) => {
+                    let (bytes, inner) = patch_vmat_params(&working, &[expr?])?;
+                    working = bytes;
+                    stats.set += inner.set + inner.inserted;
+                    stats.failed.extend(inner.failed);
+                }
+                None => stats.failed.push(edit.name().to_string()),
+            }
         }
     }
 
@@ -575,19 +552,6 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
     }
 
     Ok((working, stats))
-}
-
-/// Adds `attr` to the tree's `m_renderAttributesUsed` unless already present.
-fn register_attribute_in_tree(tree: &mut Value, attr: &str) {
-    let Some(Value::Array(list)) = tree.get_mut("m_renderAttributesUsed") else {
-        return;
-    };
-    let present = list
-        .iter()
-        .any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(attr)));
-    if !present {
-        list.push(Value::String(attr.to_string()));
-    }
 }
 
 fn attribute_edit_failed(stats: &VmatPatchStats, attr: &str) -> bool {
@@ -1082,6 +1046,46 @@ mod tests {
             .get(i)?
             .get("m_nValue")?
             .as_int()
+    }
+
+    /// The decompiled constant a tagless value now rides, if any.
+    fn constant_of(bytes: &[u8], name: &str) -> Option<String> {
+        let root = morphic::decode_kv3_resource(bytes).ok()?;
+        let i = param_index(&root, "m_dynamicParams", name)?;
+        let value = root
+            .get("m_dynamicParams")?
+            .as_array()?
+            .get(i)?
+            .get("m_value")?;
+        morphic::vfx_expr::decompile(expr_bytes(value)?.as_slice(), &Vec::<String>::new()).ok()
+    }
+
+    #[test]
+    fn tagless_values_ride_a_constant_expression_that_later_edits_replace() {
+        // The fixture stores g_flSelfIllumAlbedoFactor1 as a tagless scalar: nothing to patch.
+        let set = |bytes: &[u8], value: f64| {
+            let (out, stats) = patch_vmat_params(
+                bytes,
+                &[VmatEdit::Float {
+                    name: "g_flSelfIllumAlbedoFactor1".into(),
+                    value,
+                }],
+            )
+            .unwrap();
+            assert_eq!(stats.failed, Vec::<String>::new());
+            out
+        };
+        let first = set(&fixture(), 0.37);
+        assert_eq!(
+            constant_of(&first, "g_flSelfIllumAlbedoFactor1").as_deref(),
+            Some("0.37")
+        );
+        // A second edit swaps the expression instead of failing on the blob it introduced.
+        let second = set(&first, 0.63);
+        assert_eq!(
+            constant_of(&second, "g_flSelfIllumAlbedoFactor1").as_deref(),
+            Some("0.63")
+        );
     }
 
     #[test]

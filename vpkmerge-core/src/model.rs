@@ -8,8 +8,8 @@ use morphic::kv3::Value;
 use std::path::Path;
 
 pub use morphic::model::{
-    BlockSummary, DrawCallInfo, GlbOptions, ModelInfo, PrimitiveSelection, RemovedDrawCall,
-    ReplacedMeshGroup, ReplacedMeshPart, SegmentBy, VertexTarget,
+    BlockSummary, DrawCallInfo, GlbOptions, ModelInfo, ModelVariant, PrimitiveSelection,
+    RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart, SegmentBy, VertexTarget,
 };
 
 /// Default candidate clips for a bare `--pose`, in priority order. Menu-pose
@@ -105,6 +105,7 @@ pub fn export_model(
     entry: &str,
     base: Option<&Path>,
     anim: &AnimOptions,
+    variant: &ModelVariant,
     glb_opts: GlbOptions,
     out: impl AsRef<Path>,
 ) -> Result<()> {
@@ -112,7 +113,7 @@ pub fn export_model(
     if read_entry(&vpks, entry).is_none() {
         anyhow::bail!("model entry {entry} not found in the given VPK(s)");
     }
-    export_resolved(vpks, entry, anim, glb_opts, out.as_ref())
+    export_resolved(vpks, entry, anim, variant, glb_opts, out.as_ref())
 }
 
 /// Like [`export_model`] but discovers the hero's body model by codename instead
@@ -126,6 +127,7 @@ pub fn export_hero_model(
     codename: &str,
     base: Option<&Path>,
     anim: &AnimOptions,
+    variant: &ModelVariant,
     glb_opts: GlbOptions,
     out: impl AsRef<Path>,
 ) -> Result<()> {
@@ -133,7 +135,7 @@ pub fn export_hero_model(
     let entry = discover_hero_entry(&vpks, codename).with_context(|| {
         format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
     })?;
-    export_resolved(vpks, &entry, anim, glb_opts, out.as_ref())
+    export_resolved(vpks, &entry, anim, variant, glb_opts, out.as_ref())
 }
 
 /// Opens the VPKs in resolution priority order: `vpk` first (a skin's overrides
@@ -155,12 +157,14 @@ fn export_resolved(
     vpks: Vec<valve_pak::VPK>,
     entry: &str,
     anim: &AnimOptions,
+    variant: &ModelVariant,
     glb_opts: GlbOptions,
     out: &Path,
 ) -> Result<()> {
     let bytes =
         read_entry(&vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
-    let mut model = morphic::model::decode(&bytes).with_context(|| format!("decoding {entry}"))?;
+    let mut model = morphic::model::decode_variant(&bytes, variant)
+        .with_context(|| format!("decoding {entry}"))?;
 
     if let Some(pose) = &anim.pose {
         let candidates: Vec<&str> = if pose.clips.is_empty() {

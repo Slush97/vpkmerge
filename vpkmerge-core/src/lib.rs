@@ -26,7 +26,7 @@ pub use model::{
     replace_model_group, replace_model_part, AnimOptions, ClipSummary, DrawCallInfo,
     DrawCallSkinInfo, GeometryEdit, GeometryEditReport, GlbOptions, LiveHeroEntry,
     LiveHeroMaterial, MaterialRemovalReport, ModelDrawCallInspection, ModelEntry, ModelInfo,
-    ModelPartInspection, ModelPartSelector, ModelRecolorEntry, PartReplacementReport,
+    ModelPartInspection, ModelPartSelector, ModelRecolorEntry, ModelVariant, PartReplacementReport,
     PoseSelection, RemovedDrawCall, ReplacedMeshGroup, ReplacedMeshPart, ResolvedResource,
     ResolvedTextureParam, SegmentBy, SuggestedPartGroup, UvSegmentInfo, VertexTarget,
     DEFAULT_POSE_CLIPS,

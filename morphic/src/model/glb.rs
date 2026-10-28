@@ -579,8 +579,7 @@ impl Builder {
     /// whitewashes the model, and reproducing them is a renderer-side (three.js)
     /// concern. Additive `*_glow` overlays are KEPT (they composite additively in
     /// the viewer via `blend_mode='additive'` extras; see [`is_glow_material`]).
-    /// Hidden-by-default alt-forms (Viscous's `inflated` Goo Ball) are dropped
-    /// too: see [`is_alt_form`].
+    /// Authored body groups have already been selected by the model decoder.
     #[allow(clippy::too_many_lines)]
     fn add_mesh(
         &mut self,
@@ -1570,11 +1569,9 @@ pub(crate) fn is_alt_form(name: &str) -> bool {
     lc == "inflated" || lc.contains("viscous_ball")
 }
 
-/// True for any mesh part or material omitted from a static hero-card GLB: a
-/// non-renderable NPR shell ([`is_shell`]) or a hidden-by-default alt-form
-/// ([`is_alt_form`]).
+/// True for a non-renderable NPR shell omitted from a GLB.
 pub(crate) fn is_dropped(name: &str) -> bool {
-    is_shell(name) || is_alt_form(name)
+    is_shell(name)
 }
 
 /// The material paths [`Builder::add_mesh`] gives a primitive, in first-use

@@ -992,14 +992,12 @@ fn glow_overlays_are_classified_but_kept() {
 }
 
 #[test]
-fn viscous_goo_ball_alt_form_is_dropped() {
-    // Viscous's Goo Ball alt-form: matched on the mesh-part name so all of its
-    // primitives drop together, and on the `viscous_ball` material token.
+fn selected_goo_ball_geometry_survives_glb_export() {
     assert!(super::glb::is_alt_form("inflated"));
     assert!(super::glb::is_alt_form(
         "models/heroes_staging/viscous/materials/viscous_ball.vmat"
     ));
-    assert!(super::glb::is_dropped("inflated"));
+    assert!(!super::glb::is_dropped("inflated"));
     // It is real geometry, not an NPR shell, so `is_shell` must NOT claim it.
     assert!(!super::glb::is_shell("inflated"));
     // Viscous's actual body parts/materials are kept.
@@ -1008,6 +1006,14 @@ fn viscous_goo_ball_alt_form_is_dropped() {
     assert!(!super::glb::is_alt_form(
         "models/heroes_staging/viscous/materials/viscous_body.vmat"
     ));
+    let mut model = synthetic_model();
+    model.meshes[0].name = "inflated".into();
+    model.meshes[0].primitives[0].material =
+        "models/heroes_staging/viscous/materials/viscous_ball.vmat".into();
+    let glb = super::to_glb(&model).unwrap();
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    assert_eq!(parsed.meshes().count(), 1);
+    assert_eq!(parsed.materials().count(), 1);
 }
 
 mod pose_bake {

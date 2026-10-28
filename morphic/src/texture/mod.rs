@@ -63,6 +63,9 @@ pub struct TextureInfo {
     pub depth: u16,
     pub mip_count: u8,
     pub flags: TextureFlags,
+    /// Linear average color from the VTEX DATA header, including its fourth
+    /// component. Used by Source 2 color correction, not computed from a mip.
+    pub reflectivity: [f32; 4],
     /// The pixels are YCoCg-encoded (DXT5 carries Co/Cg in RGB, Y in alpha) and
     /// need an inverse transform after block decode to read as RGB. Signalled by
     /// the `Texture Compiler Version Image YCoCg Conversion` special-dependency in
@@ -169,7 +172,7 @@ pub fn parse_texture_header(data: &[u8]) -> Result<TextureInfo, DecodeError> {
     }
     let flags_raw = LittleEndian::read_u16(&data[2..4]);
     let flags = TextureFlags::from_bits_truncate(flags_raw);
-    // 4 floats of reflectivity at offset 4..20 (16 bytes), ignored for header.
+    let reflectivity = std::array::from_fn(|i| LittleEndian::read_f32(&data[4 + i * 4..8 + i * 4]));
     let width = LittleEndian::read_u16(&data[20..22]);
     let height = LittleEndian::read_u16(&data[22..24]);
     let depth = LittleEndian::read_u16(&data[24..26]);
@@ -197,6 +200,7 @@ pub fn parse_texture_header(data: &[u8]) -> Result<TextureInfo, DecodeError> {
         depth,
         mip_count,
         flags,
+        reflectivity,
         // Set from the RED2 edit-info by inspect()/decode_at(); the DATA header
         // alone can't know. Default off so DATA-only callers stay correct for the
         // common non-YCoCg case.

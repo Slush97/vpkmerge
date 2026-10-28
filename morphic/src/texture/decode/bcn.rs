@@ -279,6 +279,7 @@ mod tests {
             depth: 1,
             mip_count: 1,
             flags: TextureFlags::empty(),
+            reflectivity: [0.0; 4],
             ycocg: false,
         }
     }

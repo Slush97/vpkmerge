@@ -42,6 +42,7 @@ pub fn decode_image(
         depth: info.depth,
         mip_count: info.mip_count,
         flags: info.flags,
+        reflectivity: info.reflectivity,
         ycocg: info.ycocg,
     };
     let info = &mip_info;

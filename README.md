@@ -135,12 +135,19 @@ vpkmerge model <input_dir.vpk>
 
 # Export one model to a textured, skinned, animated .glb.
 vpkmerge model export --vpk <vpk> (--entry <path.vmdl_c> | --hero <codename>) \
-  [--base <pak01_dir.vpk>] [--clip <name>]... [--no-anim] --out <file.glb>
+  [--base <pak01_dir.vpk>] [--clip <name>]... [--no-anim] \
+  [--mesh-group <NAME>] [--material-group <NAME>] [--material-override <VMAT>] \
+  [--include-outline-shells] --out <file.glb>
 ```
 
 `model <vpk>` (no subcommand) lists each `.vmdl_c` in the VPK with its block structure, mesh-part count, and whether it carries embedded geometry / skeleton / physics.
 
 `model export` decodes a single `.vmdl_c` to a binary glTF, in pure Rust (no .NET or C runtime). It writes the skeleton, the skinned LOD0 meshes, PBR materials with their `.vtex_c` textures, and the model's own animation clips on its own skeleton (so a viewer can play its idle with no cross-hero retargeting).
+
+Authored mesh and material selections remain available with the shell option.
+Material `extras.morphic` uses schema version 3 and preserves packed metalness,
+normal-B roughness, constant AO and source texture reflectivity for `pbr.vfx`.
+See [the material data contract](docs/hero-glb-material-data.md).
 
 `--include-outline-shells` preserves authored parts or materials whose names
 contain `outline` or `jitter`. The default still omits them for compatibility.
@@ -159,6 +166,10 @@ The option applies to both rigged and `--pose` exports.
 | `--base <VPK>` | Base `pak01_dir.vpk` that referenced materials/textures resolve against when the skin VPK does not ship them (skin first, base second) |
 | `--clip <NAME>` | Export only the named clip(s). Repeatable. Omit to export every clip; `--no-anim` to drop them all |
 | `--no-anim` | Export the static mesh + skeleton only (no animation) |
+| `--mesh-group <NAME>` | Select an authored body group |
+| `--material-group <NAME>` | Select an authored material group |
+| `--material-override <VMAT>` | Use this material for every draw call |
+| `--include-outline-shells` | Keep and mark authored outline/jitter geometry |
 | `--out <FILE>` | Output `.glb` path |
 
 ```bash
@@ -173,7 +184,7 @@ vpkmerge model export \
 
 ```bash
 vpkmerge soundevents <file.vsndevts_c | entry-path> \
-  [--from-vpk <vpk>] \
+  [--from-vpk <vpk>] [--with-format] \
   [--swap-vsnd OLD=NEW]... \
   [--set EVENT/FIELD=NUMBER]... \
   [--encode <out.vsndevts_c>]
@@ -184,6 +195,7 @@ Decode a Deadlock soundevents file (binary KeyValues3) to JSON, optionally edit 
 | Flag | Description |
 |------|-------------|
 | `--from-vpk <vpk>` | Read the positional argument as an entry path inside this VPK instead of a file on disk |
+| `--with-format` | Wrap JSON in `{ "format": { "name": ..., "guid": ... }, "data": ... }` using the stored KV3 schema. Unknown names are null. Default JSON is unchanged; conflicts with encoding flags |
 | `--swap-vsnd OLD=NEW` | Rewrite a clip path everywhere in the tree (repeatable) |
 | `--set EVENT/FIELD=NUMBER` | Set a numeric field on one event, e.g. `--set "Seven.Wpn.Fire/volume=0.25"` (repeatable) |
 | `--encode <out>` | After edits, write an uncompressed v4 file (loadable by the engine). Without it, the decoded tree prints as JSON |
@@ -218,6 +230,21 @@ Recolor a Source 2 `.vtex_c`: set every pixel's hue to a target while keeping it
 | `--encode <FILE>` | Write the recolored `.vtex_c` to a loose file. Single input |
 | `--encode-vpk <OUT_dir.vpk>` | Pack all recolored textures into one addon VPK, each at its entry path |
 | `--vpk-entry <PATH>` | Entry path inside `--encode-vpk` (defaults to INPUT with `--from-vpk`; required for a loose-file input). Single input |
+
+### Stored texture mips and slices
+
+`panorama dump --vpk <VPK> --out-dir <DIR> --mips` adds the stored LDR mip
+levels and a `.mips.json` sidecar alongside the existing preview. It does not
+generate missing levels or tone-map HDR. See [stored mip export](docs/vtex-stored-mips.md).
+
+`cubemap <ENTRY> --from-vpk <VPK> --slice <N> --out-dir <DIR>` selects a
+zero-based cube from a cubemap array. The library
+`morphic::decode_at` also selects array and volume slices. Mip offsets account
+for every stored slice and face, including when decoding slice 0.
+
+Workshop area masks remain available as `--mask <PNG>` on `workshop finish`,
+`workshop surface --mode translucent` and `workshop glow`. See
+[skin editing](docs/skin-editing.md) for masks, finishes and glow.
 
 ### Hero VFX recolor: `recolor-hero`, `prism`, `rainbow-scan`
 

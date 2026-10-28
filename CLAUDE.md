@@ -222,6 +222,13 @@ Built for a Grimoire per-ability sound picker (control `volume`/`pitch`/clip cho
 just swap the audio). Full writeup + the pending in-game verification step:
 [docs/spike-vsndevts-kv3.md](./docs/spike-vsndevts-kv3.md).
 
+`soundevents --with-format` wraps the JSON projection in `{ "format":
+{ "name": ..., "guid": ... }, "data": ... }`, exposing the stored schema
+without upgrading it. Unknown GUIDs have a null name. Default output stays
+unchanged; the flag conflicts with `--encode` and `--encode-vpk`.
+`morphic::kv3::Format::{name, guid}` and `SoundEvents::format()` expose this
+metadata to library callers.
+
 ## Sound swap (drop your own audio: `soundswap`)
 
 `vpkmerge soundswap --from-vpk <pak> --clip <ENTRY.vsnd_c> --audio <FILE.mp3>
@@ -443,6 +450,25 @@ viewer's image-based lighting. f16 sources pass through as linear light; 8-bit s
 are treated as sRGB and linearized. Refuses non-cubemap textures (no `CUBE_TEXTURE`
 flag). API: `vpkmerge_core::export_cubemap_hdr`, returning per-face mean luminance so
 a caller can sanity-check orientation (`py` should be the brightest sky face).
+
+## Viewer model and texture exports
+
+`model export` retains 0.28.0's `--mesh-group`, `--material-group` and
+`--material-override` selections alongside `--include-outline-shells`.
+Rigged and posed GLBs share schema-3 `extras.morphic` material data: packed
+opaque color-alpha metalness, normal-B roughness, constant AO and VTEX
+reflectivity. Opacity materials keep alpha as opacity. The full contract and
+prior source-channel verification are in [docs/hero-glb-material-data.md](docs/hero-glb-material-data.md).
+
+Mesh indices use the stored draw range plus `m_nBaseVertex` exactly once.
+`m_nAppliedIndexOffset` is compiler metadata, not an additional offset.
+
+`panorama dump --mips` exports the stored LDR mip chain plus PNG paths and
+metadata in a sidecar, preserving partial and NO_LOD chains. It selects face 0
+and slice 0. See [docs/vtex-stored-mips.md](docs/vtex-stored-mips.md).
+`cubemap --slice N` selects a cube from a cubemap array.
+`morphic::decode_at` selects array and volume slices; mip byte ranges include
+all stored faces and slices.
 
 ## Model vertex-color recolor (`.vmdl_c`)
 

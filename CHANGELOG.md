@@ -4,6 +4,10 @@
 
 - `soundevents --with-format` wraps JSON as `{ "format": { "name": "vpcf61", "guid": "39d3ce1d-9442-4407-9b78-8317145b1732" }, "data": ... }`. The name identifies the stored KV3 schema, resolved from its GUID using VRF's format table; unknown GUIDs have `name: null`. No upgrades are applied. Default JSON output is unchanged. The flag conflicts with `--encode` and `--encode-vpk`.
 - `morphic::kv3::Format` exposes `name()` and canonical lowercase `guid()`, and validates binary KV3 v1..=5 headers. `SoundEvents::format()` exposes the original DATA block's identifier.
+- `panorama dump --mips` exports stored LDR texture mip chains and sidecar metadata without generating levels. Existing previews and the default dump workflow are unchanged.
+- Hero GLBs carry schema-3 material data: packed `pbr.vfx` metalness and roughness, constant AO and source texture reflectivity. Compact unsigned KV3 constants decode correctly.
+- Model draw indices apply only the stored base vertex, fixing shared-buffer aggregate exports. Texture mip ranges include array/volume slices, with `cubemap --slice` for cube-array selection.
+- `model export --include-outline-shells` preserves and marks authored outline/jitter geometry for Source 2-aware viewers. It composes with existing mesh/material selection; the default still omits shells.
 
 ## v0.28.0
 

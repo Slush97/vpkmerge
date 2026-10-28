@@ -67,6 +67,10 @@ pub struct GlbOptions {
     /// many pixels instead of the full-size top mip (a texture with no mip that
     /// small embeds its smallest). `None` embeds full size.
     pub max_texture_edge: Option<u32>,
+    /// Preserve authored outline/jitter parts with `morphic_shell` primitive
+    /// extras. Consumers must interpret their Source 2 material or hide them.
+    /// Off by default because ordinary glTF rendering can obscure the hero.
+    pub include_outline_shells: bool,
 }
 
 /// Writes `model` as a binary glTF (`.glb`) byte stream, untextured (named
@@ -208,7 +212,7 @@ fn build(
         // the order add_mesh reaches them (so indices match), letting each chunk's
         // textures decode and then PNG-encode in parallel without holding every
         // decoded texture of the model at once.
-        for chunk in exported_materials(model).chunks(materials_per_chunk(opts)) {
+        for chunk in exported_materials(model, opts).chunks(materials_per_chunk(opts)) {
             b.prefetch_textures(chunk, files);
             for path in chunk {
                 b.material_for(path, &mut mat_index, Some(files));
@@ -575,9 +579,8 @@ impl Builder {
     /// Builds one glTF mesh (its primitives + shared per-vertex-buffer
     /// accessors), or `None` when the whole part is dropped ([`is_dropped`]).
     /// Deadlock's inverted-hull toon-outline shells (`*_outline`/`*jitter*`) are
-    /// dropped: as plain glTF geometry they collapse to an opaque hull that
-    /// whitewashes the model, and reproducing them is a renderer-side (three.js)
-    /// concern. Additive `*_glow` overlays are KEPT (they composite additively in
+    /// omitted by default and marked when explicitly requested. Their material
+    /// path must be interpreted by the consumer. Additive `*_glow` overlays are KEPT (they composite additively in
     /// the viewer via `blend_mode='additive'` extras; see [`is_glow_material`]).
     /// Authored body groups have already been selected by the model decoder.
     #[allow(clippy::too_many_lines)]
@@ -587,13 +590,13 @@ impl Builder {
         mat_index: &mut BTreeMap<String, json::Index<json::Material>>,
         files: Option<&dyn FileResolver>,
     ) -> Option<json::Index<json::Mesh>> {
-        if is_dropped(&part.name) {
+        if !self.opts.include_outline_shells && is_dropped(&part.name) {
             return None;
         }
         let renderable: Vec<_> = part
             .primitives
             .iter()
-            .filter(|p| !is_dropped(&p.material))
+            .filter(|p| self.opts.include_outline_shells || !is_dropped(&p.material))
             .collect();
         if renderable.is_empty() {
             return None;
@@ -685,6 +688,7 @@ impl Builder {
             );
 
             let material = self.material_for(&prim.material, mat_index, files);
+            let shell = is_shell(&part.name) || is_shell(&prim.material);
 
             primitives.push(json::mesh::Primitive {
                 attributes,
@@ -693,7 +697,14 @@ impl Builder {
                 mode: Valid(json::mesh::Mode::Triangles),
                 targets: None,
                 extensions: None,
-                extras: Default::default(),
+                extras: if shell {
+                    serde_json::value::to_raw_value(&jval!({
+                        "morphic_shell": { "version": 1, "role": "authored_shell" }
+                    }))
+                    .ok()
+                } else {
+                    Default::default()
+                },
             });
         }
 
@@ -1560,8 +1571,8 @@ impl Builder {
 }
 
 /// True for Deadlock's inverted-hull toon-outline shells. Their primitives are
-/// dropped from the GLB: rendered as solid geometry the hull wraps and
-/// whitewashes the model. Two naming conventions in the shipped heroes:
+/// omitted from the GLB unless explicitly requested and marked. A consumer
+/// must select a supported material path. Two naming conventions in the shipped heroes:
 /// - `*_outline`: the standard inverted hull.
 /// - `*jitter*`: the comic-style inked border (Billy/`punkgoat`, parts
 ///   `*_jitter01`/`_bat_jitter`, materials `*_border_jitter01`). NOT the
@@ -1629,15 +1640,15 @@ pub(crate) fn is_dropped(name: &str) -> bool {
 
 /// The material paths [`Builder::add_mesh`] gives a primitive, in first-use
 /// order: renderable parts and primitives over a buffer with positions.
-fn exported_materials(model: &Model) -> Vec<&str> {
+fn exported_materials(model: &Model, opts: GlbOptions) -> Vec<&str> {
     let mut seen = BTreeSet::new();
     model
         .meshes
         .iter()
-        .filter(|part| !is_dropped(&part.name))
+        .filter(|part| opts.include_outline_shells || !is_dropped(&part.name))
         .flat_map(|part| {
             part.primitives.iter().filter(|prim| {
-                !is_dropped(&prim.material)
+                (opts.include_outline_shells || !is_dropped(&prim.material))
                     && part
                         .vertex_buffers
                         .get(prim.vertex_buffer)

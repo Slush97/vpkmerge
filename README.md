@@ -142,6 +142,15 @@ vpkmerge model export --vpk <vpk> (--entry <path.vmdl_c> | --hero <codename>) \
 
 `model export` decodes a single `.vmdl_c` to a binary glTF, in pure Rust (no .NET or C runtime). It writes the skeleton, the skinned LOD0 meshes, PBR materials with their `.vtex_c` textures, and the model's own animation clips on its own skeleton (so a viewer can play its idle with no cross-hero retargeting).
 
+`--include-outline-shells` preserves authored parts or materials whose names
+contain `outline` or `jitter`. The default still omits them for compatibility.
+Each preserved primitive has `extras.morphic_shell = { "version": 1,
+"role": "authored_shell" }`, alongside the material's existing `morphic`
+shader parameters and mask textures. This marker identifies geometry, not a
+rendering pass: consumers must interpret the material flags and geometry or
+hide unsupported shells. Ordinary glTF viewers may otherwise draw opaque hulls.
+The option applies to both rigged and `--pose` exports.
+
 | Flag | Description |
 |------|-------------|
 | `--vpk <VPK>` | VPK containing the `.vmdl_c` (a skin VPK, or the base pak itself) |

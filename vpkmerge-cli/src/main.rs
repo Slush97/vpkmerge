@@ -1880,6 +1880,11 @@ struct ModelExportArgs {
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(16..))]
     max_texture: Option<u32>,
 
+    /// Preserve authored outline/jitter meshes, marked with `morphic_shell` extras.
+    /// Requires a Source 2-aware renderer; ordinary glTF viewers may show opaque hulls.
+    #[arg(long)]
+    include_outline_shells: bool,
+
     /// Output `.glb` path.
     #[arg(long, value_name = "FILE")]
     out: PathBuf,
@@ -2610,6 +2615,7 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
     };
     let glb = GlbOptions {
         max_texture_edge: e.max_texture,
+        include_outline_shells: e.include_outline_shells,
     };
     match (&e.entry, &e.hero) {
         (Some(entry), _) => export_model(

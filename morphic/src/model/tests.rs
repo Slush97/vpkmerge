@@ -722,6 +722,54 @@ fn glb_textured_embeds_resolved_images() {
     assert!(mat.normal_texture().is_some(), "normal texture wired");
 }
 
+#[test]
+fn authored_shells_require_opt_in_and_keep_primitive_identity() {
+    struct MissingFiles;
+    impl super::FileResolver for MissingFiles {
+        fn resolve(&self, _: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
+    let mut model = synthetic_model();
+    let mut named_part = model.meshes[0].clone();
+    named_part.name = "bodyoutline".into();
+    model.meshes.push(named_part);
+    let mut named_material = model.meshes[0].primitives[0].clone();
+    named_material.material = "test/border_jitter.vmat".into();
+    model.meshes[0].primitives.push(named_material);
+    let default =
+        super::to_glb_textured(&model, &MissingFiles, super::GlbOptions::default()).unwrap();
+    let old = gltf::Gltf::from_slice(&default).unwrap();
+    assert_eq!(old.meshes().count(), 1);
+    assert_eq!(old.meshes().next().unwrap().primitives().count(), 1);
+    let opted = super::to_glb_textured(
+        &model,
+        &MissingFiles,
+        super::GlbOptions {
+            include_outline_shells: true,
+            ..super::GlbOptions::default()
+        },
+    )
+    .unwrap();
+    let doc = gltf::Gltf::from_slice(&opted).unwrap();
+    assert_eq!(doc.meshes().count(), 2);
+    assert_eq!(doc.skins().count(), 1);
+    let length = u32::from_le_bytes(opted[12..16].try_into().unwrap()) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&opted[20..20 + length]).unwrap();
+    let meshes = json["meshes"].as_array().unwrap();
+    assert!(meshes[0]["primitives"][0]["extras"].is_null());
+    for (mesh, primitive) in [(0, 1), (1, 0)] {
+        assert_eq!(
+            meshes[mesh]["primitives"][primitive]["extras"]["morphic_shell"]["role"],
+            "authored_shell"
+        );
+        assert_eq!(
+            meshes[mesh]["primitives"][primitive]["extras"]["morphic_shell"]["version"],
+            1
+        );
+    }
+}
+
 /// The textured path emits the `morphic` extras payload (NPR shader params +
 /// embedded mask textures) and rides the overbright self-illum scale on
 /// `KHR_materials_emissive_strength` via the serialized-JSON injection pass.
@@ -865,6 +913,7 @@ fn materials_per_chunk_scales_with_the_cap() {
     use super::glb::{materials_per_chunk, GlbOptions};
     let cap = |edge| GlbOptions {
         max_texture_edge: Some(edge),
+        ..GlbOptions::default()
     };
     assert_eq!(materials_per_chunk(GlbOptions::default()), 1);
     assert_eq!(materials_per_chunk(cap(4096)), 1);

@@ -59,6 +59,12 @@ Merge strategy: extract winners to a tempdir, then `valve_pak::from_directory` a
 
 ## CLI
 
+`model export --include-outline-shells` opts into authored outline/jitter
+geometry, with versioned `morphic_shell` primitive extras. It defaults off.
+Materials retain their Source 2 parameters and mask bindings. The marker is
+not a request to apply an inverted-hull pass to every shell. A consumer must
+choose the material's supported draw path or hide it. See README.md.
+
 ```bash
 cargo build --release -p vpkmerge-cli   # → target/release/vpkmerge
 

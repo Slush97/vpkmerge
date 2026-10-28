@@ -1562,6 +1562,9 @@ enum ModelAction {
     /// Export a model entry to a textured binary glTF (`.glb`).
     Export(ModelExportArgs),
 
+    /// Export a JSON array of static scene models, sharing open VPK directories.
+    ExportScene(ModelExportSceneArgs),
+
     /// Edit a model and pack the result into an addon VPK. Reshape existing
     /// geometry (vertex displacement via `--scale`/`--translate` or a Blender
     /// `--from-glb`), remove a part by material (`--remove-material`), or replace a
@@ -1816,6 +1819,19 @@ struct ModelRecolorArgs {
     /// each at its base entry path so it overrides in place.
     #[arg(long = "encode-vpk", value_name = "OUT_dir.vpk")]
     encode_vpk: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ModelExportSceneArgs {
+    #[arg(long)]
+    vpk: PathBuf,
+    #[arg(long)]
+    base: Option<PathBuf>,
+    /// JSON requests: entry, out, optional pose and materialGroup.
+    #[arg(long)]
+    manifest: PathBuf,
+    #[arg(long, default_value_t = 256)]
+    max_texture: u32,
 }
 
 #[derive(Args)]
@@ -2183,6 +2199,22 @@ fn parse_pose(spec: &str) -> Result<PoseSelection> {
 fn run_model(args: ModelCmd) -> Result<()> {
     match args.action {
         Some(ModelAction::Export(e)) => return run_model_export(&e),
+        Some(ModelAction::ExportScene(e)) => {
+            let requests: Vec<vpkmerge_core::model::SceneModelRequest> =
+                serde_json::from_slice(&std::fs::read(&e.manifest)?)?;
+            let failures = vpkmerge_core::model::export_scene_models(
+                &e.vpk,
+                e.base.as_deref(),
+                &requests,
+                GlbOptions {
+                    max_texture_edge: Some(e.max_texture),
+                    include_outline_shells: false,
+                },
+            )?;
+            println!("{}", serde_json::to_string(&failures)?);
+            return Ok(());
+        }
+
         Some(ModelAction::Edit(e)) => return run_model_edit(e),
         Some(ModelAction::Recolor(e)) => return run_model_recolor(&e),
         Some(ModelAction::Mask(m)) => return run_model_mask(&m),

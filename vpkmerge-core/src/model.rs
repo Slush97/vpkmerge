@@ -76,13 +76,13 @@ impl AnimOptions {
 /// their geometry but reference materials/textures that may live in the base
 /// pak, so the model exporter needs both. Implements [`morphic::model::FileResolver`]
 /// to keep `morphic` free of VPK I/O.
-struct VpkResolver {
-    vpks: Vec<valve_pak::VPK>,
+struct VpkResolver<'a> {
+    vpks: &'a [valve_pak::VPK],
 }
 
-impl morphic::model::FileResolver for VpkResolver {
+impl morphic::model::FileResolver for VpkResolver<'_> {
     fn resolve(&self, compiled_path: &str) -> Option<Vec<u8>> {
-        for vpk in &self.vpks {
+        for vpk in self.vpks {
             if let Ok(mut vf) = vpk.get_file(compiled_path) {
                 if let Ok(bytes) = vf.read_all() {
                     return Some(bytes);
@@ -113,7 +113,55 @@ pub fn export_model(
     if read_entry(&vpks, entry).is_none() {
         anyhow::bail!("model entry {entry} not found in the given VPK(s)");
     }
-    export_resolved(vpks, entry, anim, variant, glb_opts, out.as_ref())
+    export_resolved(&vpks, entry, anim, variant, glb_opts, out.as_ref())
+}
+
+/// A static scene export request. Each output uses its own authored variant and pose.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SceneModelRequest {
+    pub entry: String,
+    pub out: std::path::PathBuf,
+    pub pose: Option<String>,
+    pub material_group: Option<String>,
+}
+
+/// Export scene models sequentially, opening the source and fallback archives once.
+/// A failed model is reported independently so the caller can retry partial caches.
+pub fn export_scene_models(
+    vpk: &Path,
+    base: Option<&Path>,
+    requests: &[SceneModelRequest],
+    glb_opts: GlbOptions,
+) -> Result<Vec<Option<String>>> {
+    let vpks = open_vpks(vpk, base)?;
+    Ok(requests
+        .iter()
+        .map(|request| {
+            let anim = AnimOptions {
+                no_anim: true,
+                pose: request.pose.as_ref().map(|clip| PoseSelection {
+                    clips: vec![clip.clone()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let variant = ModelVariant {
+                material_group: request.material_group.clone(),
+                ..Default::default()
+            };
+            export_resolved(
+                &vpks,
+                &request.entry,
+                &anim,
+                &variant,
+                glb_opts,
+                &request.out,
+            )
+            .err()
+            .map(|error| format!("{error:#}"))
+        })
+        .collect())
 }
 
 /// Like [`export_model`] but discovers the hero's body model by codename instead
@@ -135,7 +183,7 @@ pub fn export_hero_model(
     let entry = discover_hero_entry(&vpks, codename).with_context(|| {
         format!("no body model (`<dir>/{codename}.vmdl_c` under models/heroes*) found in the given VPK(s)")
     })?;
-    export_resolved(vpks, &entry, anim, variant, glb_opts, out.as_ref())
+    export_resolved(&vpks, &entry, anim, variant, glb_opts, out.as_ref())
 }
 
 /// Opens the VPKs in resolution priority order: `vpk` first (a skin's overrides
@@ -152,9 +200,9 @@ pub(crate) fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak
 }
 
 /// Reads `entry`, decodes it, textures it via the cross-VPK resolver, and writes
-/// the `.glb`. Consumes `vpks` (they move into the resolver).
+/// the `.glb`, borrowing the open archives so a batch reuses their directories.
 fn export_resolved(
-    vpks: Vec<valve_pak::VPK>,
+    vpks: &[valve_pak::VPK],
     entry: &str,
     anim: &AnimOptions,
     variant: &ModelVariant,
@@ -162,7 +210,7 @@ fn export_resolved(
     out: &Path,
 ) -> Result<()> {
     let bytes =
-        read_entry(&vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
+        read_entry(vpks, entry).with_context(|| format!("model entry {entry} not found"))?;
     let mut model = morphic::model::decode_variant(&bytes, variant)
         .with_context(|| format!("decoding {entry}"))?;
 
@@ -204,7 +252,7 @@ fn export_resolved(
         let nm_posed = if has_own_clip || donor_has_clip {
             None
         } else {
-            bake_loose_nm_pose(&vpks, entry, &model, &candidates)
+            bake_loose_nm_pose(vpks, entry, &model, &candidates)
         };
         if pose.require {
             let has_clip = has_own_clip || donor_has_clip || nm_posed.is_some();
@@ -946,7 +994,7 @@ pub fn export_model_group_glb(
         anyhow::bail!("group selector matched no exportable geometry");
     }
 
-    let resolver = VpkResolver { vpks };
+    let resolver = VpkResolver { vpks: &vpks };
     let glb = morphic::model::to_glb_textured(&model, &resolver, GlbOptions::default())
         .with_context(|| format!("writing group glb for {entry}"))?;
     let out = out_glb.as_ref();

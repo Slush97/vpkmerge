@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.28.0
+
+Area edits and glow for Grimoire's Door Stuck skin editor: an edit can cover only part of a skin part, and a part can glow. Contributed by @oldreceipt (#76).
+
+### CLI (`vpkmerge` 0.28)
+
+- `--mask PNG` limits an edit to the white area of a UV mask (any size; resized to the texture). It works on `trippy-skin --material` (color, pattern and adjustments; alpha is kept), `workshop finish` (roughness and metalness blend toward the target inside the mask) and `workshop surface --mode translucent` (only the masked area turns see-through).
+- New `workshop glow --vpk VPK... --entry VMAT [--mask PNG] [--color RRGGBB] [--strength N] [--animation steady|pulse|rainbow] [--speed X] [--paint-colors] --encode-vpk OUT` turns on self-illumination through the material's existing `g_tSelfIllumMask` slot. Parts without that slot, and parts with animated self-illumination, are refused.
+- `trippy-skin --repaint` now averages to the picked color over the painted texels, so dark textures no longer come out much darker than picked.
+- `workshop surface` no longer turns off the NPR solid outline.
+
+### Library (`vpkmerge-core` 0.28)
+
+- `vpkmerge_core::workshop::{glow_material, surface_area_material, GlowStyle, GlowAnimation}` and `vpkmerge_core::trippy::{edit_material_region_to_addon, blend_material_region}`. `workshop::finish_material` takes an optional mask, and `trippy::repaint_material_pixels` takes optional per-texel weights.
+
 ## v0.27.0
 
 Skin exports keep their material channels, and model export can pick authored forms, for Grimoire's Door Stuck skin editor. Contributed by @oldreceipt (#75).

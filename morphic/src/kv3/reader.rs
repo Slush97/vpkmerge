@@ -975,3 +975,22 @@ fn read_u32_at(buf: &[u8], at: usize) -> Result<u32, DecodeError> {
 fn usize_of(v: i64) -> Result<usize, DecodeError> {
     usize::try_from(v).map_err(|_| DecodeError::Kv3("negative count"))
 }
+
+#[test]
+fn unsigned_constants_need_no_value_lane() {
+    for (original, tag, expected) in [
+        (Value::Bool(false), node::UINT32_ZERO, Value::UInt(0)),
+        (Value::Bool(true), node::UINT32_ONE, Value::UInt(1)),
+    ] {
+        // Boolean constants also have no payload. Replace the root type byte
+        // immediately before the trailer to exercise the compact uint encoding.
+        let mut bytes = super::encode(&original, &super::Format([0; 16]));
+        let type_offset = bytes.len() - 5;
+        assert!(matches!(
+            bytes[type_offset],
+            node::BOOLEAN_FALSE | node::BOOLEAN_TRUE
+        ));
+        bytes[type_offset] = tag;
+        assert_eq!(decode(&bytes).unwrap(), expected);
+    }
+}

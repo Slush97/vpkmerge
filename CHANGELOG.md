@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.27.0
+
+Skin exports keep their material channels, and model export can pick authored forms, for Grimoire's Door Stuck skin editor. Contributed by @oldreceipt (#75).
+
+### CLI (`vpkmerge` 0.27)
+
+- New `workshop surface --vpk VPK... --entry VMAT --mode translucent --opacity X --encode-vpk OUT` makes a static PBR material translucent. Opaque color alpha that stores metalness is separated before opacity is set; cutout and dynamically controlled transparency materials are rejected. `--mode ghost` is an experimental research recipe and renders as a red wireframe in game.
+- `trippy-skin` and `trippy-preview` take `--palette HEX,HEX[,HEX[,HEX]]` (two to four color stops; `trippy-skin` needs `--material`) and `--scale X` (0.25 to 8, Moo density only). `trippy-skin --material VMAT --repaint HEX` paints the whole color texture in one color, keeping some luminance detail and the packed alpha.
+- New `moo` trippy style (also `cow`, `cowprint`): cow spots that tile seamlessly at any `--scale`. Other styles keep their output.
+- `model export` takes `--mesh-group NAME`, `--material-group NAME` and `--material-override VMAT` to export an authored body group, material group or override. Without them the default form is exported as before.
+- `workshop finish` writes metalness to the channel the material actually reads (packed color alpha or a separate metalness map) and keeps the source texture's format, size, mips and other channels.
+- `workshop movement --kind heavy-melee` also recolors the top-level heavy-melee particle.
+- `trippy-skin` inserts missing texture scroll parameters, so patterns that only moved in the preview now scroll in game.
+- `vmat` never re-encodes a material (the game renders a re-encoded `.vmat_c` as a red wireframe). A tagless float or vector now rides a constant dynamic expression; an int that cannot change in place fails instead.
+
+### Library (`morphic` 0.11.7, `vpkmerge-core` 0.27)
+
+- `morphic::model::{decode_variant, ModelVariant}`, re-exported as `vpkmerge_core::ModelVariant`. `vpkmerge_core::{export_model, export_hero_model}` take a `&ModelVariant`.
+- `vpkmerge_core::workshop::surface_material` and `vpkmerge_core::trippy::{trippy_preview_sprite_with_palette, trippy_preview_sprite_scaled, repaint_material_pixels}`. `TrippySkinOptions` gains `palette` and `scale`; `MaterialColorAdjustments` gains `repaint`.
+
 ## v0.26.0
 
 Material finishes, movement effects and motion previews for Grimoire's Door Stuck editor. Contributed by @oldreceipt (#73).

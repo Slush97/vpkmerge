@@ -223,6 +223,7 @@ enum PanoramaAction {
 }
 
 #[derive(Args)]
+#[allow(clippy::struct_excessive_bools)]
 struct PanoramaDumpArgs {
     /// VPK to dump, e.g. a HUD mod `pak02_dir.vpk`.
     #[arg(long, value_name = "VPK")]
@@ -244,6 +245,10 @@ struct PanoramaDumpArgs {
     /// Do not write `_raw/<entry>` compiled/raw copies.
     #[arg(long)]
     no_raw: bool,
+
+    /// Also export every stored texture mip as RGBA PNG with a .mips.json sidecar.
+    #[arg(long)]
+    mips: bool,
 
     /// Emit the full report JSON to stdout instead of the short summary.
     #[arg(long)]
@@ -4005,6 +4010,7 @@ fn run_panorama_dump(args: &PanoramaDumpArgs) -> Result<()> {
     let options = PanoramaDumpOptions {
         include_all: !args.panorama_only,
         include_raw: !args.no_raw,
+        mips: args.mips,
         prefixes: args.prefix.clone(),
     };
     let report = vpkmerge_core::dump_panorama_workspace(&args.vpk, &args.out_dir, &options)?;

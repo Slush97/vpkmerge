@@ -29,7 +29,9 @@
 pub mod decode;
 pub mod encode;
 pub mod format;
+mod stored_mips;
 mod vtex;
+pub use stored_mips::decode_stored_mips;
 
 use byteorder::{ByteOrder, LittleEndian};
 

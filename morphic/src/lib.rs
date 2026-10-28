@@ -36,6 +36,7 @@ pub use sound::{
 pub use texture::{
     crop_to_actual,
     decode::decode_image,
+    decode_stored_mips,
     encode::encode_image,
     encode_vtex_png_rgba8888, encode_vtex_png_rgba8888_from_png,
     format::{TextureFlags, TextureFormat},

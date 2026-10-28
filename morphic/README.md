@@ -35,6 +35,33 @@ let img = morphic::decode_at(&bytes, &DecodeOptions { mip: 0, slice: 0, face: 0 
 `Image::data` is either `Rgba8(Vec<u8>)` for LDR formats or `Rgba16F(Vec<f16>)`
 for HDR formats (BC6H, RGBA16161616F). Top-left origin, row-major.
 
+### Stored mip export
+
+`morphic::decode_stored_mips(&bytes)` returns the stored LDR levels in mip order,
+largest first. It reads the header's level count and compressed-mip-size table,
+decompresses LZ4 payloads, and crops each level to VRF's display rectangle.
+Partial chains stay partial, and one-level textures stay one level. It selects
+face 0 / slice 0 and returns unpremultiplied RGBA8 without gamma, YCoCg, or
+normal-map conversions. HDR and Zstd-compressed mip payloads return errors.
+
+The CLI exposes this through `vpkmerge panorama dump --mips`. For an entry
+`materials/particle/example.vtex_c`, it adds `example.mip0.png`,
+`example.mip1.png`, etc. beside the existing `example.png` preview, plus
+`example.mips.json`. The JSON lists the stored format, level count, `one_level`,
+`no_lod`, face/slice selection, and each level's dimensions and workspace-relative
+path. PNG levels keep their full decoded dimensions and stored alpha. They have
+no color profile. The existing preview can still be resized or display-converted.
+
+```powershell
+vpkmerge panorama dump --vpk $pak --out-dir output --no-raw --mips `
+  --prefix materials/particle/noise/noise_flow/noise_flow.vtex_c
+```
+
+Without `--mips`, no new files or manifest fields are emitted. With the flag,
+`_manifest.json` tracks the added files in `mip_paths` so a later dump removes
+stale levels. The sidecars are export-only; `panorama build` uses the existing
+preview/raw entry workflow. See [VRF verification](../docs/vtex-stored-mips.md).
+
 ### Edit
 
 `morphic::encode_image` is the inverse of `decode_image`, producing wire

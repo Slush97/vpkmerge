@@ -6,6 +6,8 @@ mod bcn;
 mod inline;
 mod rgba8;
 
+pub(super) use bcn::decode_bc3_stored;
+
 use crate::error::DecodeError;
 use crate::texture::{mip_dims, Image, TextureInfo};
 use crate::DecodeOptions;

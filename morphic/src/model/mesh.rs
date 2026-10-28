@@ -203,7 +203,6 @@ pub struct DrawCall {
     pub vertex_count: usize,
     pub index_count: usize,
     pub start_index: usize,
-    pub applied_index_offset: u32,
     pub base_vertex: u32,
     pub material: String,
     pub primitive_type: String,
@@ -250,15 +249,6 @@ impl DrawCall {
             vertex_count: int_field(dc, "m_nVertexCount")?,
             index_count: int_field(dc, "m_nIndexCount")?,
             start_index: int_field(dc, "m_nStartIndex")?,
-            // Older / recompiled models omit m_nAppliedIndexOffset; absent means
-            // no offset (indices are already global, see should_apply_index_offset).
-            applied_index_offset: dc
-                .get("m_nAppliedIndexOffset")
-                .and_then(Value::as_int)
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| DecodeError::Model("applied index offset too large"))?
-                .unwrap_or(0),
             base_vertex: u32::try_from(int_field(dc, "m_nBaseVertex")?)
                 .map_err(|_| DecodeError::Model("base vertex too large"))?,
             material,
@@ -433,16 +423,9 @@ pub fn assemble(
             if dc.vertex_buffer >= vertex_buffers.len() {
                 return Err(DecodeError::Model("draw call vertex buffer out of range"));
             }
-            let mut indices = ib.read_indices(dc.start_index, dc.index_count, dc.base_vertex)?;
-            if should_apply_index_offset(
-                dc,
-                &indices,
-                vertex_buffers[dc.vertex_buffer].element_count,
-            ) {
-                for index in &mut indices {
-                    *index = index.wrapping_add(dc.applied_index_offset);
-                }
-            }
+            // m_nAppliedIndexOffset is compiler metadata, not another addend.
+            // Slice the source range and apply its stored base exactly once.
+            let indices = ib.read_indices(dc.start_index, dc.index_count, dc.base_vertex)?;
             primitives.push(Primitive {
                 vertex_buffer: dc.vertex_buffer,
                 vertex_buffers: dc.vertex_buffers.clone(),
@@ -850,37 +833,6 @@ fn uncompressed_format_for(semantic: &str) -> Result<DxgiFormat, DecodeError> {
 
 fn unsupported_target_semantic(_name: &str) -> DecodeError {
     DecodeError::Model("target layout has a semantic this codec cannot emit uncompressed")
-}
-
-/// `m_nAppliedIndexOffset` is not consistently an index-buffer addend. Compiled
-/// models often store global indices already and use
-/// `[m_nAppliedIndexOffset, m_nVertexCount)` as the draw call's vertex-range
-/// bound. Some generated replacement meshes store group-local indices and need
-/// the offset applied. Detect the former before adding it, otherwise later draw
-/// calls in shared-buffer models point past the vertex buffer.
-fn should_apply_index_offset(
-    dc: &DrawCall,
-    base_indices: &[u32],
-    vertex_buffer_count: usize,
-) -> bool {
-    if dc.applied_index_offset == 0 || base_indices.is_empty() {
-        return false;
-    }
-
-    let range_start = dc.applied_index_offset;
-    let range_end = u32::try_from(dc.vertex_count).unwrap_or(u32::MAX);
-    if range_end > range_start
-        && base_indices
-            .iter()
-            .all(|&index| index >= range_start && index < range_end)
-    {
-        return false;
-    }
-
-    let vb_count = u32::try_from(vertex_buffer_count).unwrap_or(u32::MAX);
-    base_indices
-        .iter()
-        .all(|&index| index.wrapping_add(dc.applied_index_offset) < vb_count)
 }
 
 /// A unit tangent perpendicular to `n` (Gram-Schmidt against the least-aligned
@@ -1398,49 +1350,94 @@ mod assemble_tests {
     use super::*;
     use crate::meshopt::encode_vertex_buffer;
 
-    fn draw_call_with_offset(applied_index_offset: u32, vertex_count: usize) -> DrawCall {
-        DrawCall {
-            vertex_buffers: vec![0],
-            vertex_buffer: 0,
-            index_buffer: 0,
-            vertex_count,
-            index_count: 0,
-            start_index: 0,
-            applied_index_offset,
-            base_vertex: 0,
-            material: String::new(),
-            primitive_type: "RENDER_PRIM_TRIANGLES".to_string(),
+    #[test]
+    fn shared_vertex_buffer_draws_apply_only_the_stored_base_vertex() {
+        fn obj(fields: Vec<(&str, Value)>) -> Value {
+            Value::Object(fields.into_iter().map(|(k, v)| (k.into(), v)).collect())
         }
-    }
+        struct Blocks(Vec<Vec<u8>>);
+        impl BlockSource for Blocks {
+            fn block(&self, index: usize) -> Option<&[u8]> {
+                self.0.get(index).map(Vec::as_slice)
+            }
+        }
 
-    #[test]
-    fn applied_index_offset_is_not_added_to_global_indices() {
-        let dc = draw_call_with_offset(2769, 3717);
-        let already_global = [2769, 3000, 3716];
-
-        assert!(
-            !should_apply_index_offset(&dc, &already_global, 39_488),
-            "resourcecompiler-style draw ranges already carry global indices"
-        );
-    }
-
-    #[test]
-    fn applied_index_offset_is_added_to_group_local_indices() {
-        let dc = draw_call_with_offset(2769, 3717);
-        let group_local = [0, 500, 947];
-
-        assert!(
-            should_apply_index_offset(&dc, &group_local, 39_488),
-            "generated grouped meshes can carry local indices that need the draw offset"
-        );
-    }
-
-    #[test]
-    fn applied_index_offset_is_not_added_if_it_would_overrun_vertex_buffer() {
-        let dc = draw_call_with_offset(39_065, 39_488);
-        let already_global = [39_065, 39_200, 39_487];
-
-        assert!(!should_apply_index_offset(&dc, &already_global, 39_488));
+        // A prefix and nonsequential draw order catch inferred source ranges.
+        // Repeated bases and nonzero first indices catch double rebasing, even
+        // when the wrong index would still fit inside the shared vertex buffer.
+        let raw = [99u32, 98, 0, 2, 1, 4, 6, 5, 2, 3, 1, 4, 5, 6, 97];
+        let records = [(5, 20, 4, 7), (2, 20, 0, 4), (11, 0, 4, 7), (8, 40, 2, 4)];
+        let draws = records
+            .iter()
+            .map(|&(start, base, applied, count)| {
+                obj(vec![
+                    (
+                        "m_vertexBuffers",
+                        Value::Array(vec![obj(vec![("m_hBuffer", Value::Int(0))])]),
+                    ),
+                    ("m_indexBuffer", obj(vec![("m_hBuffer", Value::Int(0))])),
+                    ("m_nStartIndex", Value::Int(start)),
+                    ("m_nIndexCount", Value::Int(3)),
+                    ("m_nBaseVertex", Value::Int(base)),
+                    ("m_nAppliedIndexOffset", Value::Int(applied)),
+                    ("m_nVertexCount", Value::Int(count)),
+                    (
+                        "m_nPrimitiveType",
+                        Value::String("RENDER_PRIM_TRIANGLES".into()),
+                    ),
+                    ("m_material", Value::String("synthetic.vmat".into())),
+                ])
+            })
+            .collect();
+        let mdat = obj(vec![(
+            "m_sceneObjects",
+            Value::Array(vec![obj(vec![("m_drawCalls", Value::Array(draws))])]),
+        )]);
+        let vertex_buffer = BufferDesc {
+            block_index: 1,
+            element_count: 64,
+            element_size: 12,
+            meshopt: false,
+            zstd: false,
+            fields: vec![field("POSITION", 0, DxgiFormat::R32G32B32Float, 0)],
+        };
+        for width in [2, 4] {
+            let index_data = raw
+                .iter()
+                .flat_map(|index| index.to_le_bytes()[..width].to_vec())
+                .collect();
+            let blocks = Blocks(vec![
+                crate::kv3::encode(&mdat, &crate::kv3::Format([0; 16])),
+                vec![0; 64 * 12],
+                index_data,
+            ]);
+            let embedded = EmbeddedMesh {
+                name: "synthetic".into(),
+                mesh_index: 0,
+                data_block: 0,
+                vertex_buffers: vec![vertex_buffer.clone()],
+                index_buffers: vec![BufferDesc {
+                    block_index: 2,
+                    element_count: raw.len(),
+                    element_size: width,
+                    meshopt: false,
+                    zstd: false,
+                    fields: vec![],
+                }],
+                vbib_block: None,
+            };
+            let mesh = assemble(&embedded, &blocks, None).expect("assemble shared draws");
+            let expected = [
+                vec![24, 26, 25],
+                vec![20, 22, 21],
+                vec![4, 5, 6],
+                vec![42, 43, 41],
+            ];
+            for (primitive, indices) in mesh.primitives.iter().zip(expected) {
+                assert_eq!(primitive.vertex_buffer, 0);
+                assert_eq!(primitive.indices, indices, "index width {width}");
+            }
+        }
     }
 
     /// The T1c offline gate: assemble -> meshopt-encode -> decode -> deinterleave
@@ -1844,10 +1841,9 @@ mod legacy_layout_tests {
         assert_eq!(meshes[0].data_block, 2);
     }
 
-    /// Older draw calls omit `m_nAppliedIndexOffset`; it must default to 0 (no
-    /// offset) rather than error, so legacy meshes assemble.
+    /// Older draw calls omit compiler-only `m_nAppliedIndexOffset` metadata.
     #[test]
-    fn draw_call_defaults_missing_applied_index_offset() {
+    fn draw_call_accepts_missing_applied_index_offset() {
         let dc = obj(vec![
             (
                 "m_vertexBuffers",
@@ -1868,7 +1864,6 @@ mod legacy_layout_tests {
             ("m_nBaseVertex", Value::Int(0)),
         ]);
         let parsed = DrawCall::parse(&dc).expect("parse legacy draw call");
-        assert_eq!(parsed.applied_index_offset, 0);
         assert_eq!(parsed.vertex_count, 6004);
         assert_eq!(parsed.index_count, 19776);
     }

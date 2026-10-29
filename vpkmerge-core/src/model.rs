@@ -214,8 +214,25 @@ pub(crate) fn open_vpks(vpk: &Path, base: Option<&Path>) -> Result<Vec<valve_pak
         vec![valve_pak::open(vpk).with_context(|| format!("opening {}", vpk.display()))?];
     if let Some(base) = base.filter(|&base| base != vpk) {
         vpks.push(valve_pak::open(base).with_context(|| format!("opening {}", base.display()))?);
+        // The engine mounts core beneath every game: shared materials such as
+        // materials/models/solids/black.vmat ship only there.
+        if let Some(core) = core_pak_for(base).filter(|core| core.is_file()) {
+            vpks.push(
+                valve_pak::open(&core).with_context(|| format!("opening {}", core.display()))?,
+            );
+        }
     }
     Ok(vpks)
+}
+
+/// `<game>/core/pak01_dir.vpk` for a base pak at `<game>/<mod>/pak01_dir.vpk`,
+/// unless the base is core's own.
+fn core_pak_for(base: &Path) -> Option<std::path::PathBuf> {
+    let mod_dir = base.parent()?;
+    if mod_dir.file_name()?.eq_ignore_ascii_case("core") {
+        return None;
+    }
+    Some(mod_dir.parent()?.join("core").join(base.file_name()?))
 }
 
 /// Reads `entry`, decodes it, textures it via the cross-VPK resolver, and writes
@@ -1903,6 +1920,20 @@ mod tests {
     #![allow(clippy::float_cmp)]
 
     use super::*;
+
+    #[test]
+    fn core_pak_follows_a_game_base() {
+        let game = Path::new("Deadlock").join("game");
+        assert_eq!(
+            super::core_pak_for(&game.join("citadel").join("pak01_dir.vpk")),
+            Some(game.join("core").join("pak01_dir.vpk"))
+        );
+        assert_eq!(
+            super::core_pak_for(&game.join("core").join("pak01_dir.vpk")),
+            None
+        );
+        assert_eq!(super::core_pak_for(Path::new("pak01_dir.vpk")), None);
+    }
 
     fn clip(name: &str, fps: f32, frame_count: usize, looping: bool) -> morphic::model::Clip {
         morphic::model::Clip {

@@ -206,6 +206,23 @@ pub struct DrawCall {
     pub base_vertex: u32,
     pub material: String,
     pub primitive_type: String,
+    /// The draw call's own tint: `m_vTintColor` (linear RGB) and `m_flAlpha`.
+    /// `None` when both are absent or neutral. The engine multiplies it into
+    /// the object tint of every shader the draw renders with.
+    pub tint: Option<[f32; 4]>,
+}
+
+/// Reads a draw call's `m_vTintColor` and `m_flAlpha`, keeping only a value
+/// that changes the draw (VRF `RenderableMesh` reads the same two keys).
+fn draw_tint(dc: &Value) -> Option<[f32; 4]> {
+    let rgb = read_vec3(dc.get("m_vTintColor")).unwrap_or([1.0; 3]);
+    #[allow(clippy::cast_possible_truncation)]
+    let alpha = dc
+        .get("m_flAlpha")
+        .and_then(Value::as_f64)
+        .map_or(1.0, |a| a as f32);
+    let neutral = rgb.iter().all(|c| (c - 1.0).abs() < 1e-6) && (alpha - 1.0).abs() < 1e-6;
+    (!neutral).then_some([rgb[0], rgb[1], rgb[2], alpha])
 }
 
 impl DrawCall {
@@ -253,6 +270,7 @@ impl DrawCall {
                 .map_err(|_| DecodeError::Model("base vertex too large"))?,
             material,
             primitive_type,
+            tint: draw_tint(dc),
         })
     }
 }
@@ -330,6 +348,8 @@ pub struct Primitive {
     pub vertex_count: usize,
     /// Global indices into the vertex buffer (base vertex already applied).
     pub indices: Vec<u32>,
+    /// The source draw call's tint and alpha ([`DrawCall::tint`]).
+    pub tint: Option<[f32; 4]>,
 }
 
 /// One LOD0 mesh: its decoded vertex buffers and the primitives over them.
@@ -432,6 +452,7 @@ pub fn assemble(
                 material: dc.material.clone(),
                 vertex_count: dc.vertex_count,
                 indices,
+                tint: dc.tint,
             });
         }
     }
@@ -1866,5 +1887,46 @@ mod legacy_layout_tests {
         let parsed = DrawCall::parse(&dc).expect("parse legacy draw call");
         assert_eq!(parsed.vertex_count, 6004);
         assert_eq!(parsed.index_count, 19776);
+        assert_eq!(parsed.tint, None);
+    }
+
+    /// A draw call's own tint (the hideout chimney breast's red) and alpha are
+    /// kept; a neutral tint is dropped.
+    #[test]
+    fn draw_call_reads_its_tint_and_alpha() {
+        let draw = |extra: Vec<(&str, Value)>| {
+            let mut fields = vec![
+                (
+                    "m_vertexBuffers",
+                    Value::Array(vec![obj(vec![("m_hBuffer", Value::Int(0))])]),
+                ),
+                ("m_indexBuffer", obj(vec![("m_hBuffer", Value::Int(0))])),
+                ("m_nVertexCount", Value::Int(3)),
+                ("m_nIndexCount", Value::Int(3)),
+                ("m_nStartIndex", Value::Int(0)),
+                ("m_nBaseVertex", Value::Int(0)),
+            ];
+            fields.extend(extra);
+            DrawCall::parse(&obj(fields)).expect("parse draw call").tint
+        };
+        let rgb =
+            |r, g, b| Value::Array(vec![Value::Double(r), Value::Double(g), Value::Double(b)]);
+        let red = draw(vec![
+            ("m_vTintColor", rgb(0.25, 0.03125, 0.5)),
+            ("m_flAlpha", Value::Double(1.0)),
+        ]);
+        assert_eq!(red, Some([0.25, 0.03125, 0.5, 1.0]));
+        let faded = draw(vec![
+            ("m_vTintColor", rgb(1.0, 1.0, 1.0)),
+            ("m_flAlpha", Value::Double(0.5)),
+        ]);
+        assert_eq!(faded, Some([1.0, 1.0, 1.0, 0.5]));
+        assert_eq!(
+            draw(vec![
+                ("m_vTintColor", rgb(1.0, 1.0, 1.0)),
+                ("m_flAlpha", Value::Double(1.0))
+            ]),
+            None
+        );
     }
 }

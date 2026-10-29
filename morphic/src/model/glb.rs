@@ -697,14 +697,7 @@ impl Builder {
                 mode: Valid(json::mesh::Mode::Triangles),
                 targets: None,
                 extensions: None,
-                extras: if shell {
-                    serde_json::value::to_raw_value(&jval!({
-                        "morphic_shell": { "version": 1, "role": "authored_shell" }
-                    }))
-                    .ok()
-                } else {
-                    Default::default()
-                },
+                extras: primitive_extras(shell, prim.tint),
             });
         }
 
@@ -1684,6 +1677,26 @@ fn tex_info(index: json::Index<json::Texture>) -> json::texture::Info {
 /// resolver is available, follow the Source material flags so vertex colors do
 /// not tint materials that ignore them in-game. Without material bytes, keep the
 /// geometry data rather than silently dropping it.
+/// Primitive extras: the authored-shell marker and the source draw call's own
+/// tint. `morphic_tint` is `[r, g, b, a]`: `m_vTintColor` as stored (linear
+/// RGB) and `m_flAlpha`. It is written only when the draw changes either.
+fn primitive_extras(shell: bool, tint: Option<[f32; 4]>) -> json::Extras {
+    let mut extras = serde_json::Map::new();
+    if shell {
+        extras.insert(
+            "morphic_shell".into(),
+            jval!({ "version": 1, "role": "authored_shell" }),
+        );
+    }
+    if let Some(tint) = tint {
+        extras.insert("morphic_tint".into(), jval!(tint));
+    }
+    if extras.is_empty() {
+        return Default::default();
+    }
+    serde_json::value::to_raw_value(&serde_json::Value::Object(extras)).ok()
+}
+
 fn material_uses_vertex_color(path: &str, files: Option<&dyn FileResolver>) -> bool {
     let Some(files) = files else {
         return true;
@@ -2163,6 +2176,7 @@ mod stream_tests {
                 material: "wall.vmat".into(),
                 vertex_count: 3,
                 indices: vec![0, 1, 2],
+                tint: None,
             }],
             min_bounds: [0.0; 3],
             max_bounds: [1.0; 3],

@@ -542,6 +542,7 @@ fn synthetic_model() -> Model {
             material: "test/mat.vmat".to_owned(),
             vertex_count: 3,
             indices: vec![0, 1, 2],
+            tint: None,
         }],
         min_bounds: [0.0; 3],
         max_bounds: [1.0, 1.0, 0.0],
@@ -768,6 +769,44 @@ fn authored_shells_require_opt_in_and_keep_primitive_identity() {
             1
         );
     }
+}
+
+/// A draw call's own tint rides the primitive as `morphic_tint`, next to the shell
+/// marker; untinted primitives keep no extras.
+#[test]
+fn draw_call_tint_rides_primitive_extras() {
+    struct MissingFiles;
+    impl super::FileResolver for MissingFiles {
+        fn resolve(&self, _: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
+    let mut model = synthetic_model();
+    let mut tinted = model.meshes[0].primitives[0].clone();
+    tinted.tint = Some([0.25, 0.03125, 0.5, 0.75]);
+    tinted.material = "test/border_jitter.vmat".into();
+    model.meshes[0].primitives.push(tinted);
+    let glb = super::to_glb_textured(
+        &model,
+        &MissingFiles,
+        super::GlbOptions {
+            include_outline_shells: true,
+            ..super::GlbOptions::default()
+        },
+    )
+    .unwrap();
+    let length = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + length]).unwrap();
+    let primitives = json["meshes"][0]["primitives"].as_array().unwrap();
+    assert!(primitives[0]["extras"].is_null());
+    assert_eq!(
+        primitives[1]["extras"]["morphic_tint"],
+        serde_json::json!([0.25, 0.03125, 0.5, 0.75])
+    );
+    assert_eq!(
+        primitives[1]["extras"]["morphic_shell"]["role"],
+        "authored_shell"
+    );
 }
 
 /// The textured path emits the `morphic` extras payload (NPR shader params +
@@ -1328,6 +1367,7 @@ mod pose_bake {
                 material: "body".into(),
                 vertex_count: vb.element_count,
                 indices: vec![0],
+                tint: None,
             }],
             vertex_buffers: vec![vb],
             min_bounds: [0.0; 3],

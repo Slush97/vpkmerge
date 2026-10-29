@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `soundevents --with-format` wraps JSON as `{ "format": { "name": "vpcf61", "guid": "39d3ce1d-9442-4407-9b78-8317145b1732" }, "data": ... }`. The name identifies the stored KV3 schema, resolved from its GUID using VRF's format table; unknown GUIDs have `name: null`. No upgrades are applied. Default JSON output is unchanged. The flag conflicts with `--encode` and `--encode-vpk`.
+- `morphic::kv3::Format` exposes `name()` and canonical lowercase `guid()`, and validates binary KV3 v1..=5 headers. `SoundEvents::format()` exposes the original DATA block's identifier.
+- `panorama dump --mips` exports stored LDR texture mip chains and sidecar metadata without generating levels. Existing previews and the default dump workflow are unchanged.
+- Hero GLBs carry schema-3 material data: packed `pbr.vfx` metalness and roughness, constant AO and source texture reflectivity. Compact unsigned KV3 constants decode correctly.
+- Model draw indices apply only the stored base vertex, fixing shared-buffer aggregate exports. Texture mip ranges include array/volume slices, with `cubemap --slice` for cube-array selection.
+- morphic reads R16 textures (VTEX format 5) through `decode_r16_at`, which returns the raw u16 texels. `texture-volume` exports them losslessly as VTV1 component kind 3 (one u16 per texel) and now accepts a 2D texture as a one-slice volume. `texture-info` also prints `depth` and `format`. Existing VTV1 kinds and volume output are unchanged.
+- `model export --include-outline-shells` preserves and marks authored outline/jitter geometry for Source 2-aware viewers. It composes with existing mesh/material selection; the default still omits shells.
+- `model export-scene` exports a JSON list of static models in one run and keeps VPK directories open between them.
+- World nodes apply their per-draw material overrides, and exported materials record their source path (schema 4), so particle and world materials can be matched by identity.
+- A draw call's own tint and alpha are written as `morphic_tint` primitive extras.
+- A base at `<game>/<mod>/pak01_dir.vpk` also mounts `<game>/core/pak01_dir.vpk` last, as the engine does, so shared materials resolve.
+- `environment_blend` world overlay textures are embedded in model exports.
+- Motion clips no longer count `$cloth_*` bones against the target rig, so cloth-heavy mod skins keep their animations.
+
 ## v0.28.0
 
 Area edits and glow for Grimoire's Door Stuck skin editor: an edit can cover only part of a skin part, and a part can glow. Contributed by @oldreceipt (#76).

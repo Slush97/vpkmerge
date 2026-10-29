@@ -4,7 +4,10 @@
 
 mod bcn;
 mod inline;
+mod r16;
 mod rgba8;
+
+pub(super) use bcn::decode_bc3_stored;
 
 use crate::error::DecodeError;
 use crate::texture::{mip_dims, Image, TextureInfo};
@@ -12,20 +15,32 @@ use crate::DecodeOptions;
 
 use super::format::TextureFormat;
 
+/// Decode one selected mip/slice/face of an R16 texture to its raw u16 texels,
+/// row-major at the mip's dimensions. R16 has no lossless [`crate::ImageData`]
+/// kind, so it is kept off [`decode_image`].
+pub(crate) fn decode_r16_texels(
+    info: &TextureInfo,
+    pixels: &[u8],
+    mip: u8,
+) -> Result<Vec<u16>, DecodeError> {
+    if info.format != TextureFormat::R16 {
+        return Err(DecodeError::Unimplemented(info.format));
+    }
+    let (width, height) = mip_dims(info.width, info.height, mip);
+    let mip_info = TextureInfo {
+        width,
+        height,
+        ..*info
+    };
+    r16::decode_r16(&mip_info, pixels)
+}
+
 pub fn decode_image(
     info: &TextureInfo,
     pixels: &[u8],
     opts: &DecodeOptions,
 ) -> Result<Image, DecodeError> {
-    // face and mip are validated and sliced in pixel_data. 3D depth / array
-    // slices (rest of M10) are still pending; reject any non-zero slice here.
-    if opts.slice != 0 {
-        return Err(DecodeError::InvalidTarget {
-            mip: opts.mip,
-            slice: opts.slice,
-            face: opts.face,
-        });
-    }
+    // pixel_data has already validated and selected this mip, slice and face.
     // Decoders work in terms of width/height; pass them the mip-adjusted
     // dims rather than the texture's mip-0 dims.
     let (mw, mh) = mip_dims(info.width, info.height, opts.mip);
@@ -40,6 +55,7 @@ pub fn decode_image(
         depth: info.depth,
         mip_count: info.mip_count,
         flags: info.flags,
+        reflectivity: info.reflectivity,
         ycocg: info.ycocg,
     };
     let info = &mip_info;

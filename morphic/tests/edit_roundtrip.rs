@@ -137,6 +137,7 @@ fn bgra8888_encode_decode_roundtrip() {
         depth: 1,
         mip_count: 1,
         flags: TextureFlags::empty(),
+        reflectivity: [0.0; 4],
         ycocg: false,
     };
     let opts = morphic::DecodeOptions::default();

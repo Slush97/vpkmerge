@@ -67,6 +67,10 @@ pub struct GlbOptions {
     /// many pixels instead of the full-size top mip (a texture with no mip that
     /// small embeds its smallest). `None` embeds full size.
     pub max_texture_edge: Option<u32>,
+    /// Preserve authored outline/jitter parts with `morphic_shell` primitive
+    /// extras. Consumers must interpret their Source 2 material or hide them.
+    /// Off by default because ordinary glTF rendering can obscure the hero.
+    pub include_outline_shells: bool,
 }
 
 /// Writes `model` as a binary glTF (`.glb`) byte stream, untextured (named
@@ -208,7 +212,7 @@ fn build(
         // the order add_mesh reaches them (so indices match), letting each chunk's
         // textures decode and then PNG-encode in parallel without holding every
         // decoded texture of the model at once.
-        for chunk in exported_materials(model).chunks(materials_per_chunk(opts)) {
+        for chunk in exported_materials(model, opts).chunks(materials_per_chunk(opts)) {
             b.prefetch_textures(chunk, files);
             for path in chunk {
                 b.material_for(path, &mut mat_index, Some(files));
@@ -575,9 +579,8 @@ impl Builder {
     /// Builds one glTF mesh (its primitives + shared per-vertex-buffer
     /// accessors), or `None` when the whole part is dropped ([`is_dropped`]).
     /// Deadlock's inverted-hull toon-outline shells (`*_outline`/`*jitter*`) are
-    /// dropped: as plain glTF geometry they collapse to an opaque hull that
-    /// whitewashes the model, and reproducing them is a renderer-side (three.js)
-    /// concern. Additive `*_glow` overlays are KEPT (they composite additively in
+    /// omitted by default and marked when explicitly requested. Their material
+    /// path must be interpreted by the consumer. Additive `*_glow` overlays are KEPT (they composite additively in
     /// the viewer via `blend_mode='additive'` extras; see [`is_glow_material`]).
     /// Authored body groups have already been selected by the model decoder.
     #[allow(clippy::too_many_lines)]
@@ -587,13 +590,13 @@ impl Builder {
         mat_index: &mut BTreeMap<String, json::Index<json::Material>>,
         files: Option<&dyn FileResolver>,
     ) -> Option<json::Index<json::Mesh>> {
-        if is_dropped(&part.name) {
+        if !self.opts.include_outline_shells && is_dropped(&part.name) {
             return None;
         }
         let renderable: Vec<_> = part
             .primitives
             .iter()
-            .filter(|p| !is_dropped(&p.material))
+            .filter(|p| self.opts.include_outline_shells || !is_dropped(&p.material))
             .collect();
         if renderable.is_empty() {
             return None;
@@ -685,6 +688,7 @@ impl Builder {
             );
 
             let material = self.material_for(&prim.material, mat_index, files);
+            let shell = is_shell(&part.name) || is_shell(&prim.material);
 
             primitives.push(json::mesh::Primitive {
                 attributes,
@@ -693,7 +697,7 @@ impl Builder {
                 mode: Valid(json::mesh::Mode::Triangles),
                 targets: None,
                 extensions: None,
-                extras: Default::default(),
+                extras: primitive_extras(shell, prim.tint),
             });
         }
 
@@ -962,15 +966,28 @@ impl Builder {
             return extensions;
         };
         let pbr = mat.pbr();
-        let alpha_mode = mat.alpha_mode();
+        let alpha_mode = if mat
+            .int_params
+            .get("F_ADVANCED_TRANSLUCENCY")
+            .copied()
+            .unwrap_or(0)
+            > 0
+            || mat.int_params.get("F_ADDITIVE_BLEND").copied().unwrap_or(0) > 0
+        {
+            crate::material::AlphaMode::Blend
+        } else {
+            mat.alpha_mode()
+        };
+        let is_pbr = mat.shader_name == "pbr.vfx";
+        let alpha_metalness = is_pbr && matches!(alpha_mode, crate::material::AlphaMode::Opaque);
         // Glass surfaces render through transmission + ior, not alpha blending
         // (same dispatch as the alpha-mode path: the flag or a *_glass shader).
         let is_glass = mat.int_params.get("F_GLASS").copied().unwrap_or(0) > 0
             || mat.shader_name.ends_with("_glass.vfx");
-        // Source 2 albedo carries non-opacity data in its alpha channel (masks);
-        // for non-blended materials that alpha must not become glTF transparency.
-        // Glass counts as non-blended here: its final alphaMode is OPAQUE.
-        let opaque = !matches!(alpha_mode, crate::material::AlphaMode::Blend) || is_glass;
+        // Preserve opacity for masked/blended materials. Other surfaces carry
+        // masks in alpha. Non-pbr glass retains its existing opaque export.
+        let opaque =
+            matches!(alpha_mode, crate::material::AlphaMode::Opaque) || (is_glass && !is_pbr);
 
         // g_vColorTint1 is a linear albedo multiplier the engine applies on top
         // of the base-color texture; glTF baseColorFactor is also linear, so it
@@ -982,11 +999,21 @@ impl Builder {
                 json::material::PbrBaseColorFactor([t[0], t[1], t[2], a]);
         }
 
+        // pbr.vfx uses opaque albedo alpha as metalness. Copy it to the mask's
+        // R lane before clearing base-color alpha; the ORM packers read mask R.
+        let mut metalness = None;
         // Base color (sRGB albedo).
         if let Some(p) = pbr.base_color {
             if let Some(d) = self.decoded(files, p) {
                 let (w, h, ref src) = d.image;
                 let mut rgba = src.clone();
+                if alpha_metalness {
+                    let mut mask = rgba.clone();
+                    for px in mask.as_chunks_mut::<4>().0 {
+                        px[0] = px[3];
+                    }
+                    metalness = Some((w, h, mask));
+                }
                 if opaque {
                     for px in rgba.as_chunks_mut::<4>().0 {
                         px[3] = 255;
@@ -998,35 +1025,39 @@ impl Builder {
             }
         }
 
-        // Metalness mask (R channel) for the ORM blue channel. Decoded up
-        // front so the metallic-roughness image below can pack it; like the
-        // other non-albedo slots, a 4x4 `default_*` placeholder is skipped.
-        // No size filter here (unlike the normal placeholder): Deadlock authors
+        // Other shaders and opacity materials may use a separate metalness
+        // mask (R channel). No size filter: Deadlock authors
         // constant metalness as a real 4x4 BC4 texture (e.g. shiv_glasses R=255),
         // so a 4x4 metalness is meaningful data, not a no-op placeholder.
-        let metalness = pbr.metalness.and_then(|p| self.decoded(files, p));
-        let metalness = metalness.as_deref().map(|s| &s.image);
+        let separate_metalness = if metalness.is_none() {
+            pbr.metalness.and_then(|p| self.decoded(files, p))
+        } else {
+            None
+        };
+        let metalness = metalness
+            .as_ref()
+            .or_else(|| separate_metalness.as_deref().map(|s| &s.image));
         // Standalone roughness texture (g_tRoughness), parsed but previously dropped.
-        let roughness = pbr.roughness.and_then(|p| self.decoded(files, p));
+        // pbr.vfx reads normal B even when a separate roughness map is bound.
+        let roughness = pbr
+            .roughness
+            .filter(|_| !is_pbr)
+            .and_then(|p| self.decoded(files, p));
         let roughness = roughness.as_deref().map(|s| &s.image);
         let mut metalness_wired = false;
 
-        // Normal map. Skip the 4x4 default_normal placeholder (a flat normal is a
-        // no-op). `packed_rough` carries the normal's RGBA when it is a PACKED
-        // normal-roughness (blue = roughness), so the metallic-roughness image
-        // below can source roughness from its blue.
+        // pbr.vfx needs constant normal textures for roughness. Other shaders
+        // retain the full-resolution placeholder filter and normal probe.
         let mut packed_rough: Option<Rc<Slot>> = None;
         if let Some(p) = pbr.normal {
-            if let Some(d) = self.decoded(files, p).filter(|d| !d.is_placeholder()) {
+            if let Some(d) = self
+                .decoded(files, p)
+                .filter(|d| is_pbr || !d.is_placeholder())
+            {
                 let (w, h, ref rgba) = d.image;
-                // Some heroes bind a PURE normal map here (blue = normal Z), not a
-                // packed normal-roughness (blue = roughness). The slot name does not
-                // distinguish them, so probe the texel content: a pure normal map
-                // keeps its authored normal and must NOT have its blue read as
-                // roughness (which produced normal-Z-shaped garbage roughness).
-                let pure_normal = d
-                    .pure_normal
-                    .unwrap_or_else(|| top_mip_is_pure_normal(files, p, &d));
+                let pure_normal = !is_pbr
+                    && d.pure_normal
+                        .unwrap_or_else(|| top_mip_is_pure_normal(files, p, &d));
                 let normal_rgba = if pure_normal {
                     normal_passthrough_rgba(rgba)
                 } else {
@@ -1047,10 +1078,9 @@ impl Builder {
             }
         }
 
-        // Metallic-roughness texture. Roughness source priority: a standalone
-        // g_tRoughness (its R channel) > a packed normal-roughness (the normal's
-        // blue) > the constant factor fallback below. Metalness (B) comes from the
-        // metalness mask, resampled to the roughness image.
+        // pbr.vfx uses normal B. Other shaders prefer standalone roughness R,
+        // then packed normal B, then the constant factor. Metalness comes from
+        // the alpha-derived or separate mask above.
         if let Some((rw, rh, rough)) = roughness {
             if let Some(t) =
                 self.texture_rgba(*rw, *rh, rough_metal_rgba(*rw, *rh, rough, metalness))
@@ -1065,7 +1095,8 @@ impl Builder {
                 }
             }
         } else if let Some((w, h, rgba)) = packed_rough.as_deref().map(|s| &s.image) {
-            if let Some(t) = self.texture_rgba(*w, *h, metal_rough_rgba(*w, *h, rgba, metalness)) {
+            let (ow, oh) = metal_rough_dims(*w, *h, metalness);
+            if let Some(t) = self.texture_rgba(ow, oh, metal_rough_rgba(*w, *h, rgba, metalness)) {
                 material.pbr_metallic_roughness.metallic_roughness_texture = Some(tex_info(t));
                 material.pbr_metallic_roughness.roughness_factor =
                     json::material::StrengthFactor(1.0);
@@ -1123,7 +1154,7 @@ impl Builder {
         }
 
         // Occlusion (R channel sampled by glTF).
-        if let Some(tex) = pbr.occlusion.and_then(|p| self.texture_from(files, p)) {
+        if let Some(tex) = pbr.occlusion.and_then(|p| self.texture_from_ao(files, p)) {
             material.occlusion_texture = Some(json::material::OcclusionTexture {
                 index: tex,
                 tex_coord: 0,
@@ -1281,7 +1312,7 @@ impl Builder {
             material.alpha_cutoff = Some(json::material::AlphaCutoff(c));
         }
 
-        material.extras = self.morphic_extras(&mat, files);
+        material.extras = self.morphic_extras(&mat, files, mat_path);
         extensions
     }
 
@@ -1296,8 +1327,19 @@ impl Builder {
         &mut self,
         mat: &crate::material::Material,
         files: &dyn FileResolver,
+        mat_path: &str,
     ) -> json::Extras {
         let mut textures = serde_json::Map::new();
+        let mut texture_reflectivity = serde_json::Map::new();
+        if let Some(info) = mat
+            .pbr()
+            .base_color
+            .and_then(|p| files.resolve(&compiled(p)))
+            .and_then(|bytes| crate::inspect(&bytes).ok())
+            .filter(|info| info.reflectivity.iter().all(|v| v.is_finite()))
+        {
+            texture_reflectivity.insert("g_tColor".to_owned(), jval!(info.reflectivity));
+        }
         for slot in SOURCE2_PREVIEW_TEXTURE_SLOTS {
             if let Some(tex) = mat
                 .texture(slot)
@@ -1336,7 +1378,9 @@ impl Builder {
             "morphic": {
                 // Bump on any wire-shape change; the viewer treats a missing
                 // version as v1 and falls back. See npr-material plan A1.
-                "schema_version": 2,
+                "schema_version": 4,
+                "source_material": mat_path,
+                "texture_reflectivity": texture_reflectivity,
                 "shader": mat.shader_name,
                 "blend_mode": blend_mode,
                 "self_illum_valid": self_illum_valid,
@@ -1387,6 +1431,21 @@ impl Builder {
         vtex_path: &str,
     ) -> Option<json::Index<json::Texture>> {
         let d = self.decoded(files, vtex_path)?;
+        let (w, h, ref rgba) = d.image;
+        self.texture_rgba(w, h, rgba.clone())
+    }
+
+    /// Keep constant AO textures whose two original axes are at most 4.
+    /// Thin strips rejected by the old placeholder filter remain rejected.
+    fn texture_from_ao(
+        &mut self,
+        files: &dyn FileResolver,
+        vtex_path: &str,
+    ) -> Option<json::Index<json::Texture>> {
+        let d = self.decoded(files, vtex_path)?;
+        if d.is_placeholder() && d.full.0.max(d.full.1) > 4 {
+            return None;
+        }
         let (w, h, ref rgba) = d.image;
         self.texture_rgba(w, h, rgba.clone())
     }
@@ -1507,8 +1566,8 @@ impl Builder {
 }
 
 /// True for Deadlock's inverted-hull toon-outline shells. Their primitives are
-/// dropped from the GLB: rendered as solid geometry the hull wraps and
-/// whitewashes the model. Two naming conventions in the shipped heroes:
+/// omitted from the GLB unless explicitly requested and marked. A consumer
+/// must select a supported material path. Two naming conventions in the shipped heroes:
 /// - `*_outline`: the standard inverted hull.
 /// - `*jitter*`: the comic-style inked border (Billy/`punkgoat`, parts
 ///   `*_jitter01`/`_bat_jitter`, materials `*_border_jitter01`). NOT the
@@ -1576,15 +1635,15 @@ pub(crate) fn is_dropped(name: &str) -> bool {
 
 /// The material paths [`Builder::add_mesh`] gives a primitive, in first-use
 /// order: renderable parts and primitives over a buffer with positions.
-fn exported_materials(model: &Model) -> Vec<&str> {
+fn exported_materials(model: &Model, opts: GlbOptions) -> Vec<&str> {
     let mut seen = BTreeSet::new();
     model
         .meshes
         .iter()
-        .filter(|part| !is_dropped(&part.name))
+        .filter(|part| opts.include_outline_shells || !is_dropped(&part.name))
         .flat_map(|part| {
             part.primitives.iter().filter(|prim| {
-                !is_dropped(&prim.material)
+                (opts.include_outline_shells || !is_dropped(&prim.material))
                     && part
                         .vertex_buffers
                         .get(prim.vertex_buffer)
@@ -1618,6 +1677,26 @@ fn tex_info(index: json::Index<json::Texture>) -> json::texture::Info {
 /// resolver is available, follow the Source material flags so vertex colors do
 /// not tint materials that ignore them in-game. Without material bytes, keep the
 /// geometry data rather than silently dropping it.
+/// Primitive extras: the authored-shell marker and the source draw call's own
+/// tint. `morphic_tint` is `[r, g, b, a]`: `m_vTintColor` as stored (linear
+/// RGB) and `m_flAlpha`. It is written only when the draw changes either.
+fn primitive_extras(shell: bool, tint: Option<[f32; 4]>) -> json::Extras {
+    let mut extras = serde_json::Map::new();
+    if shell {
+        extras.insert(
+            "morphic_shell".into(),
+            jval!({ "version": 1, "role": "authored_shell" }),
+        );
+    }
+    if let Some(tint) = tint {
+        extras.insert("morphic_tint".into(), jval!(tint));
+    }
+    if extras.is_empty() {
+        return Default::default();
+    }
+    serde_json::value::to_raw_value(&serde_json::Value::Object(extras)).ok()
+}
+
 fn material_uses_vertex_color(path: &str, files: Option<&dyn FileResolver>) -> bool {
     let Some(files) = files else {
         return true;
@@ -1632,8 +1711,7 @@ fn material_uses_vertex_color(path: &str, files: Option<&dyn FileResolver>) -> b
 /// the largest mip that fits; see [`GlbOptions::max_texture_edge`]), and returns
 /// `(width, height, RGBA8)`. Skips HDR textures (no PBR slot we read is HDR).
 /// Tiny `4x4` placeholders are kept here (a flat base color is a real albedo,
-/// e.g. Deadlock body skin); callers that must reject placeholders (occlusion,
-/// emissive, normal) filter by size themselves.
+/// e.g. Deadlock body skin); callers that reject placeholders filter themselves.
 fn decode_slot(files: &dyn FileResolver, vtex_path: &str, max_edge: Option<u32>) -> Option<Slot> {
     let bytes = files.resolve(&compiled(vtex_path))?;
     let (mip, full) = match max_edge {
@@ -1716,8 +1794,8 @@ fn normal_rgba(rgba: &[u8]) -> Vec<u8> {
 
 /// Distinguish a PURE tangent-space normal map (BLUE = normal Z) from a packed
 /// Source 2 normal-roughness texture (BLUE = roughness). Both arrive in the same
-/// slot with the same `_normal` naming, so the only reliable signal is per-texel
-/// content: in a normal map the blue equals the Z reconstructed from R,G (the
+/// slot with the same `_normal` naming. For shaders without known packing,
+/// probe whether blue equals the Z reconstructed from R,G (the
 /// normal is unit length, and Z is stored with the same `n*0.5+0.5` encoding as
 /// X,Y), while in a packed texture blue is roughness and does not track R,G.
 /// Samples a stride of texels and returns true when the decoded blue matches the
@@ -1773,24 +1851,32 @@ pub(super) fn metal_only_rgba(mask: &[u8]) -> Vec<u8> {
 /// BLUE channel; Source 2 `g_tNormalRoughness` packs roughness in B while the
 /// alpha is a constant ~1.0 placeholder, so reading alpha yielded fully-rough
 /// matte surfaces), B = metalness (the metalness mask's R channel,
-/// nearest-neighbor resampled to the roughness image's dimensions; 0 without a
-/// mask).
+/// nearest-neighbor resampled to the maximum source width and height; 0
+/// without a mask). Roughness is upsampled when the metalness image is larger.
+fn metal_rough_dims(w: u32, h: u32, metalness: Option<&(u32, u32, Vec<u8>)>) -> (u32, u32) {
+    metalness.map_or((w, h), |&(mw, mh, _)| (w.max(mw), h.max(mh)))
+}
+
 pub(super) fn metal_rough_rgba(
     w: u32,
     h: u32,
     rgba: &[u8],
     metalness: Option<&(u32, u32, Vec<u8>)>,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(rgba.len());
-    for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
+    let (ow, oh) = metal_rough_dims(w, h, metalness);
+    let mut out = Vec::new();
+    for i in 0..u64::from(ow) * u64::from(oh) {
+        let x = i % u64::from(ow);
+        let y = i / u64::from(ow);
+        let rx = x * u64::from(w) / u64::from(ow);
+        let ry = y * u64::from(h) / u64::from(oh);
+        let rough = rgba[((ry * u64::from(w) + rx) * 4 + 2) as usize];
         let metal = metalness.map_or(0, |&(mw, mh, ref m)| {
-            let x = i as u64 % u64::from(w);
-            let y = i as u64 / u64::from(w);
-            let mx = x * u64::from(mw) / u64::from(w);
-            let my = y * u64::from(mh) / u64::from(h);
+            let mx = x * u64::from(mw) / u64::from(ow);
+            let my = y * u64::from(mh) / u64::from(oh);
             m[((my * u64::from(mw) + mx) * 4) as usize]
         });
-        out.extend_from_slice(&[0, px[2], metal, 255]);
+        out.extend_from_slice(&[0, rough, metal, 255]);
     }
     out
 }
@@ -1853,6 +1939,9 @@ const SOURCE2_PREVIEW_TEXTURE_SLOTS: &[&str] = &[
     "g_tMasks1",
     "g_tTintMask",
     "g_tPacked1",
+    // environment_blend's world overlay: a biplanar, world-projected color
+    // modulation shared by every layer.
+    "g_tColorWorldOverlay",
 ];
 
 /// Serializes a dynamic-expression table for the `morphic` extras payload. Lives
@@ -2090,6 +2179,7 @@ mod stream_tests {
                 material: "wall.vmat".into(),
                 vertex_count: 3,
                 indices: vec![0, 1, 2],
+                tint: None,
             }],
             min_bounds: [0.0; 3],
             max_bounds: [1.0; 3],

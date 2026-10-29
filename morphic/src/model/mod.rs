@@ -27,7 +27,7 @@ mod topology;
 mod uvmask;
 mod variant;
 mod vbib;
-pub use variant::ModelVariant;
+pub use variant::{DrawMaterialOverride, ModelVariant};
 
 #[cfg(test)]
 mod tests;
@@ -217,12 +217,15 @@ pub fn decode_variant(bytes: &[u8], variant: &ModelVariant) -> Result<Model, Dec
         }
         let remap = skeleton::remap_table(&data, em.mesh_index);
         let mut part = mesh::assemble(em, &resource, remap.as_deref())?;
-        for primitive in &mut part.primitives {
+        for (draw_index, primitive) in part.primitives.iter_mut().enumerate() {
             if let Some(material) = materials.get(&primitive.material) {
                 primitive.material.clone_from(material);
             }
             if let Some(material) = &variant.material_override {
                 primitive.material.clone_from(material);
+            }
+            if let Some(material) = variant.draw_material(em.mesh_index, draw_index) {
+                material.clone_into(&mut primitive.material);
             }
         }
         if variant.mesh_group.is_none() {

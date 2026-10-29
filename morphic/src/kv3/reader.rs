@@ -64,13 +64,8 @@ pub(super) fn decode_wire(data: &[u8]) -> Result<Document, DecodeError> {
     })
 }
 
-/// Parse the header, decompress the buffers, carve the typed lanes, then hand
-/// `read` the context positioned at the root type byte.
-#[allow(clippy::too_many_lines)]
-fn with_root<T>(
-    data: &[u8],
-    read: impl FnOnce(&mut Ctx) -> Result<T, DecodeError>,
-) -> Result<T, DecodeError> {
+/// Validate the binary magic and return the supported encoding version.
+pub(super) fn version(data: &[u8]) -> Result<u32, DecodeError> {
     let mut h = Cursor::new(data);
     let magic = h.u32()?;
     let version = magic & 0xFF;
@@ -78,7 +73,19 @@ fn with_root<T>(
         return Err(DecodeError::UnsupportedKv3(magic));
     }
 
-    let _format_guid = h.bytes(16)?;
+    Ok(version)
+}
+
+/// Parse the header, decompress the buffers, carve the typed lanes, then hand
+/// `read` the context positioned at the root type byte.
+#[allow(clippy::too_many_lines)]
+fn with_root<T>(
+    data: &[u8],
+    read: impl FnOnce(&mut Ctx) -> Result<T, DecodeError>,
+) -> Result<T, DecodeError> {
+    let version = version(data)?;
+    let mut h = Cursor::new(data);
+    h.bytes(20)?; // magic + format GUID
     let compression = h.u32()?;
 
     // Header counts. Field presence is version-gated exactly as in VRF.
@@ -967,4 +974,23 @@ fn read_u32_at(buf: &[u8], at: usize) -> Result<u32, DecodeError> {
 
 fn usize_of(v: i64) -> Result<usize, DecodeError> {
     usize::try_from(v).map_err(|_| DecodeError::Kv3("negative count"))
+}
+
+#[test]
+fn unsigned_constants_need_no_value_lane() {
+    for (original, tag, expected) in [
+        (Value::Bool(false), node::UINT32_ZERO, Value::UInt(0)),
+        (Value::Bool(true), node::UINT32_ONE, Value::UInt(1)),
+    ] {
+        // Boolean constants also have no payload. Replace the root type byte
+        // immediately before the trailer to exercise the compact uint encoding.
+        let mut bytes = super::encode(&original, &super::Format([0; 16]));
+        let type_offset = bytes.len() - 5;
+        assert!(matches!(
+            bytes[type_offset],
+            node::BOOLEAN_FALSE | node::BOOLEAN_TRUE
+        ));
+        bytes[type_offset] = tag;
+        assert_eq!(decode(&bytes).unwrap(), expected);
+    }
 }

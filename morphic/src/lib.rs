@@ -36,6 +36,7 @@ pub use sound::{
 pub use texture::{
     crop_to_actual,
     decode::decode_image,
+    decode_stored_mips,
     encode::encode_image,
     encode_vtex_png_rgba8888, encode_vtex_png_rgba8888_from_png,
     format::{TextureFlags, TextureFormat},
@@ -73,6 +74,17 @@ pub fn decode_at(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, DecodeErro
     info.ycocg = texture::detect_ycocg(&resource);
     let pixels = texture::pixel_data(&resource, &info, *opts)?;
     decode_image(&info, pixels, opts)
+}
+
+/// Decode a specific mip/slice/face of an R16 texture to raw u16 texels,
+/// row-major, top-left origin, at `max(1, dim >> mip)`. Errors with
+/// `Unimplemented` for any other format.
+pub fn decode_r16_at(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<u16>, DecodeError> {
+    let resource = resource::Resource::parse(bytes)?;
+    let data = resource.data_block()?;
+    let info = parse_texture_header(data)?;
+    let pixels = texture::pixel_data(&resource, &info, *opts)?;
+    texture::decode::decode_r16_texels(&info, pixels, opts.mip)
 }
 
 /// Open a VPK and decode the given entry. Convenience for the GUI preview path.

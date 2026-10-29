@@ -7,9 +7,36 @@ pub struct ModelVariant {
     pub mesh_group: Option<String>,
     pub material_group: Option<String>,
     pub material_override: Option<String>,
+    pub draw_material_overrides: Vec<DrawMaterialOverride>,
+}
+
+/// A world-node material override. The first whole-model entry wins; otherwise
+/// the last matching mesh/draw entry wins, as VRF WorldNode.MaterialOverride.Find.
+#[derive(Debug, Clone)]
+pub struct DrawMaterialOverride {
+    pub mesh_index: usize,
+    pub draw_call_index: u32,
+    pub material: String,
 }
 
 impl ModelVariant {
+    pub(super) fn draw_material(&self, mesh_index: usize, draw_call_index: usize) -> Option<&str> {
+        let mut selected = None;
+        for entry in &self.draw_material_overrides {
+            if entry.material.is_empty() {
+                continue;
+            }
+            if entry.draw_call_index == u32::MAX {
+                return Some(&entry.material);
+            }
+            if entry.mesh_index == mesh_index
+                && usize::try_from(entry.draw_call_index).ok() == Some(draw_call_index)
+            {
+                selected = Some(entry.material.as_str());
+            }
+        }
+        selected
+    }
     pub(super) fn mesh_mask(&self, data: &Value) -> Result<Option<u64>, DecodeError> {
         let Some(name) = &self.mesh_group else {
             return Ok(None);
@@ -78,6 +105,32 @@ impl ModelVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn world_material_override_precedence_matches_vrf() {
+        let entry = |mesh_index, draw_call_index, material: &str| DrawMaterialOverride {
+            mesh_index,
+            draw_call_index,
+            material: material.into(),
+        };
+        let mut variant = ModelVariant {
+            draw_material_overrides: vec![
+                entry(1, 0, "first"),
+                entry(1, 0, "last"),
+                entry(0, 1, "other"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(variant.draw_material(1, 0), Some("last"));
+        assert_eq!(variant.draw_material(0, 1), Some("other"));
+        assert_eq!(variant.draw_material(0, 0), None);
+        variant.draw_material_overrides.extend([
+            entry(9, u32::MAX, ""),
+            entry(9, u32::MAX, "all"),
+            entry(0, u32::MAX, "ignored"),
+        ]);
+        assert_eq!(variant.draw_material(1, 0), Some("all"));
+        assert_eq!(variant.draw_material(0, 0), Some("all"));
+    }
     fn object(values: Vec<(&str, Value)>) -> Value {
         Value::Object(
             values

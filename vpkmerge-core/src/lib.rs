@@ -74,7 +74,9 @@ pub use attachment_heal::{
 };
 
 pub mod cubemap;
-pub use cubemap::{export_cubemap_hdr, CubemapFaceReport, CUBEMAP_FACE_NAMES};
+pub use cubemap::{
+    export_cubemap_hdr, export_cubemap_hdr_at, CubemapFaceReport, CUBEMAP_FACE_NAMES,
+};
 
 pub mod recolor;
 pub use recolor::{

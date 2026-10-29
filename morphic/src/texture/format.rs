@@ -44,6 +44,10 @@ pub enum TextureFormat {
     /// Inline-stored JPEG that is itself encoded as DXT5 once decoded.
     JpegDxt5,
     Rgba16161616F,
+    /// One unsigned 16-bit UNORM channel per texel, little-endian. Not an
+    /// [`crate::ImageData`] kind: read the raw values with
+    /// [`crate::decode_r16_at`].
+    R16,
 }
 
 impl TextureFormat {
@@ -63,6 +67,7 @@ impl TextureFormat {
             "PNG_DXT5" => Self::PngDxt5,
             "JPEG_DXT5" => Self::JpegDxt5,
             "RGBA16161616F" => Self::Rgba16161616F,
+            "R16" => Self::R16,
             "UNKNOWN" => Self::Unknown,
             _ => return Err(DecodeError::UnknownFormatName),
         })
@@ -84,6 +89,7 @@ impl TextureFormat {
             Self::PngDxt5 => "PNG_DXT5",
             Self::JpegDxt5 => "JPEG_DXT5",
             Self::Rgba16161616F => "RGBA16161616F",
+            Self::R16 => "R16",
         }
     }
 }

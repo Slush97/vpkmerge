@@ -7,6 +7,7 @@
 - `panorama dump --mips` exports stored LDR texture mip chains and sidecar metadata without generating levels. Existing previews and the default dump workflow are unchanged.
 - Hero GLBs carry schema-3 material data: packed `pbr.vfx` metalness and roughness, constant AO and source texture reflectivity. Compact unsigned KV3 constants decode correctly.
 - Model draw indices apply only the stored base vertex, fixing shared-buffer aggregate exports. Texture mip ranges include array/volume slices, with `cubemap --slice` for cube-array selection.
+- morphic reads R16 textures (VTEX format 5) through `decode_r16_at`, which returns the raw u16 texels. `texture-volume` exports them losslessly as VTV1 component kind 3 (one u16 per texel) and now accepts a 2D texture as a one-slice volume. `texture-info` also prints `depth` and `format`. Existing VTV1 kinds and volume output are unchanged.
 - `model export --include-outline-shells` preserves and marks authored outline/jitter geometry for Source 2-aware viewers. It composes with existing mesh/material selection; the default still omits shells.
 
 ## v0.28.0

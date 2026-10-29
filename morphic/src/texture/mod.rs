@@ -335,7 +335,8 @@ fn format_from_id(id: u8) -> Result<TextureFormat, DecodeError> {
         1 => TextureFormat::Dxt1,
         2 => TextureFormat::Dxt5,
         4 => TextureFormat::Rgba8888,
-        // 5..9: R16, RG1616, RGBA16161616, R16F, RG1616F
+        5 => TextureFormat::R16,
+        // 6..9: RG1616, RGBA16161616, R16F, RG1616F
         10 => TextureFormat::Rgba16161616F,
         // 11..14: R32F, RG3232F, RGB323232F, RGBA32323232F
         // 15: JPEG_RGBA8888 (not seen in Deadlock)
@@ -522,7 +523,10 @@ pub(crate) fn face_size_bytes(
 fn block_bytes_per_format(fmt: TextureFormat) -> Result<usize, DecodeError> {
     Ok(match fmt {
         // Uncompressed: size computed via bytes-per-pixel instead; sentinel 0.
-        TextureFormat::Rgba8888 | TextureFormat::Bgra8888 | TextureFormat::Rgba16161616F => 0,
+        TextureFormat::Rgba8888
+        | TextureFormat::Bgra8888
+        | TextureFormat::Rgba16161616F
+        | TextureFormat::R16 => 0,
         TextureFormat::Dxt1 | TextureFormat::Ati1n => 8,
         TextureFormat::Dxt5 | TextureFormat::Ati2n | TextureFormat::Bc6h | TextureFormat::Bc7 => 16,
         // Inline-encoded formats are handled in pixel_data via is_inline_format;
@@ -539,6 +543,7 @@ fn uncompressed_bytes_per_pixel(fmt: TextureFormat) -> Option<usize> {
     match fmt {
         TextureFormat::Rgba8888 | TextureFormat::Bgra8888 => Some(4),
         TextureFormat::Rgba16161616F => Some(8),
+        TextureFormat::R16 => Some(2),
         _ => None,
     }
 }

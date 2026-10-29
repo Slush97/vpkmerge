@@ -4,6 +4,7 @@
 
 mod bcn;
 mod inline;
+mod r16;
 mod rgba8;
 
 pub(super) use bcn::decode_bc3_stored;
@@ -13,6 +14,26 @@ use crate::texture::{mip_dims, Image, TextureInfo};
 use crate::DecodeOptions;
 
 use super::format::TextureFormat;
+
+/// Decode one selected mip/slice/face of an R16 texture to its raw u16 texels,
+/// row-major at the mip's dimensions. R16 has no lossless [`crate::ImageData`]
+/// kind, so it is kept off [`decode_image`].
+pub(crate) fn decode_r16_texels(
+    info: &TextureInfo,
+    pixels: &[u8],
+    mip: u8,
+) -> Result<Vec<u16>, DecodeError> {
+    if info.format != TextureFormat::R16 {
+        return Err(DecodeError::Unimplemented(info.format));
+    }
+    let (width, height) = mip_dims(info.width, info.height, mip);
+    let mip_info = TextureInfo {
+        width,
+        height,
+        ..*info
+    };
+    r16::decode_r16(&mip_info, pixels)
+}
 
 pub fn decode_image(
     info: &TextureInfo,

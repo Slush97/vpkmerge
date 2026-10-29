@@ -2129,12 +2129,15 @@ fn main() -> Result<()> {
         Some(Command::Soundevents(args)) => run_soundevents(args),
         Some(Command::Texture(args)) => run_texture(args),
         Some(Command::TextureInfo(args)) => {
-            let (width, height) = vpkmerge_core::trippy::texture_dimensions(
-                &args.vpk,
-                args.base.as_deref(),
-                &args.entry,
-            )?;
-            println!("{{\"width\":{width},\"height\":{height}}}");
+            let info =
+                vpkmerge_core::trippy::texture_info(&args.vpk, args.base.as_deref(), &args.entry)?;
+            println!(
+                "{{\"width\":{},\"height\":{},\"depth\":{},\"format\":\"{}\"}}",
+                info.width,
+                info.height,
+                info.depth,
+                info.format.name()
+            );
             Ok(())
         }
         Some(Command::Cubemap(args)) => run_cubemap(&args),

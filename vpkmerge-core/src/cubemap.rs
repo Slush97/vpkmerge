@@ -16,7 +16,7 @@
 //! that the RLE saving is not worth the writer complexity.
 
 use anyhow::{bail, Context, Result};
-use morphic::{DecodeOptions, Image, ImageData, TextureFlags};
+use morphic::{DecodeOptions, Image, ImageData, TextureFlags, TextureFormat};
 use std::path::Path;
 
 /// Output file stems in morphic's cubemap face order `[+X, -X, +Y, -Y, +Z, -Z]`.
@@ -88,8 +88,10 @@ pub fn export_texture_hdr(
 }
 
 /// Export mip-zero volume pixels without color conversion. VTV1 header: magic,
-/// width, height, depth and component type (1 = UNORM8, 2 = float16), all u32 LE.
-/// Pixels follow in Z/Y/X/RGBA order, preserving alpha and HDR values.
+/// width, height, depth and component type (1 = UNORM8 RGBA, 2 = float16 RGBA,
+/// 3 = raw R16 UNORM, one u16 per texel), all u32 LE. Pixels follow in Z/Y/X
+/// order (RGBA per texel for kinds 1 and 2), preserving alpha and HDR values.
+/// A 2D texture (no volume or cube flag, depth 1) exports as one slice.
 pub fn export_texture_volume(input: &Path, from_vpk: Option<&Path>, out: &Path) -> Result<()> {
     let bytes = match from_vpk {
         Some(vpk) => crate::read_vpk_entry(vpk, &input.to_string_lossy())?,
@@ -105,15 +107,30 @@ pub fn export_texture_volume(input: &Path, from_vpk: Option<&Path>, out: &Path) 
 
 fn texture_volume_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     let info = morphic::inspect(bytes)?;
-    if !info.flags.contains(TextureFlags::VOLUME_TEXTURE)
-        || info.flags.contains(TextureFlags::CUBE_TEXTURE)
-    {
-        bail!("Expected a volume texture");
+    let is_volume = info.flags.contains(TextureFlags::VOLUME_TEXTURE);
+    if info.flags.contains(TextureFlags::CUBE_TEXTURE) || (!is_volume && info.depth != 1) {
+        bail!("Expected a volume or 2D texture");
     }
     let mut result = b"VTV1".to_vec();
     result.extend_from_slice(&u32::from(info.width).to_le_bytes());
     result.extend_from_slice(&u32::from(info.height).to_le_bytes());
     result.extend_from_slice(&u32::from(info.depth).to_le_bytes());
+    if info.format == TextureFormat::R16 {
+        result.extend_from_slice(&3u32.to_le_bytes());
+        for slice in 0..info.depth {
+            let texels = morphic::decode_r16_at(
+                bytes,
+                &DecodeOptions {
+                    slice,
+                    ..Default::default()
+                },
+            )?;
+            for value in texels {
+                result.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        return Ok(result);
+    }
     let mut component_type = None;
     for slice in 0..info.depth {
         let image = morphic::decode_at(
@@ -489,6 +506,41 @@ mod tests {
         }
         assert_eq!(&packed[20..], &pixels);
         bytes[34..36].copy_from_slice(&0u16.to_le_bytes());
+        assert!(texture_volume_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn r16_2d_texture_packs_as_one_raw_slice() {
+        let mut bytes = vec![0u8; 80];
+        bytes[4..6].copy_from_slice(&12u16.to_le_bytes());
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(b"DATA");
+        bytes[20..24].copy_from_slice(&12u32.to_le_bytes());
+        bytes[24..28].copy_from_slice(&48u32.to_le_bytes());
+        bytes[32..34].copy_from_slice(&1u16.to_le_bytes());
+        bytes[52..54].copy_from_slice(&2u16.to_le_bytes());
+        bytes[54..56].copy_from_slice(&2u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&1u16.to_le_bytes());
+        bytes[58] = 5;
+        bytes[59] = 2;
+        // Mips are stored smallest first: the 1x1 mip 1 texel, then mip 0.
+        bytes.extend_from_slice(&0x7777u16.to_le_bytes());
+        let texels = [0u16, 65535, 0x1234, 0x8001];
+        for value in texels {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let size = u32::try_from(bytes.len()).unwrap();
+        bytes[..4].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(morphic::inspect(&bytes).unwrap().format.name(), "R16");
+        let packed = texture_volume_bytes(&bytes).unwrap();
+        assert_eq!(&packed[..4], b"VTV1");
+        for (i, expected) in [2u32, 2, 1, 3].iter().enumerate() {
+            assert_eq!(&packed[4 + i * 4..8 + i * 4], &expected.to_le_bytes());
+        }
+        assert_eq!(&packed[20..], &bytes[bytes.len() - 8..]);
+        bytes[34..36].copy_from_slice(&TextureFlags::CUBE_TEXTURE.bits().to_le_bytes());
         assert!(texture_volume_bytes(&bytes).is_err());
     }
 

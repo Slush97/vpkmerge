@@ -76,6 +76,17 @@ pub fn decode_at(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, DecodeErro
     decode_image(&info, pixels, opts)
 }
 
+/// Decode a specific mip/slice/face of an R16 texture to raw u16 texels,
+/// row-major, top-left origin, at `max(1, dim >> mip)`. Errors with
+/// `Unimplemented` for any other format.
+pub fn decode_r16_at(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<u16>, DecodeError> {
+    let resource = resource::Resource::parse(bytes)?;
+    let data = resource.data_block()?;
+    let info = parse_texture_header(data)?;
+    let pixels = texture::pixel_data(&resource, &info, *opts)?;
+    texture::decode::decode_r16_texels(&info, pixels, opts.mip)
+}
+
 /// Open a VPK and decode the given entry. Convenience for the GUI preview path.
 pub fn decode_from_vpk<P: AsRef<Path>>(_vpk: P, _entry: &str) -> Result<Image, DecodeError> {
     Err(DecodeError::Unimplemented(TextureFormat::Unknown))

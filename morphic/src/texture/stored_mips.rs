@@ -192,7 +192,7 @@ pub fn decode_stored_mips(bytes: &[u8]) -> Result<Vec<Image>, DecodeError> {
         if info.format == TextureFormat::Dxt1 {
             if let ImageData::Rgba8(rgba) = &mut image.data {
                 // VRF decodes BC1 without punch-through alpha.
-                for pixel in rgba.chunks_exact_mut(4) {
+                for pixel in rgba.as_chunks_mut::<4>().0 {
                     pixel[3] = 255;
                 }
             }

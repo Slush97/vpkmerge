@@ -77,8 +77,10 @@ fn enumerates_only_stored_levels_and_ignores_trailing_bytes() {
                 panic!("RGBA8");
             };
             assert!(rgba
-                .chunks_exact(4)
-                .all(|p| p == [u8::try_from(mip).unwrap(), 47, 123, 13]));
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [u8::try_from(mip).unwrap(), 47, 123, 13]));
         }
     }
 }
@@ -120,9 +122,13 @@ fn check_bc3_alpha(a: u8, b: u8, expected: [u8; 8]) {
     let ImageData::Rgba8(rgba) = &levels[1].data else {
         panic!("RGBA8");
     };
-    let alpha: Vec<_> = rgba.chunks_exact(4).map(|p| p[3]).collect();
+    let alpha: Vec<_> = rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
     assert_eq!(alpha, expected.repeat(2));
-    assert!(rgba.chunks_exact(4).all(|p| p[..3] == [255, 255, 255]));
+    assert!(rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[..3] == [255, 255, 255]));
 }
 
 #[test]

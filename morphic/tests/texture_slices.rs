@@ -71,8 +71,10 @@ fn decodes_every_slice_and_face_at_every_mip() {
                     let tag = 10 + mip * 40 + u8::try_from(slice).unwrap() * 6 + face;
                     assert!(
                         pixels
-                            .chunks_exact(4)
-                            .all(|p| p == [tag, tag + 1, tag + 2, 255]),
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .all(|p| *p == [tag, tag + 1, tag + 2, 255]),
                         "{flags:?} mip {mip} slice {slice} face {face}"
                     );
                 }

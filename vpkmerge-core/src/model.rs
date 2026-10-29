@@ -124,6 +124,16 @@ pub struct SceneModelRequest {
     pub out: std::path::PathBuf,
     pub pose: Option<String>,
     pub material_group: Option<String>,
+    #[serde(default)]
+    pub material_overrides: Vec<SceneMaterialOverride>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SceneMaterialOverride {
+    pub mesh_index: usize,
+    pub draw_call_index: u32,
+    pub material: String,
 }
 
 /// Export scene models sequentially, opening the source and fallback archives once.
@@ -148,6 +158,15 @@ pub fn export_scene_models(
             };
             let variant = ModelVariant {
                 material_group: request.material_group.clone(),
+                draw_material_overrides: request
+                    .material_overrides
+                    .iter()
+                    .map(|entry| morphic::model::DrawMaterialOverride {
+                        mesh_index: entry.mesh_index,
+                        draw_call_index: entry.draw_call_index,
+                        material: entry.material.clone(),
+                    })
+                    .collect(),
                 ..Default::default()
             };
             export_resolved(

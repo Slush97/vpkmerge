@@ -1827,7 +1827,7 @@ struct ModelExportSceneArgs {
     vpk: PathBuf,
     #[arg(long)]
     base: Option<PathBuf>,
-    /// JSON requests: entry, out, optional pose and materialGroup.
+    /// JSON requests: entry, out, optional pose, materialGroup and materialOverrides.
     #[arg(long)]
     manifest: PathBuf,
     #[arg(long, default_value_t = 256)]
@@ -2652,6 +2652,7 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
         mesh_group: e.mesh_group.clone(),
         material_group: e.material_group.clone(),
         material_override: e.material_override.clone(),
+        ..Default::default()
     };
     let pose = e.pose.as_deref().map(parse_pose).transpose()?.map(|mut p| {
         p.require = e.require_pose;

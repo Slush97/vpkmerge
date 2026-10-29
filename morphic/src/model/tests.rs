@@ -1094,7 +1094,8 @@ fn pbr_color_alpha_and_normal_blue_survive_glb_export() {
         assert!(ao.pixels().all(|p| p[0] == 83));
         let extras: serde_json::Value =
             serde_json::from_str(mat.extras().as_ref().unwrap().get()).unwrap();
-        assert_eq!(extras["morphic"]["schema_version"], 3);
+        assert_eq!(extras["morphic"]["schema_version"], 4);
+        assert_eq!(extras["morphic"]["source_material"], "test/mat.vmat");
         assert_eq!(
             extras["morphic"]["texture_reflectivity"]["g_tColor"],
             serde_json::json!([0.125, 0.25, 0.5, 0.75])

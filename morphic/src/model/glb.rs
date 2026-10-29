@@ -1319,7 +1319,7 @@ impl Builder {
             material.alpha_cutoff = Some(json::material::AlphaCutoff(c));
         }
 
-        material.extras = self.morphic_extras(&mat, files);
+        material.extras = self.morphic_extras(&mat, files, mat_path);
         extensions
     }
 
@@ -1334,6 +1334,7 @@ impl Builder {
         &mut self,
         mat: &crate::material::Material,
         files: &dyn FileResolver,
+        mat_path: &str,
     ) -> json::Extras {
         let mut textures = serde_json::Map::new();
         let mut texture_reflectivity = serde_json::Map::new();
@@ -1384,7 +1385,8 @@ impl Builder {
             "morphic": {
                 // Bump on any wire-shape change; the viewer treats a missing
                 // version as v1 and falls back. See npr-material plan A1.
-                "schema_version": 3,
+                "schema_version": 4,
+                "source_material": mat_path,
                 "texture_reflectivity": texture_reflectivity,
                 "shader": mat.shader_name,
                 "blend_mode": blend_mode,

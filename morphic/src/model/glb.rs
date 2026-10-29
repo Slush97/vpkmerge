@@ -1939,6 +1939,9 @@ const SOURCE2_PREVIEW_TEXTURE_SLOTS: &[&str] = &[
     "g_tMasks1",
     "g_tTintMask",
     "g_tPacked1",
+    // environment_blend's world overlay: a biplanar, world-projected color
+    // modulation shared by every layer.
+    "g_tColorWorldOverlay",
 ];
 
 /// Serializes a dynamic-expression table for the `morphic` extras payload. Lives

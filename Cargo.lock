@@ -4358,6 +4358,7 @@ dependencies = [
  "image",
  "morphic",
  "quick-xml",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",

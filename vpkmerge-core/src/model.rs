@@ -136,7 +136,7 @@ pub struct SceneMaterialOverride {
     pub material: String,
 }
 
-/// Export scene models sequentially, opening the source and fallback archives once.
+/// Export scene models in parallel, opening the source and fallback archives once.
 /// A failed model is reported independently so the caller can retry partial caches.
 pub fn export_scene_models(
     vpk: &Path,
@@ -144,9 +144,11 @@ pub fn export_scene_models(
     requests: &[SceneModelRequest],
     glb_opts: GlbOptions,
 ) -> Result<Vec<Option<String>>> {
+    use rayon::prelude::*;
+
     let vpks = open_vpks(vpk, base)?;
     Ok(requests
-        .iter()
+        .par_iter()
         .map(|request| {
             let anim = AnimOptions {
                 no_anim: true,

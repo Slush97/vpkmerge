@@ -129,7 +129,10 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     cleanup_previous_dump(out_dir)?;
 
-    let info = crate::inspect(vpk_path)?;
+    // One directory parse for the whole dump: reopening a large pak per entry dominated the runtime.
+    let vpk =
+        valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+    let file_paths: Vec<String> = vpk.file_paths().cloned().collect();
     let mut entries = Vec::new();
     let mut data_sources = 0usize;
     let mut layout_xml = 0usize;
@@ -142,7 +145,7 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
     let mut raw_only = 0usize;
     let mut raw_copies = 0usize;
 
-    for entry in &info.file_paths {
+    for entry in &file_paths {
         if !should_dump_entry(entry, options) {
             entries.push(PanoramaDumpEntry {
                 entry: entry.clone(),
@@ -157,12 +160,17 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
             continue;
         }
 
-        let bytes = crate::read_vpk_entry(vpk_path, entry)
+        let bytes = vpk
+            .get_file(entry)
+            .and_then(|mut file| file.read_all())
             .with_context(|| format!("reading {entry:?} from {}", vpk_path.display()))?;
         let mut mip_paths = Vec::new();
         if options.mips && entry.ends_with(".vtex_c") {
-            mip_paths = mips::write_mips(out_dir, entry, &bytes)
-                .with_context(|| format!("exporting stored mips for {entry}"))?;
+            // A format with no stored-mip decode (BC6H) must not fail every other texture.
+            match mips::write_mips(out_dir, entry, &bytes) {
+                Ok(paths) => mip_paths = paths,
+                Err(error) => eprintln!("no stored mips for {entry}: {error:#}"),
+            }
         }
         let mut raw_path = None;
         if options.include_raw {
@@ -386,7 +394,7 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
     let report = PanoramaDumpReport {
         vpk: vpk_path.display().to_string(),
         out_dir: out_dir.display().to_string(),
-        entries_total: info.file_paths.len(),
+        entries_total: file_paths.len(),
         entries_dumped: entries
             .iter()
             .filter(|entry| entry.mode != PanoramaDumpMode::Skipped)

@@ -455,7 +455,7 @@ a caller can sanity-check orientation (`py` should be the brightest sky face).
 
 `model export` retains 0.28.0's `--mesh-group`, `--material-group` and
 `--material-override` selections alongside `--include-outline-shells`.
-Rigged and posed GLBs share schema-3 `extras.morphic` material data: packed
+Rigged and posed GLBs share schema-4 `extras.morphic` material data: packed
 opaque color-alpha metalness, normal-B roughness, constant AO and VTEX
 reflectivity. Opacity materials keep alpha as opacity. The full contract and
 prior source-channel verification are in [docs/hero-glb-material-data.md](docs/hero-glb-material-data.md).

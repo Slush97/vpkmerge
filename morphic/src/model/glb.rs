@@ -1847,6 +1847,8 @@ pub(super) fn metal_only_rgba(mask: &[u8]) -> Vec<u8> {
     out
 }
 
+const MAX_METAL_ROUGH_PIXELS: u64 = 8192 * 8192;
+
 /// glTF metallic-roughness texture: G = roughness (from the normal texture's
 /// BLUE channel; Source 2 `g_tNormalRoughness` packs roughness in B while the
 /// alpha is a constant ~1.0 placeholder, so reading alpha yielded fully-rough
@@ -1854,7 +1856,15 @@ pub(super) fn metal_only_rgba(mask: &[u8]) -> Vec<u8> {
 /// nearest-neighbor resampled to the maximum source width and height; 0
 /// without a mask). Roughness is upsampled when the metalness image is larger.
 fn metal_rough_dims(w: u32, h: u32, metalness: Option<&(u32, u32, Vec<u8>)>) -> (u32, u32) {
-    metalness.map_or((w, h), |&(mw, mh, _)| (w.max(mw), h.max(mh)))
+    metalness.map_or((w, h), |&(mw, mh, _)| {
+        let (ow, oh) = (w.max(mw), h.max(mh));
+        // Mismatched strips (65535x1 and 1x65535) would otherwise ask for 17 GB.
+        if u64::from(ow) * u64::from(oh) > MAX_METAL_ROUGH_PIXELS {
+            (w, h)
+        } else {
+            (ow, oh)
+        }
+    })
 }
 
 pub(super) fn metal_rough_rgba(

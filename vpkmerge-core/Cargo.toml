@@ -30,6 +30,8 @@ quick-xml = "0.39"
 # Rust soul-container import prep reads user GLB files directly, replacing the
 # Blender-only normalization/material extraction stage for compiler source trees.
 gltf = { version = "1", features = ["names"] }
+# `model export-scene` exports its independent models in parallel (morphic already pulls it in).
+rayon = "1"
 
 [dev-dependencies]
 # Examples only: load externally-composited PNG overlays (e.g. pngover.rs) and

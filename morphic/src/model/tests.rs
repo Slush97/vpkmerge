@@ -542,6 +542,7 @@ fn synthetic_model() -> Model {
             material: "test/mat.vmat".to_owned(),
             vertex_count: 3,
             indices: vec![0, 1, 2],
+            tint: None,
         }],
         min_bounds: [0.0; 3],
         max_bounds: [1.0, 1.0, 0.0],
@@ -722,6 +723,92 @@ fn glb_textured_embeds_resolved_images() {
     assert!(mat.normal_texture().is_some(), "normal texture wired");
 }
 
+#[test]
+fn authored_shells_require_opt_in_and_keep_primitive_identity() {
+    struct MissingFiles;
+    impl super::FileResolver for MissingFiles {
+        fn resolve(&self, _: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
+    let mut model = synthetic_model();
+    let mut named_part = model.meshes[0].clone();
+    named_part.name = "bodyoutline".into();
+    model.meshes.push(named_part);
+    let mut named_material = model.meshes[0].primitives[0].clone();
+    named_material.material = "test/border_jitter.vmat".into();
+    model.meshes[0].primitives.push(named_material);
+    let default =
+        super::to_glb_textured(&model, &MissingFiles, super::GlbOptions::default()).unwrap();
+    let old = gltf::Gltf::from_slice(&default).unwrap();
+    assert_eq!(old.meshes().count(), 1);
+    assert_eq!(old.meshes().next().unwrap().primitives().count(), 1);
+    let opted = super::to_glb_textured(
+        &model,
+        &MissingFiles,
+        super::GlbOptions {
+            include_outline_shells: true,
+            ..super::GlbOptions::default()
+        },
+    )
+    .unwrap();
+    let doc = gltf::Gltf::from_slice(&opted).unwrap();
+    assert_eq!(doc.meshes().count(), 2);
+    assert_eq!(doc.skins().count(), 1);
+    let length = u32::from_le_bytes(opted[12..16].try_into().unwrap()) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&opted[20..20 + length]).unwrap();
+    let meshes = json["meshes"].as_array().unwrap();
+    assert!(meshes[0]["primitives"][0]["extras"].is_null());
+    for (mesh, primitive) in [(0, 1), (1, 0)] {
+        assert_eq!(
+            meshes[mesh]["primitives"][primitive]["extras"]["morphic_shell"]["role"],
+            "authored_shell"
+        );
+        assert_eq!(
+            meshes[mesh]["primitives"][primitive]["extras"]["morphic_shell"]["version"],
+            1
+        );
+    }
+}
+
+/// A draw call's own tint rides the primitive as `morphic_tint`, next to the shell
+/// marker; untinted primitives keep no extras.
+#[test]
+fn draw_call_tint_rides_primitive_extras() {
+    struct MissingFiles;
+    impl super::FileResolver for MissingFiles {
+        fn resolve(&self, _: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
+    let mut model = synthetic_model();
+    let mut tinted = model.meshes[0].primitives[0].clone();
+    tinted.tint = Some([0.25, 0.03125, 0.5, 0.75]);
+    tinted.material = "test/border_jitter.vmat".into();
+    model.meshes[0].primitives.push(tinted);
+    let glb = super::to_glb_textured(
+        &model,
+        &MissingFiles,
+        super::GlbOptions {
+            include_outline_shells: true,
+            ..super::GlbOptions::default()
+        },
+    )
+    .unwrap();
+    let length = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + length]).unwrap();
+    let primitives = json["meshes"][0]["primitives"].as_array().unwrap();
+    assert!(primitives[0]["extras"].is_null());
+    assert_eq!(
+        primitives[1]["extras"]["morphic_tint"],
+        serde_json::json!([0.25, 0.03125, 0.5, 0.75])
+    );
+    assert_eq!(
+        primitives[1]["extras"]["morphic_shell"]["role"],
+        "authored_shell"
+    );
+}
+
 /// The textured path emits the `morphic` extras payload (NPR shader params +
 /// embedded mask textures) and rides the overbright self-illum scale on
 /// `KHR_materials_emissive_strength` via the serialized-JSON injection pass.
@@ -865,6 +952,7 @@ fn materials_per_chunk_scales_with_the_cap() {
     use super::glb::{materials_per_chunk, GlbOptions};
     let cap = |edge| GlbOptions {
         max_texture_edge: Some(edge),
+        ..GlbOptions::default()
     };
     assert_eq!(materials_per_chunk(GlbOptions::default()), 1);
     assert_eq!(materials_per_chunk(cap(4096)), 1);
@@ -892,6 +980,205 @@ fn rough_metal_rgba_sources_roughness_from_red_channel() {
         orm.as_chunks::<4>().0.iter().all(|px| px[2] == 0),
         "no mask: B = 0"
     );
+}
+
+struct MaterialDataResolver(std::collections::BTreeMap<String, Vec<u8>>);
+
+impl super::FileResolver for MaterialDataResolver {
+    fn resolve(&self, path: &str) -> Option<Vec<u8>> {
+        self.0.get(path).cloned()
+    }
+}
+
+#[allow(clippy::float_cmp)] // Header values must survive bit-exactly.
+fn material_data_glb(
+    shader: &str,
+    flag: Option<&str>,
+    color_size: u32,
+    normal_size: u32,
+) -> gltf::Gltf {
+    use crate::resource::{build_resource_with_tail, Resource};
+    let textures = [
+        ("g_tColor", "color"),
+        ("g_tNormal", "normal"),
+        ("g_tRoughness", "rough"),
+        ("g_tAmbientOcclusion", "ao"),
+    ];
+    let named_value = |name: &str, key: &str, value: Value| {
+        Value::Object(vec![
+            ("m_name".into(), Value::String(name.into())),
+            (key.into(), value),
+        ])
+    };
+    let vmat = Value::Object(vec![
+        ("m_shaderName".into(), Value::String(shader.into())),
+        (
+            "m_textureParams".into(),
+            Value::Array(
+                textures
+                    .iter()
+                    .map(|(slot, path)| {
+                        named_value(slot, "m_pValue", Value::String(format!("{path}.vtex")))
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "m_intParams".into(),
+            Value::Array(
+                flag.into_iter()
+                    .map(|flag| named_value(flag, "m_nValue", Value::Int(1)))
+                    .collect(),
+            ),
+        ),
+    ]);
+    let data = kv3::encode(&vmat, &kv3::Format([0; 16]));
+    let mut files = std::collections::BTreeMap::new();
+    files.insert(
+        "test/mat.vmat_c".into(),
+        build_resource_with_tail(&[(*b"DATA", &data)], &[], 1).unwrap(),
+    );
+    for (name, size, pixel) in [
+        ("color", color_size, [10, 20, 30, 79]),
+        // This looks like a pure normal to the probe, but pbr.vfx still reads B.
+        ("normal", normal_size, [128, 128, 255, 17]),
+        ("rough", 4, [33, 44, 55, 66]),
+        ("ao", 4, [83, 83, 83, 255]),
+    ] {
+        let image = image::RgbaImage::from_fn(size, size, |x, _| {
+            let mut p = pixel;
+            if name == "color" && x % 2 == 1 {
+                p[3] = 201;
+            }
+            if name == "normal" && x % 2 == 1 {
+                p[2] = 248;
+            }
+            image::Rgba(p)
+        });
+        let image = crate::Image {
+            width: size,
+            height: size,
+            data: crate::ImageData::Rgba8(image.into_raw()),
+        };
+        let texture =
+            crate::encode_vtex_png_rgba8888(&image, crate::TextureFlags::empty()).unwrap();
+        let resource = Resource::parse(&texture).unwrap();
+        let mut header = resource.data_block().unwrap().to_vec();
+        for (i, value) in [0.125f32, 0.25, 0.5, 0.75].iter().enumerate() {
+            header[4 + i * 4..8 + i * 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let tail = &texture[(resource.data_block_meta().unwrap().offset
+            + resource.data_block_meta().unwrap().size) as usize..];
+        let texture = build_resource_with_tail(&[(*b"DATA", &header)], tail, 1).unwrap();
+        assert_eq!(
+            crate::inspect(&texture).unwrap().reflectivity,
+            [0.125, 0.25, 0.5, 0.75]
+        );
+        files.insert(format!("{name}.vtex_c"), texture);
+    }
+    let bytes = super::to_glb_textured(
+        &synthetic_model(),
+        &MaterialDataResolver(files),
+        super::GlbOptions::default(),
+    )
+    .unwrap();
+    gltf::Gltf::from_slice(&bytes).unwrap()
+}
+
+fn embedded_image(g: &gltf::Gltf, texture: &gltf::Texture<'_>) -> image::RgbaImage {
+    let gltf::image::Source::View { view, .. } = texture.source().source() else {
+        panic!("expected embedded image");
+    };
+    image::load_from_memory(&g.blob.as_ref().unwrap()[view.offset()..view.offset() + view.length()])
+        .unwrap()
+        .to_rgba8()
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Exact serialized factors.
+fn pbr_color_alpha_and_normal_blue_survive_glb_export() {
+    // Both constant-sized normal maps and differing source resolutions matter.
+    for (color_size, normal_size) in [(8, 8), (8, 4), (4, 8)] {
+        let g = material_data_glb("pbr.vfx", None, color_size, normal_size);
+        let mat = g.materials().next().unwrap();
+        let pbr = mat.pbr_metallic_roughness();
+        assert_eq!(pbr.metallic_factor(), 1.0);
+        assert_eq!(pbr.roughness_factor(), 1.0);
+        let base = embedded_image(&g, &pbr.base_color_texture().unwrap().texture());
+        assert!(base.pixels().all(|p| p[3] == 255));
+        let orm = embedded_image(&g, &pbr.metallic_roughness_texture().unwrap().texture());
+        let size = color_size.max(normal_size);
+        assert_eq!(orm.dimensions(), (size, size));
+        for (x, _, p) in orm.enumerate_pixels() {
+            assert_eq!(
+                p[1],
+                if (x * normal_size / size) % 2 == 0 {
+                    255
+                } else {
+                    248
+                },
+                "normal B wins over separate roughness R=33"
+            );
+            assert_eq!(
+                p[2],
+                if (x * color_size / size) % 2 == 0 {
+                    79
+                } else {
+                    201
+                }
+            );
+        }
+        let ao = embedded_image(&g, &mat.occlusion_texture().unwrap().texture());
+        assert_eq!(ao.dimensions(), (4, 4));
+        assert!(ao.pixels().all(|p| p[0] == 83));
+        let extras: serde_json::Value =
+            serde_json::from_str(mat.extras().as_ref().unwrap().get()).unwrap();
+        assert_eq!(extras["morphic"]["schema_version"], 4);
+        assert_eq!(extras["morphic"]["source_material"], "test/mat.vmat");
+        assert_eq!(
+            extras["morphic"]["texture_reflectivity"]["g_tColor"],
+            serde_json::json!([0.125, 0.25, 0.5, 0.75])
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Exact serialized factors.
+fn pbr_opacity_flags_keep_alpha_out_of_metalness() {
+    for flag in [
+        "F_ALPHA_TEST",
+        "F_TRANSLUCENT",
+        "F_ADVANCED_TRANSLUCENCY",
+        "F_ADDITIVE_BLEND",
+    ] {
+        let g = material_data_glb("pbr.vfx", Some(flag), 8, 8);
+        let mat = g.materials().next().unwrap();
+        assert_eq!(
+            mat.alpha_mode(),
+            if flag == "F_ALPHA_TEST" {
+                gltf::material::AlphaMode::Mask
+            } else {
+                gltf::material::AlphaMode::Blend
+            }
+        );
+        let pbr = mat.pbr_metallic_roughness();
+        assert_eq!(pbr.metallic_factor(), 0.0);
+        let base = embedded_image(&g, &pbr.base_color_texture().unwrap().texture());
+        assert_eq!(base.get_pixel(0, 0)[3], 79);
+        assert_eq!(base.get_pixel(1, 0)[3], 201);
+        let orm = embedded_image(&g, &pbr.metallic_roughness_texture().unwrap().texture());
+        assert!(orm.pixels().all(|p| matches!(p[1], 248 | 255) && p[2] == 0));
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Exact serialized factors.
+fn other_shaders_keep_standalone_roughness_and_ignore_color_alpha() {
+    let g = material_data_glb("other.vfx", None, 8, 8);
+    let pbr = g.materials().next().unwrap().pbr_metallic_roughness();
+    assert_eq!(pbr.metallic_factor(), 0.0);
+    let orm = embedded_image(&g, &pbr.metallic_roughness_texture().unwrap().texture());
+    assert!(orm.pixels().all(|p| p[1] == 33 && p[2] == 0));
 }
 
 /// [`super::glb::inject_material_extensions`] lands each extension object on
@@ -1080,6 +1367,7 @@ mod pose_bake {
                 material: "body".into(),
                 vertex_count: vb.element_count,
                 indices: vec![0],
+                tint: None,
             }],
             vertex_buffers: vec![vb],
             min_bounds: [0.0; 3],

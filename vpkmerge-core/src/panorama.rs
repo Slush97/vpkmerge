@@ -5,6 +5,7 @@
 //! than relying on a lossy decompiler pass.
 
 mod layout;
+mod mips;
 
 use anyhow::{bail, Context, Result};
 #[cfg(test)]
@@ -24,6 +25,8 @@ pub struct PanoramaDumpOptions {
     pub include_all: bool,
     /// Also copy the exact compiled/raw entry bytes under `_raw/<entry>`.
     pub include_raw: bool,
+    /// Export every stored texture mip without preview resizing or conversions.
+    pub mips: bool,
     /// Optional extra path prefixes. If non-empty, entries must match at least
     /// one prefix after `include_all` / `panorama/` filtering.
     pub prefixes: Vec<String>,
@@ -33,6 +36,8 @@ pub struct PanoramaDumpOptions {
 pub struct PanoramaDumpEntry {
     pub entry: String,
     pub mode: PanoramaDumpMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mip_paths: Vec<String>,
     pub raw_path: Option<String>,
     pub source_path: Option<String>,
     pub raw_size: usize,
@@ -142,6 +147,7 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
             entries.push(PanoramaDumpEntry {
                 entry: entry.clone(),
                 mode: PanoramaDumpMode::Skipped,
+                mip_paths: Vec::new(),
                 raw_path: None,
                 source_path: None,
                 raw_size: 0,
@@ -153,6 +159,11 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
 
         let bytes = crate::read_vpk_entry(vpk_path, entry)
             .with_context(|| format!("reading {entry:?} from {}", vpk_path.display()))?;
+        let mut mip_paths = Vec::new();
+        if options.mips && entry.ends_with(".vtex_c") {
+            mip_paths = mips::write_mips(out_dir, entry, &bytes)
+                .with_context(|| format!("exporting stored mips for {entry}"))?;
+        }
         let mut raw_path = None;
         if options.include_raw {
             let raw_dest = safe_entry_path(&out_dir.join("_raw"), entry)?;
@@ -362,6 +373,7 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
         entries.push(PanoramaDumpEntry {
             entry: entry.clone(),
             mode,
+            mip_paths,
             raw_path,
             source_path,
             raw_size: bytes.len(),
@@ -674,10 +686,16 @@ fn cleanup_previous_dump(out_dir: &Path) -> Result<()> {
         .with_context(|| format!("parsing previous manifest {}", manifest_path.display()))?;
     if let Some(entries) = manifest.get("entries").and_then(JsonValue::as_array) {
         for entry in entries {
-            for key in ["raw_path", "source_path"] {
-                let Some(path) = entry.get(key).and_then(JsonValue::as_str) else {
-                    continue;
-                };
+            let mip_paths = entry
+                .get("mip_paths")
+                .and_then(JsonValue::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(JsonValue::as_str);
+            let paths = ["raw_path", "source_path"]
+                .into_iter()
+                .filter_map(|key| entry.get(key).and_then(JsonValue::as_str));
+            for path in paths.chain(mip_paths) {
                 let target = safe_entry_path(out_dir, path)?;
                 if target.is_file() {
                     std::fs::remove_file(&target).with_context(|| {
@@ -1111,6 +1129,7 @@ mod tests {
             entries: vec![PanoramaDumpEntry {
                 entry: "panorama/scripts/example.vjs_c".to_string(),
                 mode: PanoramaDumpMode::DataSource,
+                mip_paths: Vec::new(),
                 raw_path: Some("_raw/panorama/scripts/example.vjs_c".to_string()),
                 source_path: Some("panorama/scripts/example.vjs".to_string()),
                 raw_size: 1,
@@ -1168,6 +1187,7 @@ mod tests {
             entries: vec![PanoramaDumpEntry {
                 entry: "panorama/styles/example.vcss_c".to_string(),
                 mode: PanoramaDumpMode::DataSource,
+                mip_paths: Vec::new(),
                 raw_path: Some("_raw/panorama/styles/example.vcss_c".to_string()),
                 source_path: Some("panorama/styles/example.vcss".to_string()),
                 raw_size: raw.len(),
@@ -1370,6 +1390,7 @@ mod tests {
             entries: vec![PanoramaDumpEntry {
                 entry: entry.to_string(),
                 mode,
+                mip_paths: Vec::new(),
                 raw_path: Some(raw_path.to_string()),
                 source_path: Some(source_path.to_string()),
                 raw_size: 1,

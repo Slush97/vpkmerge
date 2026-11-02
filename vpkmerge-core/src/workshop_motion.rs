@@ -82,8 +82,9 @@ pub fn export_motions(
             morphic::model::decode_nm_skeleton(&resource(&compiled(&clip.skeleton_ref))?)?;
         let mut animation =
             morphic::model::nm_clip_to_clip(&clip, &skeleton, &model.skeleton, name);
+        let rig_bones = animated_bone_count(model.skeleton.bones.iter().map(|b| b.name.as_str()));
         ensure!(
-            motion_matches_rig(animation.tracks.len(), clip.tracks.len(), model.skeleton.bones.len()),
+            motion_matches_rig(animation.tracks.len(), clip.tracks.len(), rig_bones),
             "Motion does not match the selected hero's rig: {} of {} source tracks matched ({} model bones)",
             animation.tracks.len(), clip.tracks.len(), model.skeleton.bones.len()
         );
@@ -107,6 +108,15 @@ fn compiled(path: &str) -> String {
 // Compare the shared tracks against the smaller rig rather than penalizing extras.
 fn motion_matches_rig(matched: usize, source: usize, target: usize) -> bool {
     matched >= 2 && matched * 2 >= source.min(target)
+}
+
+// `$cloth_*` bones are posed by the cloth solver, never by motion clips, so a
+// cloth-heavy mod rig would otherwise fall under the match bar.
+fn animated_bone_count<'a>(names: impl IntoIterator<Item = &'a str>) -> usize {
+    names
+        .into_iter()
+        .filter(|name| !name.starts_with("$cloth_"))
+        .count()
 }
 
 fn strip_root_translation(animation: &mut morphic::model::Clip, root: Option<usize>) {
@@ -161,7 +171,7 @@ fn embedded_clips(
 
 #[cfg(test)]
 mod tests {
-    use super::{motion_matches_rig, strip_root_translation};
+    use super::{animated_bone_count, motion_matches_rig, strip_root_translation};
     use morphic::model::{BoneTrack, Clip, Quat, Vec3};
 
     #[test]
@@ -205,5 +215,15 @@ mod tests {
         assert!(motion_matches_rig(104, 167, 167));
         assert!(!motion_matches_rig(2, 80, 250));
         assert!(!motion_matches_rig(0, 0, 0));
+    }
+
+    #[test]
+    fn cloth_bones_do_not_count_against_the_target_rig() {
+        let cloth: Vec<String> = (0..180).map(|i| format!("$cloth_{i}")).collect();
+        let body: Vec<String> = (0..60).map(|i| format!("bone_{i}")).collect();
+        let rig = animated_bone_count(cloth.iter().chain(&body).map(String::as_str));
+        assert_eq!(rig, 60);
+        assert!(!motion_matches_rig(58, 118, 240));
+        assert!(motion_matches_rig(58, 118, rig));
     }
 }

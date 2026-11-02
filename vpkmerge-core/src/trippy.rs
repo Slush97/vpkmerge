@@ -395,12 +395,11 @@ struct TrippyTarget {
     placeholder: bool,
 }
 
-pub fn texture_dimensions(vpk: &Path, base: Option<&Path>, entry: &str) -> Result<(u32, u32)> {
+pub fn texture_info(vpk: &Path, base: Option<&Path>, entry: &str) -> Result<morphic::TextureInfo> {
     let vpks = open_vpks(vpk, base)?;
     let bytes =
         read_entry(&vpks, &compiled_resource_path(entry)).context("Reading texture header")?;
-    let info = morphic::inspect(&bytes)?;
-    Ok((u32::from(info.width), u32::from(info.height)))
+    Ok(morphic::inspect(&bytes)?)
 }
 
 /// Paint one material with an isolated texture so another part sharing its source stays unchanged.

@@ -98,6 +98,9 @@ enum Command {
     /// Decode a 2D texture to linear Radiance HDR without clipping bright pixels.
     TextureHdr(TextureHdrCmd),
 
+    /// Export all volume slices to a VTV1 RGBA pixel buffer, preserving data channels.
+    TextureVolume(TextureVolumeCmd),
+
     /// Recolor a hero's full ability VFX (particles + color textures + baked
     /// vertex colors) to one hue and pack it into a single addon VPK. The
     /// one-call bridge for a mod manager: composes all three recolor mechanisms
@@ -223,6 +226,7 @@ enum PanoramaAction {
 }
 
 #[derive(Args)]
+#[allow(clippy::struct_excessive_bools)]
 struct PanoramaDumpArgs {
     /// VPK to dump, e.g. a HUD mod `pak02_dir.vpk`.
     #[arg(long, value_name = "VPK")]
@@ -244,6 +248,10 @@ struct PanoramaDumpArgs {
     /// Do not write `_raw/<entry>` compiled/raw copies.
     #[arg(long)]
     no_raw: bool,
+
+    /// Also export every stored texture mip as RGBA PNG with a .mips.json sidecar.
+    #[arg(long)]
+    mips: bool,
 
     /// Emit the full report JSON to stdout instead of the short summary.
     #[arg(long)]
@@ -840,13 +848,19 @@ impl From<GlowArg> for SoulGlow {
 
 #[derive(Args)]
 struct SoundeventsCmd {
-    /// Path to a `.vsndevts_c` file, or (with --from-vpk) an entry path inside a VPK.
+    /// Compiled resource with KV3 DATA, such as `.vsndevts_c` or `.vpcf_c`.
+    /// With --from-vpk, INPUT is an entry path inside the VPK.
     input: PathBuf,
 
     /// Read INPUT as an entry path inside this VPK instead of a file on disk
     /// (e.g. `--from-vpk pak01_dir.vpk soundevents/hero/gigawatt.vsndevts_c`).
     #[arg(long, value_name = "VPK")]
     from_vpk: Option<PathBuf>,
+
+    /// Wrap JSON as {"format":{"name":"vpcf61","guid":"..."},"data":...}.
+    /// Name is null for unknown GUIDs. DATA is unchanged; no upgrades are applied.
+    #[arg(long, conflicts_with_all = ["encode", "encode_vpk"])]
+    with_format: bool,
 
     /// After applying edits, re-encode (uncompressed v4) to this loose file.
     #[arg(long, value_name = "FILE")]
@@ -938,6 +952,18 @@ struct CubemapCmd {
     /// Directory to write the six face files into (created if missing).
     #[arg(long = "out-dir", value_name = "DIR")]
     out_dir: PathBuf,
+    /// Cube index in a cubemap array, defaults to the first cube.
+    #[arg(long, default_value_t = 0)]
+    slice: u16,
+}
+
+#[derive(Args)]
+struct TextureVolumeCmd {
+    input: PathBuf,
+    #[arg(long)]
+    from_vpk: Option<PathBuf>,
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Args)]
@@ -1536,6 +1562,9 @@ enum ModelAction {
     /// Export a model entry to a textured binary glTF (`.glb`).
     Export(ModelExportArgs),
 
+    /// Export a JSON array of static scene models, sharing open VPK directories.
+    ExportScene(ModelExportSceneArgs),
+
     /// Edit a model and pack the result into an addon VPK. Reshape existing
     /// geometry (vertex displacement via `--scale`/`--translate` or a Blender
     /// `--from-glb`), remove a part by material (`--remove-material`), or replace a
@@ -1793,6 +1822,19 @@ struct ModelRecolorArgs {
 }
 
 #[derive(Args)]
+struct ModelExportSceneArgs {
+    #[arg(long)]
+    vpk: PathBuf,
+    #[arg(long)]
+    base: Option<PathBuf>,
+    /// JSON requests: entry, out, optional pose, materialGroup and materialOverrides.
+    #[arg(long)]
+    manifest: PathBuf,
+    #[arg(long, default_value_t = 256)]
+    max_texture: u32,
+}
+
+#[derive(Args)]
 struct ModelExportArgs {
     /// Authored body group to preview (for example `inflated`). Does not modify the VPK.
     #[arg(long, value_name = "NAME")]
@@ -1865,6 +1907,11 @@ struct ModelExportArgs {
     /// preview: smaller `.glb`, faster export and load).
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(16..))]
     max_texture: Option<u32>,
+
+    /// Preserve authored outline/jitter meshes, marked with `morphic_shell` extras.
+    /// Requires a Source 2-aware renderer; ordinary glTF viewers may show opaque hulls.
+    #[arg(long)]
+    include_outline_shells: bool,
 
     /// Output `.glb` path.
     #[arg(long, value_name = "FILE")]
@@ -2082,15 +2129,23 @@ fn main() -> Result<()> {
         Some(Command::Soundevents(args)) => run_soundevents(args),
         Some(Command::Texture(args)) => run_texture(args),
         Some(Command::TextureInfo(args)) => {
-            let (width, height) = vpkmerge_core::trippy::texture_dimensions(
-                &args.vpk,
-                args.base.as_deref(),
-                &args.entry,
-            )?;
-            println!("{{\"width\":{width},\"height\":{height}}}");
+            let info =
+                vpkmerge_core::trippy::texture_info(&args.vpk, args.base.as_deref(), &args.entry)?;
+            println!(
+                "{{\"width\":{},\"height\":{},\"depth\":{},\"format\":\"{}\"}}",
+                info.width,
+                info.height,
+                info.depth,
+                info.format.name()
+            );
             Ok(())
         }
         Some(Command::Cubemap(args)) => run_cubemap(&args),
+        Some(Command::TextureVolume(args)) => vpkmerge_core::cubemap::export_texture_volume(
+            &args.input,
+            args.from_vpk.as_deref(),
+            &args.out,
+        ),
         Some(Command::TextureHdr(args)) => vpkmerge_core::cubemap::export_texture_hdr(
             &args.input,
             args.from_vpk.as_deref(),
@@ -2147,6 +2202,22 @@ fn parse_pose(spec: &str) -> Result<PoseSelection> {
 fn run_model(args: ModelCmd) -> Result<()> {
     match args.action {
         Some(ModelAction::Export(e)) => return run_model_export(&e),
+        Some(ModelAction::ExportScene(e)) => {
+            let requests: Vec<vpkmerge_core::model::SceneModelRequest> =
+                serde_json::from_slice(&std::fs::read(&e.manifest)?)?;
+            let failures = vpkmerge_core::model::export_scene_models(
+                &e.vpk,
+                e.base.as_deref(),
+                &requests,
+                GlbOptions {
+                    max_texture_edge: Some(e.max_texture),
+                    include_outline_shells: false,
+                },
+            )?;
+            println!("{}", serde_json::to_string(&failures)?);
+            return Ok(());
+        }
+
         Some(ModelAction::Edit(e)) => return run_model_edit(e),
         Some(ModelAction::Recolor(e)) => return run_model_recolor(&e),
         Some(ModelAction::Mask(m)) => return run_model_mask(&m),
@@ -2584,6 +2655,7 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
         mesh_group: e.mesh_group.clone(),
         material_group: e.material_group.clone(),
         material_override: e.material_override.clone(),
+        ..Default::default()
     };
     let pose = e.pose.as_deref().map(parse_pose).transpose()?.map(|mut p| {
         p.require = e.require_pose;
@@ -2596,6 +2668,7 @@ fn run_model_export(e: &ModelExportArgs) -> Result<()> {
     };
     let glb = GlbOptions {
         max_texture_edge: e.max_texture,
+        include_outline_shells: e.include_outline_shells,
     };
     match (&e.entry, &e.hero) {
         (Some(entry), _) => export_model(
@@ -3454,6 +3527,7 @@ fn run_soundevents(args: SoundeventsCmd) -> Result<()> {
         vpk_entry,
         swap_vsnd,
         set,
+        with_format,
     } = args;
 
     let label = match &from_vpk {
@@ -3543,7 +3617,14 @@ fn run_soundevents(args: SoundeventsCmd) -> Result<()> {
             );
         }
     } else {
-        let json = serde_json::to_string_pretty(&se.to_json()).context("serializing JSON")?;
+        let data = se.to_json();
+        let output = if with_format {
+            let format = se.format()?;
+            serde_json::json!({"format": {"name": format.name(), "guid": format.guid()}, "data": data})
+        } else {
+            data
+        };
+        let json = serde_json::to_string_pretty(&output).context("serializing JSON")?;
         println!("{json}");
     }
     Ok(())
@@ -3697,8 +3778,12 @@ fn run_cubemap(args: &CubemapCmd) -> Result<()> {
         Some(vpk) => format!("{} @ {}", args.input.display(), vpk.display()),
         None => args.input.display().to_string(),
     };
-    let reports =
-        vpkmerge_core::export_cubemap_hdr(&args.input, args.from_vpk.as_deref(), &args.out_dir)?;
+    let reports = vpkmerge_core::export_cubemap_hdr_at(
+        &args.input,
+        args.from_vpk.as_deref(),
+        &args.out_dir,
+        args.slice,
+    )?;
     eprintln!("{label}: {} faces decoded at mip 0", reports.len());
     for r in &reports {
         eprintln!(
@@ -3991,6 +4076,7 @@ fn run_panorama_dump(args: &PanoramaDumpArgs) -> Result<()> {
     let options = PanoramaDumpOptions {
         include_all: !args.panorama_only,
         include_raw: !args.no_raw,
+        mips: args.mips,
         prefixes: args.prefix.clone(),
     };
     let report = vpkmerge_core::dump_panorama_workspace(&args.vpk, &args.out_dir, &options)?;

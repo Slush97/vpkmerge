@@ -24,6 +24,38 @@ pub fn decode_bc3(info: &TextureInfo, pixels: &[u8]) -> Result<Image, DecodeErro
     decode_to_rgba(info, pixels, BC3_BLOCK_BYTES, bcdec_rs::bc3)
 }
 
+/// Raw export follows VRF's `TinyBCSharp` BC3 alpha interpolation. Keep the
+/// preview decoder unchanged, including its historical rounding.
+pub fn decode_bc3_stored(info: &TextureInfo, pixels: &[u8]) -> Result<Image, DecodeError> {
+    decode_to_rgba(info, pixels, BC3_BLOCK_BYTES, bc3_stored_block)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn bc3_stored_block(block: &[u8], rgba: &mut [u8], pitch: usize) {
+    bcdec_rs::bc3(block, rgba, pitch);
+    let a = u32::from(block[0]);
+    let b = u32::from(block[1]);
+    let mut values = [a as u8, b as u8, 0, 0, 0, 0, 0, 255];
+    // TinyBCSharp BC4UDecoder.Scale1785 / Scale1275, also used for BC3 alpha.
+    // These fixed-point scales round to nearest, unlike bcdec's biased divide.
+    let (steps, scale, bias) = if a > b {
+        (7u8, 585, 2010)
+    } else {
+        (5u8, 819, 1893)
+    };
+    for i in 1..steps {
+        let weight = u32::from(i);
+        values[usize::from(i) + 1] =
+            ((((u32::from(steps) - weight) * a + weight * b) * scale + bias) >> 12) as u8;
+    }
+    let indices = u64::from_le_bytes(block[..8].try_into().expect("BC3 alpha block")) >> 16;
+    for y in 0..4 {
+        for x in 0..4 {
+            rgba[y * pitch + x * 4 + 3] = values[((indices >> (3 * (y * 4 + x))) & 7) as usize];
+        }
+    }
+}
+
 /// BC7: RGBA output, 16 bytes/block, 8 mode variants. By count the dominant
 /// `BCn` format in Deadlock.
 pub fn decode_bc7(info: &TextureInfo, pixels: &[u8]) -> Result<Image, DecodeError> {
@@ -247,6 +279,7 @@ mod tests {
             depth: 1,
             mip_count: 1,
             flags: TextureFlags::empty(),
+            reflectivity: [0.0; 4],
             ycocg: false,
         }
     }

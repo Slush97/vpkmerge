@@ -355,3 +355,17 @@ fn inserts_a_blob_into_a_two_blob_material() {
         "original blobs survive byte-identically"
     );
 }
+
+#[test]
+fn resource_format_survives_v5_to_v4_round_trip() {
+    let bytes = fixture();
+    let resource = morphic::resource::Resource::parse(&bytes).unwrap();
+    let original = morphic::kv3::Format::from_payload(resource.data_block().unwrap()).unwrap();
+    let value = morphic::decode_kv3_resource(&bytes).unwrap();
+    let encoded = morphic::encode_kv3_resource(&bytes, &value).unwrap();
+    let resource = morphic::resource::Resource::parse(&encoded).unwrap();
+    let round_trip = morphic::kv3::Format::from_payload(resource.data_block().unwrap()).unwrap();
+    assert_eq!(round_trip, original);
+    assert_eq!(original.name(), Some("generic"));
+    assert_eq!(original.guid(), "7412167c-06e9-4698-aff2-e63eb59037e7");
+}

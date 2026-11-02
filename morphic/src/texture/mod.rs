@@ -29,7 +29,9 @@
 pub mod decode;
 pub mod encode;
 pub mod format;
+mod stored_mips;
 mod vtex;
+pub use stored_mips::decode_stored_mips;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -61,6 +63,9 @@ pub struct TextureInfo {
     pub depth: u16,
     pub mip_count: u8,
     pub flags: TextureFlags,
+    /// Linear average color from the VTEX DATA header, including its fourth
+    /// component. Used by Source 2 color correction, not computed from a mip.
+    pub reflectivity: [f32; 4],
     /// The pixels are YCoCg-encoded (DXT5 carries Co/Cg in RGB, Y in alpha) and
     /// need an inverse transform after block decode to read as RGB. Signalled by
     /// the `Texture Compiler Version Image YCoCg Conversion` special-dependency in
@@ -167,7 +172,7 @@ pub fn parse_texture_header(data: &[u8]) -> Result<TextureInfo, DecodeError> {
     }
     let flags_raw = LittleEndian::read_u16(&data[2..4]);
     let flags = TextureFlags::from_bits_truncate(flags_raw);
-    // 4 floats of reflectivity at offset 4..20 (16 bytes), ignored for header.
+    let reflectivity = std::array::from_fn(|i| LittleEndian::read_f32(&data[4 + i * 4..8 + i * 4]));
     let width = LittleEndian::read_u16(&data[20..22]);
     let height = LittleEndian::read_u16(&data[22..24]);
     let depth = LittleEndian::read_u16(&data[24..26]);
@@ -195,6 +200,7 @@ pub fn parse_texture_header(data: &[u8]) -> Result<TextureInfo, DecodeError> {
         depth,
         mip_count,
         flags,
+        reflectivity,
         // Set from the RED2 edit-info by inspect()/decode_at(); the DATA header
         // alone can't know. Default off so DATA-only callers stay correct for the
         // common non-YCoCg case.
@@ -329,7 +335,8 @@ fn format_from_id(id: u8) -> Result<TextureFormat, DecodeError> {
         1 => TextureFormat::Dxt1,
         2 => TextureFormat::Dxt5,
         4 => TextureFormat::Rgba8888,
-        // 5..9: R16, RG1616, RGBA16161616, R16F, RG1616F
+        5 => TextureFormat::R16,
+        // 6..9: RG1616, RGBA16161616, R16F, RG1616F
         10 => TextureFormat::Rgba16161616F,
         // 11..14: R32F, RG3232F, RGB323232F, RGBA32323232F
         // 15: JPEG_RGBA8888 (not seen in Deadlock)
@@ -405,7 +412,11 @@ pub fn face_mip_byte_range(
     }
     let is_cube = info.flags.contains(TextureFlags::CUBE_TEXTURE);
     let face_count: usize = if is_cube { 6 } else { 1 };
-    if usize::from(opts.face) >= face_count || opts.mip >= info.mip_count {
+    let depth = mip_depth(info, opts.mip);
+    if usize::from(opts.face) >= face_count
+        || opts.mip >= info.mip_count
+        || usize::from(opts.slice) >= depth
+    {
         return Err(DecodeError::InvalidTarget {
             mip: opts.mip,
             slice: opts.slice,
@@ -415,13 +426,13 @@ pub fn face_mip_byte_range(
     // Mips are stored smallest-first, so mip 0 sits at the very end and mips
     // with smaller index (larger dims) live after the target mip in the file.
     // To find mip M's start from the end of the pixel-data region, skip past
-    // mips 0..M-1 (each contributing face_count faces).
+    // mips 0..M-1, including every slice and cube face in each level.
     let mut after_target = 0usize;
     for i in 0..opts.mip {
         let (mw, mh) = mip_dims(info.width, info.height, i);
         let face_size_i = face_size_bytes(info.format, mw, mh)?;
         let mip_total = face_size_i
-            .checked_mul(face_count)
+            .checked_mul(mip_layers(info, i, face_count))
             .ok_or(DecodeError::BadResource("mip total overflow"))?;
         after_target = after_target
             .checked_add(mip_total)
@@ -430,7 +441,7 @@ pub fn face_mip_byte_range(
     let (tw, th) = mip_dims(info.width, info.height, opts.mip);
     let target_face_size = face_size_bytes(info.format, tw, th)?;
     let target_mip_total = target_face_size
-        .checked_mul(face_count)
+        .checked_mul(mip_layers(info, opts.mip, face_count))
         .ok_or(DecodeError::BadResource("mip total overflow"))?;
     let needed = after_target
         .checked_add(target_mip_total)
@@ -444,8 +455,33 @@ pub fn face_mip_byte_range(
     }
     let target_end = (start + all_len) - after_target;
     let target_mip_start = target_end - target_mip_total;
-    let face_start = target_mip_start + usize::from(opts.face) * target_face_size;
+    // VRF Texture.GenerateBitmap strides between logical slices using the full
+    // stored mip size, including small block-compressed depth padding.
+    let slice_size = target_mip_total / depth;
+    let face_start = target_mip_start
+        + usize::from(opts.slice) * slice_size
+        + usize::from(opts.face) * target_face_size;
     Ok(face_start..face_start + target_face_size)
+}
+
+fn mip_depth(info: &TextureInfo, mip: u8) -> usize {
+    if info.flags.contains(TextureFlags::VOLUME_TEXTURE) {
+        usize::from(info.depth)
+            .checked_shr(u32::from(mip))
+            .unwrap_or(0)
+            .max(1)
+    } else {
+        usize::from(info.depth)
+    }
+}
+
+fn mip_layers(info: &TextureInfo, mip: u8, face_count: usize) -> usize {
+    let layers = mip_depth(info, mip) * face_count;
+    if uncompressed_bytes_per_pixel(info.format).is_none() && (2..4).contains(&layers) {
+        4
+    } else {
+        layers
+    }
 }
 
 /// Dimensions of a given mip level. Each successive mip halves both
@@ -487,7 +523,10 @@ pub(crate) fn face_size_bytes(
 fn block_bytes_per_format(fmt: TextureFormat) -> Result<usize, DecodeError> {
     Ok(match fmt {
         // Uncompressed: size computed via bytes-per-pixel instead; sentinel 0.
-        TextureFormat::Rgba8888 | TextureFormat::Bgra8888 | TextureFormat::Rgba16161616F => 0,
+        TextureFormat::Rgba8888
+        | TextureFormat::Bgra8888
+        | TextureFormat::Rgba16161616F
+        | TextureFormat::R16 => 0,
         TextureFormat::Dxt1 | TextureFormat::Ati1n => 8,
         TextureFormat::Dxt5 | TextureFormat::Ati2n | TextureFormat::Bc6h | TextureFormat::Bc7 => 16,
         // Inline-encoded formats are handled in pixel_data via is_inline_format;
@@ -504,6 +543,7 @@ fn uncompressed_bytes_per_pixel(fmt: TextureFormat) -> Option<usize> {
     match fmt {
         TextureFormat::Rgba8888 | TextureFormat::Bgra8888 => Some(4),
         TextureFormat::Rgba16161616F => Some(8),
+        TextureFormat::R16 => Some(2),
         _ => None,
     }
 }

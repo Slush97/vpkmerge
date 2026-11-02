@@ -12,6 +12,7 @@
 //! Layout and algorithms are ported from `ValveResourceFormat` (MIT); see the
 //! `reader` and `writer` submodules.
 
+mod format;
 mod legacy;
 mod patch;
 mod reader;
@@ -20,6 +21,7 @@ mod types;
 mod wire;
 mod writer;
 
+pub use format::Format;
 pub use patch::{
     insert_array_element_adding, neutralize_draw_calls, set_blob, set_bools, set_doubles,
     set_floats, set_reals, set_scalars, set_sole_blob, set_strings, set_strings_adding, Seg,
@@ -60,37 +62,6 @@ pub(crate) mod node {
     pub const ARRAY_TYPE_AUXILIARY_BUFFER: u8 = 25;
     pub const UINT32_ZERO: u8 = 26;
     pub const UINT32_ONE: u8 = 27;
-}
-
-/// The 16-byte KV3 format GUID from the payload header. It names the schema
-/// (soundevents, material, generic, ...); the engine keys on it, so a faithful
-/// re-encode must carry the original through rather than substitute a generic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Format(pub [u8; 16]);
-
-impl Format {
-    /// Read the format GUID from a binary KV3 payload (bytes 4..20, right after
-    /// the 4-byte magic). Errors if the slice is too short or not binary KV3.
-    pub fn from_payload(data: &[u8]) -> Result<Self, DecodeError> {
-        if data.len() < 20 {
-            return Err(DecodeError::Truncated {
-                offset: 0,
-                needed: 20,
-                had: data.len(),
-            });
-        }
-        let mut guid = [0u8; 16];
-        let start = if data[..4] == [0x56, 0x4b, 0x56, 0x03] {
-            20
-        } else {
-            4
-        };
-        guid.copy_from_slice(
-            data.get(start..start + 16)
-                .ok_or(DecodeError::Kv3("Truncated format GUID"))?,
-        );
-        Ok(Self(guid))
-    }
 }
 
 /// Decode a binary KV3 DATA payload into a [`Value`] tree.

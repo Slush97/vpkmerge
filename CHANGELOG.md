@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## v0.29.0
 
+Model and texture exports for Grimoire's 3D viewer: engine particles, hero materials and the Hideout scene. Contributed by @oldreceipt (#79).
+
+- `panorama dump` reads every entry from one open VPK, and `model export-scene` exports its models in parallel (#80).
+- `panorama dump --mips` skips a texture with no stored-mip decode (BC6H) instead of failing the dump. `export-scene` refuses two requests with the same output and checks `--max-texture`, and a mismatched metalness mask can no longer ask for an oversized metal-rough image (#80).
 - `soundevents --with-format` wraps JSON as `{ "format": { "name": "vpcf61", "guid": "39d3ce1d-9442-4407-9b78-8317145b1732" }, "data": ... }`. The name identifies the stored KV3 schema, resolved from its GUID using VRF's format table; unknown GUIDs have `name: null`. No upgrades are applied. Default JSON output is unchanged. The flag conflicts with `--encode` and `--encode-vpk`.
 - `morphic::kv3::Format` exposes `name()` and canonical lowercase `guid()`, and validates binary KV3 v1..=5 headers. `SoundEvents::format()` exposes the original DATA block's identifier.
 - `panorama dump --mips` exports stored LDR texture mip chains and sidecar metadata without generating levels. Existing previews and the default dump workflow are unchanged.

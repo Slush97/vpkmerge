@@ -146,6 +146,16 @@ pub fn export_scene_models(
 ) -> Result<Vec<Option<String>>> {
     use rayon::prelude::*;
 
+    // Parallel writers to one path would interleave a GLB and still report success.
+    let mut outputs = std::collections::HashSet::new();
+    for request in requests {
+        anyhow::ensure!(
+            outputs.insert(&request.out),
+            "two scene requests write {}",
+            request.out.display()
+        );
+    }
+
     let vpks = open_vpks(vpk, base)?;
     Ok(requests
         .par_iter()
@@ -1922,6 +1932,25 @@ mod tests {
     #![allow(clippy::float_cmp)]
 
     use super::*;
+
+    #[test]
+    fn scene_requests_cannot_share_an_output() {
+        let request = || SceneModelRequest {
+            entry: "models/a.vmdl_c".into(),
+            out: "same.glb".into(),
+            pose: None,
+            material_group: None,
+            material_overrides: Vec::new(),
+        };
+        let error = export_scene_models(
+            Path::new("missing.vpk"),
+            None,
+            &[request(), request()],
+            GlbOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("same.glb"), "{error:#}");
+    }
 
     #[test]
     fn core_pak_follows_a_game_base() {

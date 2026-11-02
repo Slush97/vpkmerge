@@ -1830,7 +1830,7 @@ struct ModelExportSceneArgs {
     /// JSON requests: entry, out, optional pose, materialGroup and materialOverrides.
     #[arg(long)]
     manifest: PathBuf,
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u32).range(16..))]
     max_texture: u32,
 }
 

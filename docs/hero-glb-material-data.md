@@ -1,6 +1,6 @@
 # Hero GLB material data
 
-Material `extras.morphic.schema_version` is now **3**. The texture metadata
+Material `extras.morphic.schema_version` is now **4**. The texture metadata
 reader also exposes the four VTEX header floats as `TextureInfo.reflectivity`.
 They are linear values copied from the compiled texture, not averages computed
 from exported pixels.
@@ -35,7 +35,7 @@ Emissive placeholder filtering is unchanged.
 ## Grimoire integration
 
 Update the helper binary or released helper pin, then bump
-`SOURCE2_EXTRAS_VERSION` in `src/lib/source2ExtrasVersion.ts` from **2 to 3**.
+`SOURCE2_EXTRAS_VERSION` in `src/lib/source2ExtrasVersion.ts` from **2 to 4**.
 That matches this exporter's per-material schema version.
 
 `electron/main/services/heroPoseModels.ts` incorporates that shared version in

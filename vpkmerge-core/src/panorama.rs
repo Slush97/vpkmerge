@@ -130,7 +130,8 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
     cleanup_previous_dump(out_dir)?;
 
     // One directory parse for the whole dump: reopening a large pak per entry dominated the runtime.
-    let vpk = valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
+    let vpk =
+        valve_pak::open(vpk_path).with_context(|| format!("opening {}", vpk_path.display()))?;
     let file_paths: Vec<String> = vpk.file_paths().cloned().collect();
     let mut entries = Vec::new();
     let mut data_sources = 0usize;
@@ -165,8 +166,11 @@ pub fn dump_panorama_workspace<P: AsRef<Path>, O: AsRef<Path>>(
             .with_context(|| format!("reading {entry:?} from {}", vpk_path.display()))?;
         let mut mip_paths = Vec::new();
         if options.mips && entry.ends_with(".vtex_c") {
-            mip_paths = mips::write_mips(out_dir, entry, &bytes)
-                .with_context(|| format!("exporting stored mips for {entry}"))?;
+            // A format with no stored-mip decode (BC6H) must not fail every other texture.
+            match mips::write_mips(out_dir, entry, &bytes) {
+                Ok(paths) => mip_paths = paths,
+                Err(error) => eprintln!("no stored mips for {entry}: {error:#}"),
+            }
         }
         let mut raw_path = None;
         if options.include_raw {

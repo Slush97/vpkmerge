@@ -1022,9 +1022,9 @@ pub(crate) fn paint_atlas_cell(
             for xx in 0..cell.w {
                 let sx = xx.saturating_sub(cell.gutter).min(iw.saturating_sub(1));
                 let mut s = resized.get_pixel(sx, sy).0;
-                // GLB base-color alpha is opacity, but this importer emits one
-                // opaque Source material where albedo alpha may be read as a mask.
-                s[3] = 255;
+                // GLB base-color alpha is opacity, but opaque pbr.vfx reads color
+                // alpha as metalness; 255 would make every import fully metal.
+                s[3] = 0;
                 write_atlas_pixel(px, atlas, cell.x + xx, cell.y + yy, s);
             }
         }
@@ -1033,7 +1033,7 @@ pub(crate) fn paint_atlas_cell(
             to_srgb_u8(color[0]),
             to_srgb_u8(color[1]),
             to_srgb_u8(color[2]),
-            255,
+            0,
         ];
         for yy in 0..cell.h {
             for xx in 0..cell.w {
@@ -1552,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn textured_atlas_cell_forces_opaque_alpha_and_duplicates_edge_gutter() {
+    fn atlas_cell_writes_zero_metalness_and_duplicates_edge_gutter() {
         let mut img = image::RgbaImage::new(2, 2);
         img.put_pixel(0, 0, image::Rgba([10, 20, 30, 0]));
         img.put_pixel(1, 0, image::Rgba([40, 50, 60, 64]));
@@ -1575,7 +1575,17 @@ mod tests {
             &px[top_left..top_left + 4],
             &px[inner_top_left..inner_top_left + 4]
         );
-        assert_eq!(px[top_left + 3], 255);
-        assert_eq!(px[bottom_right + 3], 255);
+        assert_eq!(px[top_left + 3], 0);
+        assert_eq!(px[bottom_right + 3], 0);
+
+        let mut flat = vec![0u8; 16 * 16 * 4];
+        paint_atlas_cell(
+            &mut flat,
+            16,
+            AtlasCell::new(4, 4, 8, 8),
+            None,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        assert_eq!(&flat[top_left..top_left + 4], &[255, 255, 255, 0]);
     }
 }

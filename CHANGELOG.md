@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.29.1
+
+Imported soul containers, urns and hats no longer come out fully metal in game (#82).
+
+### CLI (`vpkmerge` 0.29.1)
+
+- Fix: the importer filled `g_tColor` alpha with 255 and treated it as opacity, but opaque `pbr.vfx` reads that channel as metalness. It now writes 0, the shader's default. Existing imports stay metal until they are re-imported.
+
 ## v0.29.0
 
 Model and texture exports for Grimoire's 3D viewer: engine particles, hero materials and the Hideout scene. Contributed by @oldreceipt (#79).

@@ -49,6 +49,26 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
+    /// Index of the bone named `name`. An exact match wins; otherwise a bone whose
+    /// name differs only in ASCII case, when exactly one does. The engine matches
+    /// bone names without case: Kelvin's animation skeleton names `Pelvis` where his
+    /// model has `pelvis`, and he stands in game.
+    #[must_use]
+    pub fn find_bone(&self, name: &str) -> Option<usize> {
+        if let Some(index) = self.bones.iter().position(|b| b.name == name) {
+            return Some(index);
+        }
+        let mut folded = self
+            .bones
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.name.eq_ignore_ascii_case(name));
+        match (folded.next(), folded.next()) {
+            (Some((index, _)), None) => Some(index),
+            _ => None,
+        }
+    }
+
     /// Builds the skeleton from the model `DATA` KV3 tree (`m_modelSkeleton`).
     /// Returns an empty skeleton when the model carries no skeleton data.
     pub fn from_model_data(data: &Value) -> Result<Skeleton, DecodeError> {
@@ -363,5 +383,29 @@ mod remap_tests {
         // But a rigid mesh whose lane 0 is out of palette still errors.
         let bad = vec![[88u16, 0, 0, 0]];
         assert!(localize_joints(&bad, None, &remap).is_err());
+    }
+
+    #[test]
+    fn find_bone_prefers_exact_then_unique_case_fold() {
+        let bone = |name: &str| Bone {
+            name: name.to_owned(),
+            parent: None,
+            flags: 0,
+            position: Vec3::default(),
+            rotation: Quat::default(),
+            local_bind: Mat4::IDENTITY,
+            global_bind: Mat4::IDENTITY,
+            inverse_bind: Mat4::IDENTITY,
+        };
+        let kelvin = Skeleton {
+            bones: vec![bone("root_motion"), bone("pelvis")],
+        };
+        assert_eq!(kelvin.find_bone("Pelvis"), Some(1));
+        assert_eq!(kelvin.find_bone("thigh_L"), None);
+        let both = Skeleton {
+            bones: vec![bone("Pelvis"), bone("pelvis")],
+        };
+        assert_eq!(both.find_bone("pelvis"), Some(1));
+        assert_eq!(both.find_bone("PELVIS"), None, "ambiguous fold");
     }
 }

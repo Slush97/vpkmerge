@@ -152,11 +152,7 @@ fn embedded_clips(
                         .into_iter()
                         .filter_map(|mut track| {
                             let name = &donor.skeleton.bones.get(track.bone)?.name;
-                            track.bone = model
-                                .skeleton
-                                .bones
-                                .iter()
-                                .position(|bone| &bone.name == name)?;
+                            track.bone = model.skeleton.find_bone(name)?;
                             Some(track)
                         })
                         .collect();

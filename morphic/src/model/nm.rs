@@ -196,8 +196,8 @@ pub fn bake_nm_pose(
     }
     let mut by_name: HashMap<String, LocalPose> = HashMap::with_capacity(pose.bones.len());
     for (name, bp) in skeleton.bone_names.iter().zip(pose.bones.iter()) {
-        if let Some(lp) = bp {
-            by_name.insert(name.clone(), *lp);
+        if let (Some(lp), Some(bone)) = (bp, model.skeleton.find_bone(name)) {
+            by_name.insert(model.skeleton.bones[bone].name.clone(), *lp);
         }
     }
     Ok(super::pose::bake_pose_named(model, &by_name))
@@ -379,7 +379,7 @@ pub fn nm_clip_to_clip(clip: &NmClip, skel: &NmSkeleton, model: &Skeleton, name:
         let Some(bone_name) = skel.bone_names.get(i) else {
             continue;
         };
-        let Some(bone) = model.bones.iter().position(|b| &b.name == bone_name) else {
+        let Some(bone) = model.find_bone(bone_name) else {
             continue;
         };
         let s = &t.settings;

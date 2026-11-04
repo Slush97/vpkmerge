@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.29.2
+
+Animation clips match the model's bones without regard to case, as the engine does. Kelvin no longer plays his idle lying on his back. Contributed by @oldreceipt (#84).
+
+### CLI (`vpkmerge` 0.29.2)
+
+- Fix: NM clip conversion, the static NM pose bake and `workshop motions` donor clips matched bone names exactly, dropping tracks where the animation skeleton and the model differ only in case (Kelvin's `Pelvis`/`Spine_1`/`Spine_2`, Mo & Krill's rider bones and toes, Mirage's right-hand fingers and magazine, Warden's `weapon_bone_IK_target`). An exact match still wins, and a name that folds to two bones matches neither.
+- `morphic::model::Skeleton::find_bone` exposes that lookup.
+
 ## v0.29.1
 
 Imported soul containers, urns and hats no longer come out fully metal in game (#82).

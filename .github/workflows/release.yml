@@ -66,7 +66,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  asset: vpkmerge-linux-x86_64,    bin: vpkmerge,     ext: ''     }
+          # Linking on the runner pins the binary to the runner's glibc, which
+          # follows ubuntu-latest (26.04 needs 2.43 and broke Grimoire on
+          # Ubuntu 24.04 and Debian 12). zigbuild links against glibc 2.35
+          # stubs instead, so it runs on Ubuntu 22.04 and newer.
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  asset: vpkmerge-linux-x86_64,    bin: vpkmerge,     ext: '',    glibc: '2.35' }
           - { os: macos-latest,   target: aarch64-apple-darwin,      asset: vpkmerge-macos-aarch64,   bin: vpkmerge,     ext: ''     }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    asset: vpkmerge-windows-x86_64,  bin: vpkmerge,     ext: '.exe' }
     runs-on: ${{ matrix.os }}
@@ -81,8 +85,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - uses: mlugg/setup-zig@v2
+        if: matrix.glibc
+        with:
+          version: 0.17.1
+
+      - uses: taiki-e/install-action@v2
+        if: matrix.glibc
+        with:
+          tool: cargo-zigbuild@0.24.1
+
       - name: build
+        if: ${{ !matrix.glibc }}
         run: cargo build --release --locked -p vpkmerge-cli --target ${{ matrix.target }}
+
+      - name: build (glibc ${{ matrix.glibc }})
+        if: matrix.glibc
+        run: cargo zigbuild --release --locked -p vpkmerge-cli --target ${{ matrix.target }}.${{ matrix.glibc }}
+
+      - name: check glibc floor
+        if: matrix.glibc
+        run: tools/check-glibc-floor.sh "target/${{ matrix.target }}/release/${{ matrix.bin }}" "${{ matrix.glibc }}"
 
       - name: stage artifact
         shell: bash

@@ -69,6 +69,45 @@ jobs:
         # dev-only `examples/`.
         run: cargo test -p vpkmerge-core -p vpkmerge-cli --lib --bins --tests
 
+  # Builds the Linux CLI exactly like release.yml does, so a change that drags
+  # in a newer glibc symbol (or breaks the zig toolchain) fails here instead of
+  # in a published release that Grimoire users then can't launch.
+  linux-release-binary:
+    name: Linux release binary (glibc 2.35)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.1
+
+      - name: build
+        run: cargo zigbuild --release --locked -p vpkmerge-cli --target x86_64-unknown-linux-gnu.2.35
+
+      - name: check glibc floor
+        run: tools/check-glibc-floor.sh target/x86_64-unknown-linux-gnu/release/vpkmerge 2.35
+
+      - name: run on Ubuntu 22.04
+        # The loader rejects a too-new glibc symbol before main runs, so
+        # --version alone catches the break; trippy-preview is a real command
+        # that needs no game files.
+        run: |
+          docker run --rm -v "$PWD/target/x86_64-unknown-linux-gnu/release/vpkmerge:/usr/local/bin/vpkmerge:ro" ubuntu:22.04 \
+            sh -c 'vpkmerge --version && vpkmerge trippy-preview --style kaleido --frames 2 --size 64 --out /tmp/p.png'
+
   frontend:
     name: Frontend (Vite build)
     runs-on: ubuntu-latest

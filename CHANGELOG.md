@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.29.3
+
+The Linux CLI runs on glibc 2.35 and newer again (Ubuntu 22.04, Debian 12, ...). v0.29.0 through v0.29.2 needed glibc 2.43, so they failed to start anywhere older than Ubuntu 26.04 (Slush97/grimoire#567, #86).
+
+### CLI (`vpkmerge` 0.29.3)
+
+- Fix: the Linux release binary is built with `cargo zigbuild` against glibc 2.35 instead of the runner's glibc. The release and CI both fail if any symbol needs a newer glibc, and CI runs the binary on Ubuntu 22.04.
+
 ## v0.29.2
 
 Animation clips match the model's bones without regard to case, as the engine does. Kelvin no longer plays his idle lying on his back. Contributed by @oldreceipt (#84).

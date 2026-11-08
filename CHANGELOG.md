@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.30.0
+
+Parry effects for Grimoire's Door Stuck Mechanics editor. Contributed by @oldreceipt (#88).
+
+### CLI (`vpkmerge` 0.30.0)
+
+- `workshop movement --kind parry` recolours every `particles/abilities/melee/melee_parry*` system: the active parry, the catch on a successful parry, the stun on the parried attacker and the end flash. It takes `--color`, `--end-color` and `--rainbow` like dash and heavy melee. Spellbreaker's parry effects are not included.
+- `--part PART=SPEC` (repeatable) colours one part on its own. PART is `shield`, `catch` or `stun`; SPEC is `original`, `rainbow`, `#RRGGBB` or `#RRGGBB:#RRGGBB`. Unnamed parts take `--color`. An `original` part stays out of the VPK unless it carries a replaced image.
+- `--image` replaces the parry shield glyph and the new `--stun-image` replaces the icon over the parried attacker. `--brightness`, `--illuminated` and `--outline-color` apply to the parry's sprite, rope and trail renderers.
+- Dash and heavy-melee output is unchanged.
+
 ## v0.29.3
 
 The Linux CLI runs on glibc 2.35 and newer again (Ubuntu 22.04, Debian 12, ...). v0.29.0 through v0.29.2 needed glibc 2.43, so they failed to start anywhere older than Ubuntu 26.04 (Slush97/grimoire#567, #86).

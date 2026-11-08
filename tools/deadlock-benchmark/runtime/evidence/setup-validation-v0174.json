@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "runtime": "Modlock CLI/host/SDK 0.1.74 in isolated test directories; installed default and Grimoire bundle remain 0.1.17",
+  "changes": [
+    "Fixture hero precache during onStart",
+    "UI port 0 and preview port 0",
+    "Matching 0.1.74 CLI/host/SDK",
+    "Explicit launch controls recorded as artifacts"
+  ],
+  "release_evidence": {
+    "tag": "v0.1.74",
+    "assets": [
+      {
+        "name": "modlock-linux-amd64",
+        "sha256": "f5ce07f711d4b21b1438a754798b8d0598cba56d3ce4dd5284a0f93c7c430b27",
+        "github_digest": "sha256:f5ce07f711d4b21b1438a754798b8d0598cba56d3ce4dd5284a0f93c7c430b27",
+        "source": "https://github.com/paralin/modlock/releases/download/v0.1.74/modlock-linux-amd64"
+      },
+      {
+        "name": "modlock-host-windows-x64.zip",
+        "sha256": "10b640cd9f86a23b4b83055e7ec1c2d6010395734c85006101586c6419ced349",
+        "github_digest": "sha256:10b640cd9f86a23b4b83055e7ec1c2d6010395734c85006101586c6419ced349",
+        "source": "https://github.com/paralin/modlock/releases/download/v0.1.74/modlock-host-windows-x64.zip"
+      }
+    ]
+  },
+  "camera_probe": {
+    "run_id": "60c1f07bf4834cc58a76618e87dbb7c6",
+    "outcome": "completed",
+    "chase_target_visually_verified": "Abrams",
+    "free_camera_survived": true,
+    "free_camera_view_usable": false,
+    "limitation": "Fixed position intersects geometry; one actor, motion-only, shorter clip; not evidence of full-fight free-camera stability."
+  },
+  "full_fight": {
+    "run_id": "1144e43cb9d143d2a999e08368a82163",
+    "outcome": "completed",
+    "passes": [
+      "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=58 hits=26 max_drift=1284.3 game_time=95.96875 repetition=1/3",
+      "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=58 hits=26 max_drift=1284.3 game_time=139.984375 repetition=2/3",
+      "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=57 hits=26 max_drift=1284.3 game_time=184 repetition=3/3"
+    ],
+    "diagnostic_whole_capture_metrics": {
+      "frame_count": 45524,
+      "duration_seconds": 184.786156627,
+      "average_fps": 246.36044620968252,
+      "one_percent_low_fps": 57.10346727131491,
+      "one_percent_sample_count": 456,
+      "p95_frame_time_ms": 6.56081,
+      "p99_frame_time_ms": 8.43017,
+      "maximum_frame_time_ms": 1143.24
+    },
+    "after_first_20_capture_seconds": {
+      "maximum_interval_ms": 25.4867,
+      "intervals_over_33_33_ms": 0,
+      "scope": "Arbitrary diagnostic exclusion, not validated warm-up or pass alignment"
+    },
+    "server_slow_frames": [
+      "[replay-fight-probe] skipped 12 frames to repay slow ones; the slowest took 96 ms: Frame took 80 ms, 95 ms of it in host calls, the slowest Spectate at 86 ms",
+      "[replay-fight-probe] skipped 30 frames to repay slow ones; the slowest took 140 ms: Frame took 140 ms, 133 ms of it in host calls, the slowest Drive at 86 ms",
+      "[replay-fight-probe] skipped 1 frames to repay slow ones; the slowest took 8 ms: Frame took 10 ms, 0 ms of it in host calls, the slowest Log at 0 ms"
+    ],
+    "scope": "Changes combined, single launch, screenshot during capture; no before/after performance claim."
+  },
+  "native_controls": [
+    {
+      "run_id": "9bcd890be88d44ab9464602fda4180ae",
+      "outcome": "failed",
+      "reason": "Test harness read stale console signon before new process was ready; corrected in subsequent script."
+    },
+    {
+      "run_id": "f67b8228d84e4e2a99a94dc209fcd57d",
+      "outcome": "failed",
+      "reason": "Chase camera not visually verified before timeout; observation rejected. Source observer enum 3 did not suffice to establish native replay control via console commands.",
+      "capture": "Retained as diagnostics; no scored comparison."
+    }
+  ],
+  "measurement_valid": false,
+  "comparison_eligible": false,
+  "conclusion": "Updated setup runs the full reconstruction successfully, but 1284.3-unit actor drift and server stalls persist. No demonstrated stutter fix."
+}

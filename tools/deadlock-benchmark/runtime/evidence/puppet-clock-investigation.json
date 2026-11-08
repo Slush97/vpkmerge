@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "recorded_utc": "2026-11-08T05:41:25.828344+00:00",
+  "run_id": "d9fff0da4e174584a9de21ca07ab10ca",
+  "upstream_checkout": "/home/esoc/grimoire-workspace/modlock-investigation",
+  "upstream_tag": "v0.1.74",
+  "correction": "Prime paused reused puppets in onFrame; use frame.timeSeconds throughout playback. matchClock is scoreboard time.",
+  "sdk_probe_tags": [
+    "v0.1.17",
+    "v0.1.74"
+  ],
+  "sdk_probe_result": "Original repeated-pass tick error reproduced; correction passes offset and end-of-track checks.",
+  "completed_passes": [
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=59 hits=24 max_drift=0.0 max_tick_skew=0 game_time=95.96875 repetition=1/3",
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=59 hits=21 max_drift=0.0 max_tick_skew=0 game_time=139.984375 repetition=2/3",
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=58 hits=22 max_drift=0.0 max_tick_skew=0 game_time=184 repetition=3/3"
+  ],
+  "slow_updates": [
+    "[replay-fight-probe] skipped 8 frames to repay slow ones; the slowest took 73 ms: Frame took 80 ms, 73 ms of it in host calls, the slowest Spectate at 68 ms",
+    "[replay-fight-probe] skipped 27 frames to repay slow ones; the slowest took 130 ms: Frame took 130 ms, 125 ms of it in host calls, the slowest Drive at 84 ms"
+  ],
+  "client_capture_after_first_20_seconds": {
+    "frames": 43626,
+    "max_frame_ms": 18.7607,
+    "intervals_over_33ms": 0,
+    "scope": "arbitrary exclusion, not validated phase alignment"
+  },
+  "source_findings": {
+    "puppet_reset": "seek(0) does not reset private clock",
+    "host_skip_allowance_ms": 8,
+    "host_warning_aggregation_seconds": 60,
+    "measured_seconds": 30,
+    "lead_in_seconds": 5,
+    "observed_restore_seconds": 9.015625,
+    "observed_repeat_cycle_seconds": 44.015625
+  },
+  "limitations": [
+    "User still reports periodic stutter; not fixed or fully localized.",
+    "3 rejected casts each pass; observed casts vary.",
+    "Grimoire bundle not repackaged.",
+    "Unverified client/capture clock alignment."
+  ],
+  "measurement_valid": false,
+  "comparison_eligible": false
+}

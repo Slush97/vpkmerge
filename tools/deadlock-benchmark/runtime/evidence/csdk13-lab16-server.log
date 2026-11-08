@@ -1,0 +1,12 @@
+
+  modlock v0.1.17  dev particle-lab-probe
+
+  ✓ built historical-map
+  host     /home/esoc/.cache/modlock/host/v0.1.17/modlock-host.exe
+  console  /tmp/deadlock-benchmark-runtime-probe/historical-map/build/server.log
+  join     connect 127.0.0.1:27183 in a running game's console
+  … starting the server
+  ✓ particle-lab-probe started
+  ● server ready on dl_benchmark_lab_16
+  [particle-lab-probe] skipped 1 frames to repay slow ones; the slowest took 13 ms: Frame took 0 ms
+  → [redacted] joined

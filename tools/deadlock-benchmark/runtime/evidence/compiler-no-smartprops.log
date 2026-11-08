@@ -1,0 +1,5 @@
+﻿11/05 20:32:48 [RenderSystem] Creating render device for graphics adapter 0 'NVIDIA GeForce RTX 5070 Ti' [VendorId 0x10DE / DeviceId 0x2C05]: 595.71.5.0
+11/05 20:32:48 [RenderSystem] Vulkan Physical Device: NVIDIA GeForce RTX 5070 Ti
+11/05 20:32:48 [ResourceSystem] Failed loading resource "materials/tools/handle_generic_aligned_translucent.vmat_c" (ERROR_FILEOPEN: File not found)
+11/05 20:32:48 [ResourceSystem] Failed loading resource "materials/tools/handle_generic_aligned.vmat_c" (ERROR_FILEOPEN: File not found)
+11/05 20:32:48 FATAL ERROR: CAppSystemDict:Unable to load module smartprops (Dependency of ResourceCompilerSystem001), error 126

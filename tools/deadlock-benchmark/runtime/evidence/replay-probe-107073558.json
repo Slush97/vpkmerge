@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-07",
+  "source_filename": "107073558.dem",
+  "source_sha256": "bfbecd70b9e46a43c4d9a0e6dbc3a323c9d9b5ed1bf2c3e47e84dfac6c7ee116",
+  "source_identity": {
+    "sha256": "bfbecd70b9e46a43c4d9a0e6dbc3a323c9d9b5ed1bf2c3e47e84dfac6c7ee116",
+    "match_id": 0,
+    "game": "/opt/srcds/deadlock/citadel_v6698/citadel",
+    "map": "dl_midtown",
+    "game_build": 10854,
+    "parser": "s2replay",
+    "parser_revision": "ffccb7c19cf6214733cbacfad41b234e6b95637a61ae3133b6150e5c63224934",
+    "vcs_revision": "aa8bed7a353c"
+  },
+  "selection": {
+    "start_tick": 120000,
+    "measurement_start_tick": 120320,
+    "end_tick": 122240,
+    "lead_in_seconds": 5,
+    "duration_seconds": 30,
+    "anchor": [
+      430.25,
+      7725.5625,
+      644.71875
+    ],
+    "radius_units": 2500,
+    "combat_slots": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "local_damage_events": 776,
+    "local_damage": 23064,
+    "time_basis": "demo ticks; not the displayed match clock",
+    "source_sha256": "bfbecd70b9e46a43c4d9a0e6dbc3a323c9d9b5ed1bf2c3e47e84dfac6c7ee116"
+  },
+  "actor_count": 12,
+  "scheduled_hero_casts": 55,
+  "samples_attributed_by_initial_handle": 483,
+  "interpolated_ticks_per_actor": {
+    "1": 4,
+    "2": 4,
+    "3": 4,
+    "4": 4,
+    "5": 4,
+    "6": 4,
+    "7": 4,
+    "8": 4,
+    "9": 4,
+    "10": 4,
+    "11": 4,
+    "12": 4
+  },
+  "runtime": {
+    "client_version": 6860,
+    "source_revision": 11211860,
+    "modlock_version": "0.1.17",
+    "map": "dl_midtown",
+    "mode": "adapt-current-build",
+    "camera": "native chase of source slot 6",
+    "server_setup": "local server on same machine as client"
+  },
+  "reference_playback": {
+    "completed": false,
+    "reason": "mismatched serializers; CSVCMsg_ClassInfo disconnect during sign-on"
+  },
+  "strict_restore": {
+    "completed": false,
+    "reason": "replay ability slot contains another definition"
+  },
+  "roaming_camera_probes": {
+    "completed": false,
+    "crash": "0xc0000005 read at address 0, client.dll + 0x17349c6",
+    "observed_dumps": 3,
+    "root_cause": "not established; switching to native chase camera allowed full playback"
+  },
+  "passes": [
+    {
+      "phase": "WARMUP END",
+      "requested_casts": 55,
+      "rejected_casts": 0,
+      "observed_hero_casts": 37,
+      "observed_damage_events": 10,
+      "maximum_observed_pose_difference_units": 593.2,
+      "end_game_seconds": 56.953125
+    },
+    {
+      "phase": "BENCH END",
+      "requested_casts": 55,
+      "rejected_casts": 0,
+      "observed_hero_casts": 38,
+      "observed_damage_events": 10,
+      "maximum_observed_pose_difference_units": 593.2,
+      "end_game_seconds": 100.96875
+    }
+  ],
+  "counts_include_five_second_lead_in": true,
+  "measured_start_game_seconds": 70.96875,
+  "measured_end_game_seconds": 100.96875,
+  "score_eligible": false,
+  "limitations": [
+    "Source replay/runtime compatibility must be checked separately.",
+    "Adapted mode uses current hero abilities by slot and no items, not the recorded builds.",
+    "Motion is forced to recorded paths; velocities across samples are derived.",
+    "Ability timing is inferred from cooldown transitions; casts must be observed at runtime.",
+    "Weapon fire is synthetic continuous fire with periodic reload; no recorded input stream exists.",
+    "Recorded health is imposed; live damage is suppressed to prevent extra deaths.",
+    "Shields, active modifiers, exact cooldowns and world/NPC state are not restored.",
+    "Current map geometry and current hero/item definitions are used.",
+    "The observer follows a recorded survivor with the native chase camera.",
+    "Motion-only mode omits combat and recorded health/deaths.",
+    "Camera, visible effects, capture alignment and repeatability require validation.",
+    "55 hero casts were scheduled; 38 hero casts were observed in the final pass and 37 in warm-up. These are aggregate counts, not one-to-one matches.",
+    "Maximum sampled position difference reached 593.2 world units during combat.",
+    "Native chase screenshots include obstructed or clipped views.",
+    "Frame captures are unaligned; no performance metrics are reported.",
+    "No repeated-run or live-game representativeness validation has been completed."
+  ],
+  "validation": {
+    "python_tests_passed": 27,
+    "go_vet": "passed",
+    "modlock_build": "passed",
+    "runtime_completed": true
+  },
+  "local_artifact_directory": "/home/esoc/.cache/deadlock-benchmark-replay/107073558-20261107",
+  "local_session_directory": "/home/esoc/.cache/deadlock-benchmark-replay-play/session-20261107-180525-399274",
+  "runtime_artifacts": {
+    "deadlock_2026-11-07_17-58-24.csv": {
+      "bytes": 390463,
+      "sha256": "e1b0c5af9709fb34892f98c13640c3fc114f35a17622747ca8a42104de9f8a45"
+    },
+    "fight-3.png": {
+      "bytes": 1202249,
+      "sha256": "570ebdbcb1e4c9c349aaf53748690849e923333b8a462eb043250d198c5413eb"
+    },
+    "fight-4.png": {
+      "bytes": 1501787,
+      "sha256": "fd984f329d5772c1febed9e565ba5a2da5f6bb42db41053a2aab81ee95d4770b"
+    },
+    "tested-main.tsx": {
+      "bytes": 10461,
+      "sha256": "3ccee60c9c181f7736fd32776a157c3114d3baa7504cbcff8cf7c81562d4080c"
+    },
+    "deadlock_2026-11-07_18-03-56.csv": {
+      "bytes": 2642392,
+      "sha256": "2af271caf1aca66489ecb452abb0f07a80d6f81b2061d73229eb3f0e60137d30"
+    },
+    "client.log": {
+      "bytes": 984,
+      "sha256": "337f43709f57e01e1d9e0e2fd0c7ee1aa3e07b056bf47a5ea3f9fa35ccf83971"
+    },
+    "client-console.log": {
+      "bytes": 329439,
+      "sha256": "4ba5cf31b0a352007583247856fae951f20e85a595451bd8a26cc2ec88f0e210"
+    },
+    "deadlock_2026-11-07_18-00-20.csv": {
+      "bytes": 387786,
+      "sha256": "b46de8da20f360352a369245bc9ee1fc4366999e36db132f53bf456959ad7bad"
+    },
+    "server.log": {
+      "bytes": 279371,
+      "sha256": "87bbdadf4d3ca12be64cb6cf1a3f8b2f0dd5b8ceafcf64945098beda2f482b12"
+    },
+    "deadlock_2026-11-07_18-02-06.csv": {
+      "bytes": 3342542,
+      "sha256": "161ce5c4316ac88ffcda825e18acad6db0d11ad10a6b987ba4062ddfb36873f8"
+    },
+    "fight-1.png": {
+      "bytes": 1372204,
+      "sha256": "29e4d0edf62d270308aa421350ad0b9c0821badd211169f20066196903dfa680"
+    },
+    "fight-0.png": {
+      "bytes": 790875,
+      "sha256": "e7b6e29d5bab7eb592ff5fdce0a0bac7d96406f9a04097bcc454678022d937e1"
+    },
+    "deadlock_2026-11-07_17-54-33.csv": {
+      "bytes": 3767914,
+      "sha256": "e189bd8712f92363bd0ef4f71b987ea9d8aff57bb29d72cbb894b56bfcb3eccb"
+    },
+    "deadlock_2026-11-07_18-05-34.csv": {
+      "bytes": 3709744,
+      "sha256": "f8094d4ba8524c4a08676b315fade19a01c09e1dd6bbe1bffafdba97a961c391"
+    },
+    "server-launch.log": {
+      "bytes": 56753,
+      "sha256": "078e517e470900eccc29e5987404eed1a98a0ee8e636ad9c0f374707b7f3f21e"
+    },
+    "deadlock_2026-11-07_17-53-15.csv": {
+      "bytes": 1329520,
+      "sha256": "b3d267241b649600c27325d56e03986a4e00b6db0ed48cb35a6d3ba9881b3f61"
+    },
+    "fight-2.png": {
+      "bytes": 926833,
+      "sha256": "ced5d9a169394f4a39c33fcf09d527460badc55603063f92d7e137e22a252b94"
+    }
+  }
+}

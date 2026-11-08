@@ -22,11 +22,12 @@ enum WorkshopCommand {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Recolor current-game dash or heavy-melee effects, optionally replacing dash trails with image stamps.
+    /// Recolor current-game dash, heavy-melee or parry effects, optionally replacing dash trails or the
+    /// parry shield and stun icons with image stamps.
     Movement {
         #[arg(long)]
         vpk: PathBuf,
-        #[arg(long, value_parser = ["dash", "heavy-melee"])]
+        #[arg(long, value_parser = ["dash", "heavy-melee", "parry"])]
         kind: String,
         #[arg(long)]
         color: String,
@@ -42,6 +43,13 @@ enum WorkshopCommand {
         illuminated: bool,
         #[arg(long)]
         outline_color: Option<String>,
+        /// Parry only: the icon over a parried enemy.
+        #[arg(long)]
+        stun_image: Option<PathBuf>,
+        /// Parry only: one part's colors, `PART=SPEC` with PART shield, catch or stun and SPEC
+        /// `original`, `rainbow`, `#RRGGBB` or `#RRGGBB:#RRGGBB`. Parts not given take --color.
+        #[arg(long = "part")]
+        parts: Vec<String>,
         #[arg(long)]
         encode_vpk: PathBuf,
     },
@@ -150,18 +158,25 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
             brightness,
             illuminated,
             outline_color,
+            stun_image,
+            parts,
             encode_vpk,
         } => vpkmerge_core::workshop::movement_fx(
             &vpk,
             &kind,
             &color,
             &vpkmerge_core::workshop::MovementFxOptions {
+                parts: &parts
+                    .iter()
+                    .map(|spec| vpkmerge_core::workshop::parse_parry_part(spec))
+                    .collect::<Result<Vec<_>>>()?,
                 end_color: end_color.as_deref(),
                 rainbow,
                 image: image.as_deref(),
                 brightness: Some(brightness),
                 illuminated,
                 outline_color: outline_color.as_deref(),
+                stun_image: stun_image.as_deref(),
             },
             &encode_vpk,
         ),

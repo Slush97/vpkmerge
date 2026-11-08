@@ -7,6 +7,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::vmat_style::{patch_vmat_params, VmatEdit};
 const DASH_STAMP_PATH: &str = "materials/grimoire/movement/dash_stamp.vtex";
+const PARRY_SHIELD_PATH: &str = "materials/grimoire/movement/parry_shield.vtex";
+const PARRY_STUN_PATH: &str = "materials/grimoire/movement/parry_stun.vtex";
+/// The glyph drawn while a parry is up, under the game's warp and dissolve layers.
+const PARRY_SHIELD_SYSTEM: &str = "particles/abilities/melee/melee_parry_symbol.vpcf_c";
+const PARRY_SHIELD_TEXTURE: &str = "materials/particle/glyphs/symbol_knot_shield.vtex";
+/// The icon over a parried enemy: frame 0 of a shared HUD sheet, so a stamp replaces the reference.
+const PARRY_STUN_SYSTEM: &str = "particles/abilities/melee/melee_parry_debuff_symbol.vpcf_c";
+const PARRY_STUN_TEXTURE: &str = "dev/vgui/materials/hud/gameinstructor_iconsheet1.vtex";
 const DASH_STAMP_TEMPLATE: &str =
     "materials/particle/abilities/priest/priest_potent_vapors_cross.vtex_c";
 
@@ -797,6 +805,69 @@ pub struct MovementFxOptions<'a> {
     pub brightness: Option<f64>,
     pub illuminated: bool,
     pub outline_color: Option<&'a str>,
+    /// Parry only: the icon shown over a parried enemy.
+    pub stun_image: Option<&'a Path>,
+    /// Parry only: a palette per part, overriding the main color for that part.
+    pub parts: &'a [(ParryPart, PartPalette)],
+}
+
+/// A part of the parry, colored on its own: the effect the game plays while the parry is up (with its
+/// end flash), on a caught blow, and on the stunned attacker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParryPart {
+    Shield,
+    Catch,
+    Stun,
+}
+
+impl ParryPart {
+    /// The part a parry system root belongs to. Child systems take their parent's part.
+    fn of(entry: &str) -> Self {
+        let name = entry.trim_start_matches("particles/abilities/melee/");
+        if name.starts_with("melee_parry_success") {
+            Self::Catch
+        } else if name.starts_with("melee_parry_debuff") {
+            Self::Stun
+        } else {
+            Self::Shield
+        }
+    }
+}
+
+/// How a part is colored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartPalette {
+    /// The game's own colors and finish; image stamps still apply.
+    Original,
+    Solid([i64; 3]),
+    Gradient([i64; 3], [i64; 3]),
+    Rainbow,
+}
+
+/// Parses `PART=SPEC`, where PART is shield, catch or stun and SPEC is `original`, `rainbow`, `#RRGGBB`
+/// or `#RRGGBB:#RRGGBB` (a gradient).
+///
+/// # Errors
+/// Rejects unknown parts and malformed colors.
+pub fn parse_parry_part(spec: &str) -> Result<(ParryPart, PartPalette)> {
+    let (part, value) = spec
+        .split_once('=')
+        .context("Expected PART=COLOR for --part")?;
+    let part = match part.trim() {
+        "shield" => ParryPart::Shield,
+        "catch" => ParryPart::Catch,
+        "stun" => ParryPart::Stun,
+        other => bail!("Unknown parry part {other}: expected shield, catch or stun"),
+    };
+    let palette = match value.trim() {
+        "original" => PartPalette::Original,
+        "rainbow" => PartPalette::Rainbow,
+        color => match color.split_once(':') {
+            Some((start, end)) => PartPalette::Gradient(parse_color(start)?, parse_color(end)?),
+            None => PartPalette::Solid(parse_color(color)?),
+        },
+    };
+    Ok((part, palette))
 }
 
 /// Current-game movement definitions, recolored with optional image stamps on
@@ -816,41 +887,49 @@ pub fn movement_fx(
         rainbow,
         image,
         brightness,
-        illuminated,
-        outline_color,
+        stun_image,
+        parts,
+        ..
     } = *options;
     let brightness = brightness.unwrap_or(1.0);
-    ensure!(
-        brightness.is_finite() && (0.25..=4.0).contains(&brightness),
-        "Brightness must be between 0.25 and 4"
-    );
-    ensure!(
-        outline_color.is_none() || image.is_some(),
-        "Outlines require an image trail"
-    );
-    ensure!(
-        matches!(kind, "dash" | "heavy-melee"),
-        "Unknown movement effect"
-    );
-    ensure!(
-        image.is_none() || kind == "dash",
-        "Image stamps are supported on dash trails"
-    );
+    validate_movement(kind, options, brightness)?;
     let rgb = parse_color(color)?;
-    ensure!(
-        !rainbow || end_color.is_none(),
-        "Choose a gradient or rainbow"
-    );
     let end_rgb = end_color.map(parse_color).transpose()?;
+    let main = match (end_rgb, rainbow) {
+        (_, true) => PartPalette::Rainbow,
+        (Some(end), false) => PartPalette::Gradient(rgb, end),
+        (None, false) => PartPalette::Solid(rgb),
+    };
+    let palette_of = |part: ParryPart| {
+        parts
+            .iter()
+            .find(|(candidate, _)| *candidate == part)
+            .map_or(main, |(_, palette)| *palette)
+    };
     let paks = [valve_pak::open(base)?];
-    let mut queue = movement_roots(&paks[0], kind)?;
+    // Each system with the part it belongs to: a root's own, a child's parent's
+    let mut queue: Vec<(String, ParryPart)> = movement_roots(&paks[0], kind)?
+        .into_iter()
+        .map(|entry| {
+            let part = ParryPart::of(&entry);
+            (entry, part)
+        })
+        .collect();
     let mut files = BTreeMap::<String, Vec<u8>>::new();
-    if let Some(path) = image {
-        let template = read(&paks, DASH_STAMP_TEMPLATE)?;
-        files.insert(compiled(DASH_STAMP_PATH), stamp_texture(path, &template)?);
+    let stamp_path = if kind == "parry" {
+        PARRY_SHIELD_PATH
+    } else {
+        DASH_STAMP_PATH
+    };
+    let stamps = [(image, stamp_path), (stun_image, PARRY_STUN_PATH)];
+    for (path, entry) in stamps {
+        if let Some(path) = path {
+            let template = read(&paks, DASH_STAMP_TEMPLATE)?;
+            files.insert(compiled(entry), stamp_texture(path, &template)?);
+        }
     }
     let mut seen = BTreeSet::new();
-    while let Some(entry) = queue.pop() {
+    while let Some((entry, part)) = queue.pop() {
         if !seen.insert(entry.clone()) {
             continue;
         }
@@ -874,34 +953,18 @@ pub fn movement_fx(
             .unwrap_or(&[])
         {
             if let Some(path) = child.get("m_ChildRef").and_then(Value::as_str) {
-                queue.push(compiled(path));
+                queue.push((compiled(path), part));
             }
         }
-        let mut colors = Vec::new();
-        let colored = kind != "dash" || entry.ends_with("_trail.vpcf_c") || rainbow;
-        if colored {
-            collect_colors(&tree, &mut Vec::new(), false, rgb, &mut colors);
+        let palette = if kind == "parry" {
+            palette_of(part)
+        } else {
+            main
+        };
+        let bytes = movement_entry(kind, &entry, &original, &tree, palette, rgb, options)?;
+        if bytes != original || palette != PartPalette::Original {
+            files.insert(entry, bytes);
         }
-        let mut bytes = morphic::patch_kv3_resource_scalars(&original, &colors)?;
-        if image.is_some()
-            && entry.starts_with("particles/generic/")
-            && entry.ends_with("_trail.vpcf_c")
-        {
-            bytes = image_trail(&bytes, &tree, DASH_STAMP_PATH)?;
-        }
-        if kind == "dash" && entry.ends_with("_trail.vpcf_c") {
-            bytes = trail_appearance(
-                &bytes,
-                image.is_some(),
-                brightness,
-                illuminated,
-                outline_color,
-            )?;
-        }
-        if colored && (rainbow || end_rgb.is_some()) {
-            bytes = color_ramp(&bytes, rgb, end_rgb, rainbow)?;
-        }
-        files.insert(entry, bytes);
     }
     let refs: Vec<_> = files
         .iter()
@@ -910,8 +973,152 @@ pub fn movement_fx(
     crate::pack(&refs, output)
 }
 
+fn validate_movement(kind: &str, options: &MovementFxOptions<'_>, brightness: f64) -> Result<()> {
+    ensure!(
+        brightness.is_finite() && (0.25..=4.0).contains(&brightness),
+        "Brightness must be between 0.25 and 4"
+    );
+    ensure!(
+        options.outline_color.is_none() || options.image.is_some(),
+        "Outlines require an image trail"
+    );
+    ensure!(
+        matches!(kind, "dash" | "heavy-melee" | "parry"),
+        "Unknown movement effect"
+    );
+    ensure!(
+        options.image.is_none() || matches!(kind, "dash" | "parry"),
+        "Image stamps are supported on dash trails and the parry shield"
+    );
+    ensure!(
+        options.stun_image.is_none() || kind == "parry",
+        "A stun icon is a parry option"
+    );
+    ensure!(
+        !options.rainbow || options.end_color.is_none(),
+        "Choose a gradient or rainbow"
+    );
+    ensure!(
+        options.parts.is_empty() || kind == "parry",
+        "Part colors are a parry option"
+    );
+    for (index, (part, _)) in options.parts.iter().enumerate() {
+        ensure!(
+            !options.parts[..index]
+                .iter()
+                .any(|(other, _)| other == part),
+            "Each parry part takes one color"
+        );
+    }
+    let unchanged = [ParryPart::Shield, ParryPart::Catch, ParryPart::Stun]
+        .iter()
+        .all(|part| {
+            options
+                .parts
+                .iter()
+                .any(|(other, palette)| other == part && *palette == PartPalette::Original)
+        });
+    ensure!(
+        !unchanged || options.image.is_some() || options.stun_image.is_some(),
+        "Every parry part keeps its original colors: nothing to change"
+    );
+    Ok(())
+}
+
+/// One movement particle system recolored with `palette` (`fallback` is the start color a rainbow
+/// ramps from). An original parry part keeps the game's system but for an image stamp it carries.
+fn movement_entry(
+    kind: &str,
+    entry: &str,
+    original: &[u8],
+    tree: &Value,
+    palette: PartPalette,
+    fallback: [i64; 3],
+    options: &MovementFxOptions<'_>,
+) -> Result<Vec<u8>> {
+    let brightness = options.brightness.unwrap_or(1.0);
+    let (rgb, end_rgb, rainbow) = match palette {
+        PartPalette::Original => return parry_stamps(original, tree, entry, options),
+        PartPalette::Solid(color) => (color, None, false),
+        PartPalette::Gradient(start, end) => (start, Some(end), false),
+        PartPalette::Rainbow => (fallback, None, true),
+    };
+    let mut colors = Vec::new();
+    let colored = kind != "dash" || entry.ends_with("_trail.vpcf_c") || rainbow;
+    if colored {
+        collect_colors(tree, &mut Vec::new(), false, rgb, &mut colors);
+    }
+    let mut bytes = morphic::patch_kv3_resource_scalars(original, &colors)?;
+    if options.image.is_some()
+        && entry.starts_with("particles/generic/")
+        && entry.ends_with("_trail.vpcf_c")
+    {
+        bytes = image_trail(&bytes, tree, DASH_STAMP_PATH)?;
+    }
+    if kind == "dash" && entry.ends_with("_trail.vpcf_c") {
+        bytes = trail_appearance(
+            &bytes,
+            options.image.is_some(),
+            brightness,
+            options.illuminated,
+            options.outline_color,
+        )?;
+    }
+    if kind == "parry" {
+        bytes = parry_entry(&bytes, tree, entry, options, brightness)?;
+    }
+    if colored && (rainbow || end_rgb.is_some()) {
+        bytes = color_ramp(&bytes, rgb, end_rgb, rainbow)?;
+    }
+    Ok(bytes)
+}
+
+/// The parry's stamps (shield and stun icons) and appearance for one of its particle systems.
+fn parry_entry(
+    bytes: &[u8],
+    tree: &Value,
+    entry: &str,
+    options: &MovementFxOptions<'_>,
+    brightness: f64,
+) -> Result<Vec<u8>> {
+    let bytes = parry_stamps(bytes, tree, entry, options)?;
+    let shield = options.image.is_some() && entry == PARRY_SHIELD_SYSTEM;
+    parry_appearance(
+        &bytes,
+        brightness,
+        options.illuminated,
+        options.outline_color.filter(|_| shield),
+    )
+}
+
+/// The parry's image stamps (shield and stun icons) on one of its particle systems.
+fn parry_stamps(
+    bytes: &[u8],
+    tree: &Value,
+    entry: &str,
+    options: &MovementFxOptions<'_>,
+) -> Result<Vec<u8>> {
+    let mut bytes = bytes.to_vec();
+    if options.image.is_some() && entry == PARRY_SHIELD_SYSTEM {
+        bytes = swap_texture(&bytes, tree, PARRY_SHIELD_TEXTURE, PARRY_SHIELD_PATH)?;
+    }
+    if options.stun_image.is_some() && entry == PARRY_STUN_SYSTEM {
+        bytes = swap_texture(&bytes, tree, PARRY_STUN_TEXTURE, PARRY_STUN_PATH)?;
+    }
+    Ok(bytes)
+}
+
 fn movement_roots(pak: &valve_pak::VPK, kind: &str) -> Result<Vec<String>> {
-    let roots: Vec<String> = if kind == "dash" {
+    let roots: Vec<String> = if kind == "parry" {
+        // The active parry, its success burst, the parried enemy's stun and the end flash.
+        pak.file_paths()
+            .filter(|path| {
+                path.starts_with("particles/abilities/melee/melee_parry")
+                    && path.ends_with(".vpcf_c")
+            })
+            .cloned()
+            .collect()
+    } else if kind == "dash" {
         ["air_dash", "down_dash", "roll_jump"]
             .iter()
             .map(|name| format!("particles/generic/{name}.vpcf_c"))
@@ -1096,6 +1303,119 @@ fn image_trail(bytes: &[u8], tree: &Value, image_path: &str) -> Result<Vec<u8>> 
     Ok(morphic::repoint_resource_refs(&bytes, &references)?.0)
 }
 
+/// Point the renderer layer drawing `original` at a stamp, keeping the other layers (the shield's warp
+/// and dissolve) as authored.
+fn swap_texture(bytes: &[u8], tree: &Value, original: &str, stamp: &str) -> Result<Vec<u8>> {
+    let drawn = tree
+        .get("m_Renderers")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|renderer| {
+            renderer
+                .get("m_vecTexturesInput")
+                .and_then(Value::as_array)
+                .map_or(&[][..], |textures| textures)
+        })
+        .any(|texture| texture.get("m_hTexture").and_then(Value::as_str) == Some(original));
+    ensure!(
+        drawn,
+        "Parry symbol changed; image stamps need a recipe update"
+    );
+    // Redirects the DATA string the viewer follows and the RERL entry the engine precaches.
+    Ok(morphic::repoint_resource_refs(bytes, &[(original.into(), stamp.into())])?.0)
+}
+
+/// Brightness and illumination for the parry's sprite, rope and trail renderers. An outline goes on the
+/// renderer drawing the shield stamp.
+fn parry_appearance(
+    bytes: &[u8],
+    brightness: f64,
+    illuminated: bool,
+    outline: Option<&str>,
+) -> Result<Vec<u8>> {
+    if (brightness - 1.0).abs() < f64::EPSILON && !illuminated && outline.is_none() {
+        return Ok(bytes.to_vec());
+    }
+    let resource = morphic::resource::Resource::parse(bytes)?;
+    let template = morphic::kv3::decode_lossless(resource.data_block()?)?;
+    let mut tree = template.to_value();
+    let Some(Value::Array(renderers)) = tree.get_mut("m_Renderers") else {
+        return Ok(bytes.to_vec());
+    };
+    let mut changed = false;
+    for renderer in renderers {
+        let class = renderer
+            .get("_class")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if !matches!(
+            class.as_str(),
+            "C_OP_RenderSprites" | "C_OP_RenderRopes" | "C_OP_RenderTrails"
+        ) {
+            continue;
+        }
+        let stamped = renderer
+            .get("m_vecTexturesInput")
+            .and_then(Value::as_array)
+            .and_then(|textures| textures.first())
+            .and_then(|texture| texture.get("m_hTexture"))
+            .and_then(Value::as_str)
+            == Some(PARRY_SHIELD_PATH);
+        let mut light = renderer
+            .get("m_flSelfIllumAmount")
+            .cloned()
+            .unwrap_or_else(|| {
+                Value::Object(vec![
+                    ("m_nType".into(), Value::String("PF_TYPE_LITERAL".into())),
+                    ("m_flLiteralValue".into(), Value::Double(1.0)),
+                ])
+            });
+        // A driven (non-literal) illumination stays as authored.
+        if let Some(value) = light.get_mut("m_flLiteralValue") {
+            let base = value.as_f64().unwrap_or(1.0);
+            *value = Value::Double(base * brightness * if illuminated { 3.0 } else { 1.0 });
+        }
+        let Value::Object(fields) = renderer else {
+            bail!("Parry renderer is not an object")
+        };
+        if let Some((_, old)) = fields
+            .iter_mut()
+            .find(|(name, _)| name == "m_flSelfIllumAmount")
+        {
+            *old = light;
+        } else {
+            fields.push(("m_flSelfIllumAmount".into(), light));
+        }
+        if let (Some(color), true) = (outline, stamped && class == "C_OP_RenderSprites") {
+            for (key, value) in [
+                ("m_bOutline", Value::Bool(true)),
+                (
+                    "m_OutlineColor",
+                    Value::Array(parse_color(color)?.into_iter().map(Value::Int).collect()),
+                ),
+                ("m_flOutlineStart0", Value::Double(0.1)),
+                ("m_flOutlineStart1", Value::Double(0.25)),
+                ("m_flOutlineEnd0", Value::Double(0.7)),
+                ("m_flOutlineEnd1", Value::Double(0.9)),
+            ] {
+                if let Some((_, old)) = fields.iter_mut().find(|(name, _)| name == key) {
+                    *old = value;
+                } else {
+                    fields.push((key.into(), value));
+                }
+            }
+        }
+        changed = true;
+    }
+    if !changed {
+        return Ok(bytes.to_vec());
+    }
+    let data = morphic::kv3::encode_v5_like(&tree, &template)?;
+    Ok(resource.rebuild_with_data(&data)?)
+}
+
 fn trail_appearance(
     bytes: &[u8],
     image: bool,
@@ -1241,6 +1561,9 @@ mod tests {
             "particles/abilities/melee/melee_heavy_activate.vpcf_c",
             "particles/abilities/melee_swing_light.vpcf_c",
             "particles/abilities/baba/baba_witching_hour_melee_swing_heavy.vpcf_c",
+            "particles/abilities/melee/melee_parry.vpcf_c",
+            "particles/abilities/melee/melee_parry_debuff_symbol.vpcf_c",
+            "particles/items/spellbreaker_parry.vpcf_c",
         ];
         crate::pack(
             &paths
@@ -1252,13 +1575,69 @@ mod tests {
         .unwrap();
         let pak = valve_pak::open(&source).unwrap();
         let roots = movement_roots(&pak, "heavy-melee").unwrap();
+        assert!(!roots.iter().any(|root| root.contains("parry")));
         assert!(roots.contains(&paths[0].to_string()));
         assert!(roots.contains(&paths[1].to_string()));
         assert!(roots.contains(&paths[2].to_string()));
         assert!(!roots.contains(&paths[3].to_string()));
         assert!(!roots.contains(&paths[4].to_string()));
+        let mut parry = movement_roots(&pak, "parry").unwrap();
+        parry.sort();
+        assert_eq!(parry, vec![paths[5].to_string(), paths[6].to_string()]);
     }
     use super::*;
+    #[test]
+    fn parry_parts_parse_and_classify() {
+        assert_eq!(
+            parse_parry_part("stun=original").unwrap(),
+            (ParryPart::Stun, PartPalette::Original)
+        );
+        assert_eq!(
+            parse_parry_part("catch=#ff0000:#00ff00").unwrap(),
+            (
+                ParryPart::Catch,
+                PartPalette::Gradient([255, 0, 0], [0, 255, 0])
+            )
+        );
+        assert_eq!(
+            parse_parry_part("shield=rainbow").unwrap(),
+            (ParryPart::Shield, PartPalette::Rainbow)
+        );
+        assert!(parse_parry_part("feet=#ffffff").is_err());
+        assert!(parse_parry_part("stun").is_err());
+        let melee = "particles/abilities/melee/";
+        assert_eq!(
+            ParryPart::of(&format!("{melee}melee_parry_success_ring.vpcf_c")),
+            ParryPart::Catch
+        );
+        assert_eq!(
+            ParryPart::of(&format!("{melee}melee_parry_debuff_symbol.vpcf_c")),
+            ParryPart::Stun
+        );
+        assert_eq!(
+            ParryPart::of(&format!("{melee}melee_parry_end.vpcf_c")),
+            ParryPart::Shield
+        );
+        let all_original = [
+            (ParryPart::Shield, PartPalette::Original),
+            (ParryPart::Catch, PartPalette::Original),
+            (ParryPart::Stun, PartPalette::Original),
+        ];
+        let options = MovementFxOptions {
+            parts: &all_original,
+            ..Default::default()
+        };
+        assert!(validate_movement("parry", &options, 1.0).is_err());
+        let twice = [
+            (ParryPart::Stun, PartPalette::Original),
+            (ParryPart::Stun, PartPalette::Rainbow),
+        ];
+        let options = MovementFxOptions {
+            parts: &twice,
+            ..Default::default()
+        };
+        assert!(validate_movement("parry", &options, 1.0).is_err());
+    }
     #[test]
     fn stamp_texture_keeps_gpu_format_mips_and_transparency() {
         let template = std::fs::read(format!(

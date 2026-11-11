@@ -1963,11 +1963,16 @@ const ALT_REVEAL_SLOT: &str = "g_tAltColor_Reveal";
 /// The preview slots worth embedding for `mat`. Every `pbr.vfx` material binds
 /// the alt texture, most to a default or to their own color texture again, so
 /// it is embedded only where the material can reveal it: a static amount above
-/// zero, or an expression that sets the amount per frame.
+/// zero, or a decompiled expression that sets the amount per frame. A viewer
+/// can't evaluate an expression that failed to decompile, so it falls back to
+/// the static amount (Nurse Harrow's cloak and hair: 0, about 3.4 MB unused).
 fn preview_texture_slots(
     mat: &crate::material::Material,
 ) -> impl Iterator<Item = &'static str> + '_ {
-    let reveals_alt = mat.dynamic_params.contains_key("g_flAltTextureAmount")
+    let reveals_alt = mat
+        .dynamic_params
+        .get("g_flAltTextureAmount")
+        .is_some_and(|expr| expr.decompiled)
         || mat
             .float_params
             .get("g_flAltTextureAmount")
@@ -2224,6 +2229,12 @@ mod preview_slot_tests {
             },
         );
         assert!(embeds_alt(&mat));
+
+        // An expression that failed to decompile can't drive the amount.
+        let expr = mat.dynamic_params.get_mut("g_flAltTextureAmount").unwrap();
+        expr.decompiled = false;
+        expr.error = Some("unknown opcode 0x08".to_owned());
+        assert!(!embeds_alt(&mat));
     }
 }
 

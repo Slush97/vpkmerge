@@ -278,13 +278,20 @@ impl VPK {
                 break;
             }
 
+            // vpkmerge patch: some packers write a root-level file's directory as
+            // an empty string instead of " ". An extension always has at least
+            // one directory, so an empty first one is the root, not the end of
+            // the list. Read as the end, the file name became the next extension
+            // and its metadata bytes a directory name ("Invalid UTF-8 in cstring").
+            let mut first_path = true;
             loop {
                 let path = read_cstring_buffered(reader)?;
-                if path.is_empty() {
+                if path.is_empty() && !first_path {
                     break;
                 }
+                first_path = false;
 
-                let normalized_path = if path == " " {
+                let normalized_path = if path.is_empty() || path == " " {
                     String::new()
                 } else {
                     format!("{path}/")

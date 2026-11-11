@@ -113,8 +113,21 @@ g_tTintMaskRimLightMask
 g_tNprOutlineMask     g_tNprTransmissiveColor
 g_tSelfIllumMask      g_tSheen
 g_tGlass              g_tAltTranslucency
-g_tJitterMask
+g_tJitterMask         g_tAltColor_Reveal
 ```
+
+`g_tAltColor_Reveal` is `pbr.vfx`'s alt texture: a second albedo in RGB with a reveal mask in alpha. Every `pbr.vfx` material binds it (most to a default, or to their own color texture again), so it is embedded only when the material can show it: a static `g_flAltTextureAmount` above zero, or a dynamic expression on it. The pixel shader, decompiled from the shipped `pbr.vfx` (VCS 72), reads:
+
+```
+if (g_flAltTextureAmount > 0) {
+    alt    = texture(g_tAltColor_Reveal, uv)        // the g_tColor UV
+    reveal = g_flAltTextureAmount == 1 ? 1
+           : smoothstep(-soft, soft, amount - (clamp(alt.a, 1e-4, 0.9999) * (1 - 2 * soft) + soft))
+    albedo = mix(albedo, alt.rgb * vertexColorTint, reveal)
+}
+```
+
+`soft` is `g_flAltTextureRevealSoftness`. `albedo` is the color texture after its color correction, tint and vertex color; the alt color skips the correction and the tint. Violet's brush (`artist_weapon.vmat`) drives the amount with `max($AmmoPercent, smoothstep(0.5, 1, $ReloadProgress))`, so a full magazine shows the inked texture everywhere.
 
 Placeholder textures are preserved where the shader semantics require them. A solid-white default mask is the "present, full coverage" sentinel (for example a white self-illum mask means uniform coverage, not "off"); a solid-black default mask is the "absent" sentinel (for example a black transmissive texture contributes nothing).
 

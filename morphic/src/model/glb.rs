@@ -865,7 +865,7 @@ impl Builder {
                     pbr.metalness,
                 ]
                 .into_iter()
-                .chain(SOURCE2_PREVIEW_TEXTURE_SLOTS.iter().map(|s| mat.texture(s)))
+                .chain(preview_texture_slots(&mat).map(|s| mat.texture(s)))
                 .flatten()
                 .map(|slot| (slot.to_owned(), Some(slot) == pbr.normal))
                 .collect::<Vec<_>>()
@@ -1340,12 +1340,12 @@ impl Builder {
         {
             texture_reflectivity.insert("g_tColor".to_owned(), jval!(info.reflectivity));
         }
-        for slot in SOURCE2_PREVIEW_TEXTURE_SLOTS {
+        for slot in preview_texture_slots(mat) {
             if let Some(tex) = mat
                 .texture(slot)
                 .and_then(|p| self.texture_from_any(files, p))
             {
-                textures.insert((*slot).to_owned(), jval!(tex.value()));
+                textures.insert(slot.to_owned(), jval!(tex.value()));
             }
         }
         let is_glass = mat.int_params.get("F_GLASS").copied().unwrap_or(0) > 0
@@ -1952,7 +1952,31 @@ const SOURCE2_PREVIEW_TEXTURE_SLOTS: &[&str] = &[
     // environment_blend's world overlay: a biplanar, world-projected color
     // modulation shared by every layer.
     "g_tColorWorldOverlay",
+    // pbr.vfx's alt texture: a second albedo in RGB with a reveal mask in alpha,
+    // wiped over `g_tColor` by `g_flAltTextureAmount` (Violet's brush is inked
+    // this way while she has ammo). See `preview_texture_slots`.
+    ALT_REVEAL_SLOT,
 ];
+
+const ALT_REVEAL_SLOT: &str = "g_tAltColor_Reveal";
+
+/// The preview slots worth embedding for `mat`. Every `pbr.vfx` material binds
+/// the alt texture, most to a default or to their own color texture again, so
+/// it is embedded only where the material can reveal it: a static amount above
+/// zero, or an expression that sets the amount per frame.
+fn preview_texture_slots(
+    mat: &crate::material::Material,
+) -> impl Iterator<Item = &'static str> + '_ {
+    let reveals_alt = mat.dynamic_params.contains_key("g_flAltTextureAmount")
+        || mat
+            .float_params
+            .get("g_flAltTextureAmount")
+            .is_some_and(|amount| *amount > 0.0);
+    SOURCE2_PREVIEW_TEXTURE_SLOTS
+        .iter()
+        .copied()
+        .filter(move |slot| *slot != ALT_REVEAL_SLOT || reveals_alt)
+}
 
 /// Serializes a dynamic-expression table for the `morphic` extras payload. Lives
 /// here rather than as a serde derive on `DynamicExpr` because serde's `derive`
@@ -2156,6 +2180,50 @@ fn fix_duplicate_joints(joints: &mut [[u16; 4]], weights: &mut [[f32; 4]]) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod preview_slot_tests {
+    use super::*;
+    use crate::material::{DynamicExpr, Material};
+
+    fn embeds_alt(mat: &Material) -> bool {
+        preview_texture_slots(mat).any(|slot| slot == ALT_REVEAL_SLOT)
+    }
+
+    #[test]
+    fn alt_texture_is_embedded_only_where_it_can_show() {
+        let mut mat = Material::default();
+        assert!(!embeds_alt(&mat));
+        mat.float_params
+            .insert("g_flAltTextureAmount".to_owned(), 0.0);
+        assert!(!embeds_alt(&mat));
+        // Every other preview slot is unaffected by the gate.
+        assert_eq!(
+            preview_texture_slots(&mat).count(),
+            SOURCE2_PREVIEW_TEXTURE_SLOTS.len() - 1
+        );
+
+        mat.float_params
+            .insert("g_flAltTextureAmount".to_owned(), 0.52);
+        assert!(embeds_alt(&mat));
+
+        // Violet's brush: a static 0 that an ammo expression overrides.
+        mat.float_params
+            .insert("g_flAltTextureAmount".to_owned(), 0.0);
+        mat.dynamic_params.insert(
+            "g_flAltTextureAmount".to_owned(),
+            DynamicExpr {
+                source: "max($AmmoPercent,smoothstep(0.5,1,$ReloadProgress))".to_owned(),
+                decompiled: true,
+                byte_len: 27,
+                attributes: vec!["$AmmoPercent".to_owned(), "$ReloadProgress".to_owned()],
+                hash: "d293f70b2e16f19b".to_owned(),
+                error: None,
+            },
+        );
+        assert!(embeds_alt(&mat));
     }
 }
 

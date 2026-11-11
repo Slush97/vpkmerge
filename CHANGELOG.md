@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.30.1
+
+Skins that store a root file under an empty directory name open again, and model exports carry the alt colour reveal texture so Grimoire can draw Violet's inked brush. Contributed by @oldreceipt (#91).
+
+### CLI (`vpkmerge` 0.30.1)
+
+- Fix: a pak whose extension lists an empty directory name instead of a single space for its root (the "Puppy Ivy" skin's `tools_thumbnail_cache.sqlite3`) failed every command with `Invalid UTF-8 in cstring`. The reader now treats an empty first directory as the root.
+- GLB exports embed `g_tAltColor_Reveal` for `pbr.vfx` materials with a static `g_flAltTextureAmount` above zero or a dynamic expression on it. Other materials export as before. The extras schema version stays at 4.
+
 ## v0.30.0
 
 Parry effects for Grimoire's Door Stuck Mechanics editor. Contributed by @oldreceipt (#88).

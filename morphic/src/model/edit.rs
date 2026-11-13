@@ -786,7 +786,7 @@ fn wrap_islands_into_unit_square(uvs: &mut [[f32; 2]], triangles: &[u32]) -> usi
     moved
 }
 
-fn uv_field(fields: &[InputLayoutField]) -> Option<&InputLayoutField> {
+pub(super) fn uv_field(fields: &[InputLayoutField]) -> Option<&InputLayoutField> {
     fields
         .iter()
         .find(|f| f.semantic_name == "TEXCOORD" && f.semantic_index == 0)

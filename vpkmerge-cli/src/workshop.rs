@@ -142,6 +142,62 @@ enum WorkshopCommand {
         #[arg(long)]
         encode_vpk: PathBuf,
     },
+    /// Put a picture, still or animated, on a model as a piece of mesh of its own.
+    ///
+    /// The frames are PNGs of the picture itself. It is fitted into a box on the model's outline
+    /// as seen from --view and lands on the surface that view shows there. Unlike a flipbook, the
+    /// part underneath keeps its textures, so the addon holds little more than the frames. For a
+    /// second decal on the same model, pass the first addon ahead of the base game with --vpk and
+    /// merge the two addons.
+    Decal {
+        /// Source VPKs in highest-priority-first order, including base game fallback.
+        #[arg(long, required = true)]
+        vpk: Vec<PathBuf>,
+        /// The model, e.g. `models/heroes_wip/abrams/abrams.vmdl_c`.
+        #[arg(long)]
+        model: String,
+        /// Folder of frame PNGs, played in file name order: columns x rows of them.
+        #[arg(long)]
+        frames: PathBuf,
+        /// Names the decal's files: lower-case letters, digits and underscores.
+        #[arg(long)]
+        name: String,
+        /// The side the picture is projected from.
+        #[arg(long, value_parser = ["front", "back", "left", "right"])]
+        view: String,
+        /// The box the picture is fitted into: left,top,right,bottom as fractions of the
+        /// model's outline from --view, measured from the top-left corner.
+        #[arg(long, allow_hyphen_values = true)]
+        rect: String,
+        /// Frames across the texture: 1, 2, 4, 8 or 16.
+        #[arg(long, default_value_t = 1)]
+        columns: u32,
+        /// Frames down the texture: 1, 2, 4, 8 or 16.
+        #[arg(long, default_value_t = 1)]
+        rows: u32,
+        /// Time frames per second.
+        #[arg(long, default_value_t = 8.0)]
+        fps: f64,
+        /// What picks the row. `time`: every cell is a time frame. `health`: each row is a
+        /// state, the first at full health and the last near death. `speed`: the first row
+        /// standing still, the last at --full-speed.
+        #[arg(long, value_parser = ["time", "health", "speed"], default_value = "time")]
+        rows_follow: String,
+        /// With `--rows-follow speed`: units per second that reach the last row.
+        #[arg(long, default_value_t = 400.0)]
+        full_speed: f64,
+        /// Largest edge of the decal's texture, a power of two from 64 to 8192.
+        #[arg(long, default_value_t = 2048)]
+        max_texture: u32,
+        /// How far the picture sits above the surface, in model units.
+        #[arg(long, default_value_t = 0.1)]
+        offset: f32,
+        /// Write a PNG of the model from --view with the first frame in place.
+        #[arg(long)]
+        preview: Option<PathBuf>,
+        #[arg(long, required_unless_present = "preview")]
+        encode_vpk: Option<PathBuf>,
+    },
     /// Set transparency while separating opacity from an opaque part's packed metalness.
     ///
     /// Ghost is an experimental research recipe and is not supported by the skin editor.
@@ -336,6 +392,99 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
                     texture.path
                 );
             }
+            Ok(())
+        }
+        WorkshopCommand::Decal {
+            vpk,
+            model,
+            frames,
+            name,
+            view,
+            rect,
+            columns,
+            rows,
+            fps,
+            rows_follow,
+            full_speed,
+            max_texture,
+            offset,
+            preview,
+            encode_vpk,
+        } => {
+            use vpkmerge_core::workshop::decal::{
+                decal_picture, decal_preview, DecalOptions, DecalView,
+            };
+            use vpkmerge_core::workshop::flipbook::FlipbookRows;
+            let mut paths: Vec<PathBuf> = std::fs::read_dir(&frames)?
+                .filter_map(|file| file.ok().map(|file| file.path()))
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                })
+                .collect();
+            paths.sort();
+            let frames = paths
+                .iter()
+                .map(std::fs::read)
+                .collect::<std::io::Result<Vec<_>>>()?;
+            let view = match view.as_str() {
+                "front" => DecalView::Front,
+                "left" => DecalView::Left,
+                "right" => DecalView::Right,
+                _ => DecalView::Back,
+            };
+            let rect: [f32; 4] = rect
+                .split(',')
+                .map(|value| value.trim().parse::<f32>())
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+                .and_then(|values| values.try_into().ok())
+                .ok_or_else(|| anyhow::anyhow!("--rect takes left,top,right,bottom"))?;
+            if let Some(preview) = preview {
+                let first = frames
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("No frame PNGs in the folder"))?;
+                std::fs::write(
+                    &preview,
+                    decal_preview(&vpk, &model, first, view, rect, 1024)?,
+                )?;
+                println!("preview -> {}", preview.display());
+            }
+            let Some(encode_vpk) = encode_vpk else {
+                return Ok(());
+            };
+            let report = decal_picture(
+                &vpk,
+                &model,
+                &frames,
+                &DecalOptions {
+                    name,
+                    view,
+                    rect,
+                    columns,
+                    rows,
+                    fps,
+                    rows_follow: match rows_follow.as_str() {
+                        "health" => FlipbookRows::Health,
+                        "speed" => FlipbookRows::Speed { full: full_speed },
+                        _ => FlipbookRows::Time,
+                    },
+                    max_texture,
+                    offset,
+                },
+                &encode_vpk,
+            )?;
+            println!(
+                "{} triangles in {} draw calls, {:.0}% of the picture on the model{}",
+                report.triangles,
+                report.draw_calls,
+                report.coverage * 100.0,
+                if report.cutout { ", cut out" } else { "" }
+            );
+            for (material, share) in &report.hosts {
+                println!("  on {material} ({:.0}%)", share * 100.0);
+            }
+            println!("  {}x{}  {}", report.width, report.height, report.texture);
             Ok(())
         }
         WorkshopCommand::Surface {

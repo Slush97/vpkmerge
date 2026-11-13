@@ -107,27 +107,27 @@ pub struct FlipbookReport {
 
 /// Where each frame sits in a grid texture.
 #[derive(Clone, Copy, Debug)]
-struct Layout {
-    columns: u32,
-    rows: u32,
-    cell: [u32; 2],
+pub(super) struct Layout {
+    pub(super) columns: u32,
+    pub(super) rows: u32,
+    pub(super) cell: [u32; 2],
     /// One texture tile at cell resolution; a cell is this, repeated over
     /// `cell_extent` tiles.
-    tile: [u32; 2],
+    pub(super) tile: [u32; 2],
     /// Step `k` of a single clock moves the UV by `(k / columns, k / cells)`,
     /// so each column sits lower than the one before by a fraction of a cell.
     /// A grid whose column and row are set separately is not staggered.
-    staggered: bool,
+    pub(super) staggered: bool,
 }
 
 impl Layout {
-    fn total(&self) -> [u32; 2] {
+    pub(super) fn total(&self) -> [u32; 2] {
         [self.cell[0] * self.columns, self.cell[1] * self.rows]
     }
 
     /// Top-left texel of frame `k`. A staggered frame may run past the bottom
     /// edge and continue from the top.
-    fn origin(&self, k: u32) -> [u32; 2] {
+    pub(super) fn origin(&self, k: u32) -> [u32; 2] {
         let x = (k % self.columns) * self.cell[0];
         let y = if self.staggered {
             (k * self.cell[1] / self.columns) % self.total()[1]
@@ -139,7 +139,7 @@ impl Layout {
 }
 
 /// The scroll speed and step that walk the grid.
-fn scroll_edits(options: &FlipbookOptions) -> Result<Vec<VmatEdit>> {
+pub(super) fn scroll_edits(options: &FlipbookOptions) -> Result<Vec<VmatEdit>> {
     let (columns, rows) = (f64::from(options.columns), f64::from(options.rows));
     let row = match options.rows_follow {
         FlipbookRows::Time => {
@@ -231,7 +231,7 @@ fn keeps_original(
         .is_some_and(|layer| keep_detail_maps || on_second_uv(material, layer.2))
 }
 
-fn is_flat(image: &RgbaImage) -> bool {
+pub(super) fn is_flat(image: &RgbaImage) -> bool {
     let first = image.get_pixel(0, 0);
     image.pixels().all(|pixel| pixel == first)
 }

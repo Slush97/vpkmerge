@@ -60,6 +60,29 @@ Verified in game on Abrams (coat, shirt, pants, book, gun) in the hideout: time 
 ![A 16-frame flipbook stepping on Abrams' coat](screenshots/flipbook/time-steps.png)
 ![Rows that follow speed: standing, walking, standing](screenshots/flipbook/speed-rows.png)
 
+## Decals
+
+`workshop decal --model <VMDL> --frames <DIR> --name <NAME> --view front|back|left|right --rect L,T,R,B` puts a picture, still or animated, on a model as a piece of mesh of its own.
+
+A flipbook repaints a whole part once per frame, so one small picture costs the part's textures times the frame count. A decal copies only the surface under the picture into a new draw call with its own material, so its texture holds the picture's frames and nothing else. Eight animated pictures on Abrams, 32 frames each, make a 53 MB addon; four as flipbooks made 394 MB at lower sharpness. The part underneath keeps its material, textures and UVs, so an installed skin for the hero still shows around the pictures.
+
+- **Placement.** The picture is fitted into the box `--rect`, given as fractions of the model's outline from `--view` and measured from the top-left corner, keeping its shape. It lands on the surface that view shows there, in the model's bind pose. `--preview <PNG>` draws the model from that view with the first frame in place, without building anything.
+- **The model.** The triangles under the picture are copied, trimmed to the picture's edge, lifted `--offset` units off the surface and appended to the vertex and index buffers their part already draws from, as one more draw call per part and level of detail. Each copied vertex keeps its parent's stored bytes apart from position and UV, so it is skinned like the surface and follows the animation. Existing vertices, indices and draw calls keep their bytes; both buffers are stored uncompressed afterwards.
+- **One mesh.** Per level of detail the picture goes on the mesh that holds most of it, and only that mesh can hide parts of it. A weapon or prop sits wherever its bind pose left it, often at the model's origin between the feet, and would otherwise block or catch the picture.
+- **Where it stops.** The picture ends where the surface turns more than about 66 degrees from the view, since a projected picture smears past that. The cut runs through triangles along that angle, so the edge is a curve, not a row of whole triangles.
+- **The material.** A copy of the material the picture lands on most, at `materials/grimoire/decal/<model>/<name>.vmat`, with the frames as its color texture. Every other texture the part reads through its UVs is replaced by its average color, because the decal has UVs of its own and the part's detail would land in the wrong place. So a picture is lit like the part but has no surface relief.
+- **Cut-outs.** If any frame has transparent pixels, the material gets `F_ALPHA_TEST` and the frames' alpha cuts the picture out. Opaque frames take the part's usual color alpha instead, which on an opaque `pbr.vfx` material is a packed mask.
+- **Frames.** `--columns`, `--rows`, `--fps` and `--rows-follow time|health|speed` work as for a flipbook, and one frame is a still picture. Each frame keeps a two-texel border of its own edge so filtering does not pull in its neighbour.
+- **Several decals.** Pass the previous addon ahead of the base game with `--vpk`, then merge the addons in order. A later decal does not land on an earlier one, and sits half an offset higher for each, so overlapping pictures do not flicker.
+
+A copied draw call must keep the type flags of the one it copies. `kv3::insert_array_element_adding` writes an inserted string plain, and the engine then refuses the model: `Tried to load resource reference ... from a value without a resource reference specific type`, followed by the ERROR placeholder in game. `insert_array_element_adding_flagged` takes the flags to write. `append_skinned_draw_call` and `set_draw_call_groups` still insert through the plain variant.
+
+Limits: placement is in the bind pose, so a box drawn over an arm follows that arm, not what the arm covers in an idle pose. A draw call that reads more than one vertex stream cannot take a picture. A 16-bit index buffer caps a part at 65535 vertices including the copies. Material groups do not know the decal's material, so it shows with every skin of the model.
+
+Verified in game on Abrams in the hideout: eight pictures on the back, chest, coat sides and sleeves, time frames, health rows, a cut-out still picture, over an installed coat skin. Not yet seen in a live match, and only on this model.
+
+![Decals on Abrams' back, coat side and chest](screenshots/decal/abrams.png)
+
 ## Moo and density
 
 `trippy-skin --style moo --scale 1.5` and `trippy-preview --style moo --scale 1.5` use the same procedural cow-print sampler. Moo has smaller asymmetric patches, narrow white gaps and antialiasing tied to output resolution. Custom palettes retain their two-to-four color roles.

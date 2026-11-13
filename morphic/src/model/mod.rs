@@ -13,6 +13,7 @@
 //! `.glb` writer (M5) build on the [`Model`] this returns.
 
 mod animation;
+mod decal;
 mod dxgi;
 mod edit;
 mod femodel;
@@ -33,11 +34,13 @@ pub use variant::{DrawMaterialOverride, ModelVariant};
 mod tests;
 
 pub use animation::{BoneTrack, Clip};
+pub use decal::{append_projected_decal, DecalOptions, DecalProjection, DecalReport, DepthMap};
 pub use edit::{
     apply_edited_glb, build_mesh_buffers, build_mesh_buffers_from_glb,
     build_mesh_buffers_to_layout, export_buffer_for_edit, read_edited_mesh, read_edited_primitives,
-    read_vertex_colors, read_vertex_positions, recolor_vertex_buffer, replace_vertex_positions,
-    reskin_vertex_buffer, vertex_targets, EditedPrimitive, EncodedMesh, VertexTarget,
+    read_vertex_colors, read_vertex_positions, recolor_vertex_buffer, remap_material_uvs,
+    replace_vertex_positions, reskin_vertex_buffer, vertex_targets, EditedPrimitive, EncodedMesh,
+    UvRemapReport, VertexTarget,
 };
 pub use femodel::{
     decode_cloth_anchors, decode_fe_model, ClothAnchors, FeBox, FeCapsule, FeCollisionTree,

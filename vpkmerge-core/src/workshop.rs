@@ -6,6 +6,10 @@ use morphic::kv3::{Seg, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::vmat_style::{patch_vmat_params, VmatEdit};
+
+pub mod decal;
+pub mod flipbook;
+
 const DASH_STAMP_PATH: &str = "materials/grimoire/movement/dash_stamp.vtex";
 const PARRY_SHIELD_PATH: &str = "materials/grimoire/movement/parry_shield.vtex";
 const PARRY_STUN_PATH: &str = "materials/grimoire/movement/parry_stun.vtex";

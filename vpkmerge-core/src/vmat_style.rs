@@ -288,12 +288,11 @@ fn constant_expression(edit: &VmatEdit) -> Option<Result<VmatEdit>> {
 fn render_attrs(root: &Value) -> Vec<String> {
     root.get("m_renderAttributesUsed")
         .and_then(Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Replace an existing dynamic-expression blob in a blob-bearing `.vmat_c`
@@ -526,12 +525,11 @@ pub fn patch_vmat_params(bytes: &[u8], edits: &[VmatEdit]) -> Result<(Vec<u8>, V
         let registered: Vec<String> = root
             .get("m_renderAttributesUsed")
             .and_then(Value::as_array)
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str().map(str::to_ascii_lowercase))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         for attr in pending_attrs {
             if attribute_edit_failed(&stats, attr) {
                 continue;
@@ -732,12 +730,11 @@ fn material_expressions(root: &Value) -> Vec<(String, String)> {
     let attrs: Vec<String> = root
         .get("m_renderAttributesUsed")
         .and_then(Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
 
     let mut out = Vec::new();
     for table in ["m_dynamicParams", "m_dynamicTextureParams"] {

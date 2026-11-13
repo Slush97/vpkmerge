@@ -15,7 +15,8 @@ use crate::resource::Resource;
 use super::dxgi::DxgiFormat;
 use super::glb;
 use super::mesh::{
-    assemble_to_layout, assemble_vertex_buffer, AssembledBuffer, EmbeddedMesh, VertexBuffer,
+    assemble_to_layout, assemble_vertex_buffer, AssembledBuffer, EmbeddedMesh, SceneObject,
+    VertexBuffer,
 };
 use super::vbib::{BufferDesc, InputLayoutField};
 
@@ -567,6 +568,230 @@ pub fn reskin_vertex_buffer(
     Ok((out, changed))
 }
 
+/// What [`remap_material_uvs`] found and changed.
+#[derive(Debug, Clone, Default)]
+pub struct UvRemapReport {
+    /// Vertex buffers rewritten, across every mesh and LOD.
+    pub buffers: usize,
+    /// Vertices whose first UV set was transformed. Zero when no draw call uses
+    /// the material.
+    pub vertices: usize,
+    /// UV islands moved back into the unit square by whole tiles first.
+    pub islands_moved: usize,
+    /// Lower bound of the material's UVs after that move, before the transform.
+    pub uv_min: [f32; 2],
+    /// Upper bound of the material's UVs after that move, before the transform.
+    /// Above 1 where an island is wider than a tile or straddles a tile edge.
+    pub uv_max: [f32; 2],
+}
+
+/// Applies `transform` to the first UV set (`TEXCOORD` 0) of every vertex drawn
+/// with the material named `material` (the draw call's `.vmat` path), in every
+/// mesh and LOD.
+///
+/// With `wrap_islands`, each UV island outside the unit square is first moved
+/// back into it by whole tiles, which samples the same texels on a wrapping
+/// texture. An island wider than a tile, or one that straddles a tile edge,
+/// still ends past 1; [`UvRemapReport::uv_max`] says how far.
+///
+/// Nothing else changes: an uncompressed buffer is patched in place, a meshopt
+/// one is stored uncompressed (as [`recolor_vertex_buffer`] does). An identity
+/// `transform` without `wrap_islands` leaves the bytes as they were, so the
+/// call also serves as a read of the material's UV bounds.
+///
+/// Errors if a vertex is shared with a draw call of another material, since its
+/// UV cannot serve both.
+#[allow(clippy::too_many_lines)]
+pub fn remap_material_uvs(
+    vmdl_bytes: &[u8],
+    material: &str,
+    wrap_islands: bool,
+    transform: impl Fn([f32; 2]) -> [f32; 2],
+) -> Result<(Vec<u8>, UvRemapReport), DecodeError> {
+    let mut report = UvRemapReport {
+        uv_min: [f32::INFINITY; 2],
+        uv_max: [f32::NEG_INFINITY; 2],
+        ..UvRemapReport::default()
+    };
+
+    // Which vertices of which buffer block the matching draws use, and their
+    // triangles. Indices and block numbers survive the rewrites below, so this
+    // is planned once.
+    let mut plan: Vec<(usize, Vec<bool>, Vec<u32>)> = Vec::new();
+    {
+        let (resource, embedded) = parse_embedded(vmdl_bytes)?;
+        for em in &embedded {
+            if em.vbib_block.is_some() {
+                return Err(DecodeError::Model("legacy VBIB meshes are not supported"));
+            }
+            let mdat_bytes = resource
+                .get_block_by_index(em.data_block)
+                .ok_or(DecodeError::Model("MDAT block index out of range"))?;
+            let mdat = crate::kv3::decode(mdat_bytes)?;
+            let mut index_buffers = Vec::with_capacity(em.index_buffers.len());
+            for desc in &em.index_buffers {
+                let raw = resource
+                    .get_block_by_index(desc.block_index)
+                    .ok_or(DecodeError::Model("MIDX block index out of range"))?;
+                index_buffers.push(desc.decode(raw, false)?);
+            }
+            // Per vertex buffer: 1 = a matching draw uses it, 2 = another does.
+            let mut marks: Vec<Vec<u8>> = em
+                .vertex_buffers
+                .iter()
+                .map(|d| vec![0u8; d.element_count])
+                .collect();
+            let mut triangles: Vec<Vec<u32>> = vec![Vec::new(); em.vertex_buffers.len()];
+            for so in SceneObject::parse_all(&mdat)? {
+                for dc in &so.draw_calls {
+                    let hit = dc.material == material;
+                    let ib = index_buffers
+                        .get(dc.index_buffer)
+                        .ok_or(DecodeError::Model("draw call index buffer out of range"))?;
+                    let indices =
+                        ib.read_indices(dc.start_index, dc.index_count, dc.base_vertex)?;
+                    for &vb in &dc.vertex_buffers {
+                        let Some(desc) = em.vertex_buffers.get(vb) else {
+                            continue;
+                        };
+                        if uv_field(&desc.fields).is_none() {
+                            continue;
+                        }
+                        for &i in &indices {
+                            let slot = marks[vb]
+                                .get_mut(i as usize)
+                                .ok_or(DecodeError::Model("draw call index past vertex buffer"))?;
+                            *slot |= if hit { 1 } else { 2 };
+                        }
+                        if hit {
+                            triangles[vb].extend_from_slice(&indices);
+                        }
+                    }
+                }
+            }
+            for (vb, m) in marks.into_iter().enumerate() {
+                if m.contains(&3) {
+                    return Err(DecodeError::Model(
+                        "a vertex is shared between the target material and another",
+                    ));
+                }
+                if m.contains(&1) {
+                    plan.push((
+                        em.vertex_buffers[vb].block_index,
+                        m.into_iter().map(|v| v == 1).collect(),
+                        std::mem::take(&mut triangles[vb]),
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut out = vmdl_bytes.to_vec();
+    for (block_index, selected, triangles) in plan {
+        let (resource, embedded) = parse_embedded(&out)?;
+        let desc = find_vertex_buffer(&embedded, block_index)
+            .ok_or(DecodeError::Model("no vertex buffer at that block index"))?;
+        if desc.zstd {
+            return Err(DecodeError::Model("ZSTD vertex buffers not supported"));
+        }
+        let block_offset = resource
+            .blocks()
+            .get(block_index)
+            .ok_or(DecodeError::Model("MVTX block index out of range"))?
+            .offset as usize;
+        let raw = resource
+            .get_block_by_index(block_index)
+            .ok_or(DecodeError::Model("MVTX block index out of range"))?;
+        let mut on_disk = desc.decode(raw, true)?;
+        let attr = uv_field(&on_disk.fields)
+            .ok_or(DecodeError::Model("vertex buffer lost its TEXCOORD"))?
+            .clone();
+        let mut uvs = on_disk.vector2(&attr)?;
+        if wrap_islands {
+            report.islands_moved += wrap_islands_into_unit_square(&mut uvs, &triangles);
+        }
+        for (uv, &sel) in uvs.iter_mut().zip(&selected) {
+            if sel {
+                report.uv_min = [report.uv_min[0].min(uv[0]), report.uv_min[1].min(uv[1])];
+                report.uv_max = [report.uv_max[0].max(uv[0]), report.uv_max[1].max(uv[1])];
+                *uv = transform(*uv);
+                report.vertices += 1;
+            }
+        }
+        on_disk.write_vector2(&attr, &uvs)?;
+        report.buffers += 1;
+
+        if desc.meshopt {
+            out = convert_meshopt_to_uncompressed(&out, block_index, &on_disk.data)?;
+        } else {
+            out.get_mut(block_offset..block_offset + on_disk.data.len())
+                .ok_or(DecodeError::Model("uncompressed block past end of file"))?
+                .copy_from_slice(&on_disk.data);
+        }
+    }
+    Ok((out, report))
+}
+
+/// Moves every UV island of `triangles` (index triples into `uvs`) so its lower
+/// corner lands in the unit square, by a whole number of tiles. Returns how
+/// many islands moved. An island is a set of triangles connected through
+/// shared vertices; vertices no triangle uses are left alone.
+fn wrap_islands_into_unit_square(uvs: &mut [[f32; 2]], triangles: &[u32]) -> usize {
+    fn find(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            parent[i as usize] = parent[parent[i as usize] as usize];
+            i = parent[i as usize];
+        }
+        i
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let mut parent: Vec<u32> = (0..uvs.len() as u32).collect();
+    for tri in triangles.as_chunks::<3>().0 {
+        let a = find(&mut parent, tri[0]);
+        for &v in &tri[1..] {
+            let b = find(&mut parent, v);
+            parent[b as usize] = a;
+        }
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let roots: Vec<u32> = (0..uvs.len() as u32)
+        .map(|i| find(&mut parent, i))
+        .collect();
+    let mut used = vec![false; uvs.len()];
+    for &i in triangles {
+        used[i as usize] = true;
+    }
+    let mut min: std::collections::HashMap<u32, [f32; 2]> = std::collections::HashMap::new();
+    for (i, uv) in uvs.iter().enumerate() {
+        if used[i] {
+            let m = min.entry(roots[i]).or_insert([f32::INFINITY; 2]);
+            m[0] = m[0].min(uv[0]);
+            m[1] = m[1].min(uv[1]);
+        }
+    }
+    let mut moved = 0;
+    for m in min.values_mut() {
+        *m = [(m[0] + 1e-4).floor(), (m[1] + 1e-4).floor()];
+        if *m != [0.0, 0.0] {
+            moved += 1;
+        }
+    }
+    for (i, uv) in uvs.iter_mut().enumerate() {
+        if used[i] {
+            let shift = min[&roots[i]];
+            uv[0] -= shift[0];
+            uv[1] -= shift[1];
+        }
+    }
+    moved
+}
+
+pub(super) fn uv_field(fields: &[InputLayoutField]) -> Option<&InputLayoutField> {
+    fields
+        .iter()
+        .find(|f| f.semantic_name == "TEXCOORD" && f.semantic_index == 0)
+}
+
 /// Converts the meshopt vertex buffer at `block_index` into an uncompressed one
 /// carrying `raw` (its decoded, edited interleaved bytes): splices the raw bytes
 /// as the block and flips `m_bMeshoptCompressed` to false for that buffer in the
@@ -734,30 +959,20 @@ fn read_primitive(
         .read_positions()
         .ok_or(DecodeError::Model("edited glb primitive has no POSITION"))?
         .collect();
-    let normals: Vec<[f32; 3]> = reader
-        .read_normals()
-        .map(Iterator::collect)
-        .unwrap_or_default();
-    let tangents: Vec<[f32; 4]> = reader
-        .read_tangents()
-        .map(Iterator::collect)
-        .unwrap_or_default();
+    let normals: Vec<[f32; 3]> = reader.read_normals().map_or_default(Iterator::collect);
+    let tangents: Vec<[f32; 4]> = reader.read_tangents().map_or_default(Iterator::collect);
     let uv: Vec<[f32; 2]> = reader
         .read_tex_coords(0)
-        .map(|t| t.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|t| t.into_f32().collect());
     let colors0: Vec<[f32; 4]> = reader
         .read_colors(0)
-        .map(|c| c.into_rgba_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|c| c.into_rgba_f32().collect());
     let joints: Vec<[u16; 4]> = reader
         .read_joints(0)
-        .map(|j| j.into_u16().collect())
-        .unwrap_or_default();
+        .map_or_default(|j| j.into_u16().collect());
     let weights: Vec<[f32; 4]> = reader
         .read_weights(0)
-        .map(|w| w.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|w| w.into_f32().collect());
     let indices: Vec<u32> = reader
         .read_indices()
         .ok_or(DecodeError::Model("edited glb primitive has no indices"))?
@@ -893,6 +1108,38 @@ mod tests {
             ..Default::default()
         };
         (vb, vec![0, 1, 2, 0, 2, 3])
+    }
+
+    /// An island one tile to the left moves back whole, an island in the unit
+    /// square stays, and a vertex no triangle uses is not touched.
+    #[test]
+    fn wrap_islands_moves_whole_islands_by_whole_tiles() {
+        let mut uvs = vec![
+            // Island A, one tile left and two tiles down.
+            [-0.75, 2.25],
+            [-0.25, 2.25],
+            [-0.5, 2.75],
+            // Island B, already inside.
+            [0.25, 0.25],
+            [0.5, 0.25],
+            [0.25, 0.5],
+            // Unused vertex.
+            [-3.0, -3.0],
+        ];
+        let moved = wrap_islands_into_unit_square(&mut uvs, &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(moved, 1);
+        assert_eq!(&uvs[..3], &[[0.25, 0.25], [0.75, 0.25], [0.5, 0.75]]);
+        assert_eq!(&uvs[3..6], &[[0.25, 0.25], [0.5, 0.25], [0.25, 0.5]]);
+        assert_eq!(uvs[6], [-3.0, -3.0]);
+    }
+
+    /// An island that straddles a tile edge moves so its lower corner is inside;
+    /// the rest keeps running past 1, which the caller reads from the bounds.
+    #[test]
+    fn wrap_islands_keeps_a_straddling_island_in_one_piece() {
+        let mut uvs = vec![[-0.5, 0.0], [0.25, 0.0], [0.0, 0.5]];
+        assert_eq!(wrap_islands_into_unit_square(&mut uvs, &[0, 1, 2]), 1);
+        assert_eq!(uvs, vec![[0.5, 0.0], [1.25, 0.0], [1.0, 0.5]]);
     }
 
     /// `to_edit_glb` then `read_edited_positions` recovers the exact positions,

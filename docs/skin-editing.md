@@ -31,6 +31,58 @@ Glow expressions can also read the hero: `$ent_health` is the health fraction (0
 ![Rainbow glow on Vyper](screenshots/area-edits/glow-rainbow-vyper.png)
 ![Glow reading hero health: green at full, red below half](screenshots/area-edits/glow-health.png)
 
+## Flipbooks
+
+`workshop flipbook --model <VMDL> --entry <VMAT> --frames <DIR> --columns C --rows R --fps F` makes one part of a model play a grid of frames, like a GIF.
+
+`pbr.vfx` adds `fract(g_vAlbedoScrollSpeed1 * t)` to the UV of the color, tint mask and alt color textures, where `t` is the game time, rounded to steps of `g_flAlbedoScrollQuantize1` seconds when that is not zero. A texture that holds a grid of frames, a mesh whose UVs cover one cell, and a scroll of one cell per step therefore step the part through the frames. The command writes all three changes into one addon:
+
+- the model: the part's first UV set shrinks onto one cell. UV islands outside the unit square come back by whole tiles first. An island wider than a tile, or one that straddles a tile edge, makes every cell hold that much more of the texture (Abrams' coat reaches u = 1.08), which costs resolution;
+- the textures: every texture the part samples through those UVs becomes a grid at `materials/grimoire/flipbook/<material>/<slot>.vtex`, so a texture shared with another material keeps its original. Flat textures are left alone;
+- the material: the scroll speed and step, and the new texture paths.
+
+The shader scrolls the whole color texture, so the frames in `--frames` are whole-part overlays: PNGs in the part's UV space, laid over the color texture by their alpha, in file name order. A picture that changes in one spot is the same part painted once per cell.
+
+`--rows-follow` picks what the grid's rows mean:
+
+- `time` (default): every cell is a time frame, `columns * rows` of them. Only static material values; each column sits a fraction of a cell lower than the one before, because one clock moves both axes.
+- `health`: columns are time frames and each row is a state, the first at full health and the last near death.
+- `speed`: the first row standing still, the last at `--full-speed` units per second.
+
+The driven rows use dynamic expressions on the scroll speed. The shader multiplies the speed by the game time, so the expression divides the wanted offset by `$ent_gametime`, which is the same clock. `time()` is not: it counts from engine start, and a formula built on it lands on the wrong frame until the two clocks' ratio nears 1.
+
+`--keep-detail-maps` leaves the normal, ambient occlusion and self-illumination textures untouched and scales their lookups back up with `F_ENABLE_TEXTURE_TRANSFORMS` (`g_vNormalTexcoordScale1` and its siblings). The addon is about a third smaller and the part keeps its surface detail. It needs the material's shader variant with texture transforms to exist. Those transforms cannot replace the model patch: the shader computes its transform uniforms once when the material loads, so an expression on `g_vAlbedoTexcoordOffset1` picks one frame and stays there.
+
+Limits: cells share the texture, so 8 x 4 frames in a 4096 texture leave 512 x 1024 per frame (`--max-texture 8192` loads in game). A part has one flipbook; running the command on its own output is refused. A part whose vertices are shared with another material is refused. Material groups that swap the part's material see the shrunk UVs with their own textures. For a second part of the same model, pass the first addon ahead of the base game with `--vpk` and merge the two addons.
+
+Verified in game on Abrams (coat, shirt, pants, book, gun) in the hideout: time frames, health rows, speed rows, `--keep-detail-maps` and an 8192 texture. Not yet seen in a live match.
+
+![A 16-frame flipbook stepping on Abrams' coat](screenshots/flipbook/time-steps.png)
+![Rows that follow speed: standing, walking, standing](screenshots/flipbook/speed-rows.png)
+
+## Decals
+
+`workshop decal --model <VMDL> --frames <DIR> --name <NAME> --view front|back|left|right --rect L,T,R,B` puts a picture, still or animated, on a model as a piece of mesh of its own.
+
+A flipbook repaints a whole part once per frame, so one small picture costs the part's textures times the frame count. A decal copies only the surface under the picture into a new draw call with its own material, so its texture holds the picture's frames and nothing else. Eight animated pictures on Abrams, 32 frames each, make a 53 MB addon; four as flipbooks made 394 MB at lower sharpness. The part underneath keeps its material, textures and UVs, so an installed skin for the hero still shows around the pictures.
+
+- **Placement.** The picture is fitted into the box `--rect`, given as fractions of the model's outline from `--view` and measured from the top-left corner, keeping its shape. It lands on the surface that view shows there, in the model's bind pose. `--preview <PNG>` draws the model from that view with the first frame in place, without building anything.
+- **The model.** The triangles under the picture are copied, trimmed to the picture's edge, lifted `--offset` units off the surface and appended to the vertex and index buffers their part already draws from, as one more draw call per part and level of detail. Each copied vertex keeps its parent's stored bytes apart from position and UV, so it is skinned like the surface and follows the animation. Existing vertices, indices and draw calls keep their bytes; both buffers are stored uncompressed afterwards.
+- **One mesh.** Per level of detail the picture goes on the mesh that holds most of it, and only that mesh can hide parts of it. A weapon or prop sits wherever its bind pose left it, often at the model's origin between the feet, and would otherwise block or catch the picture.
+- **Where it stops.** The picture ends where the surface turns more than about 66 degrees from the view, since a projected picture smears past that. The cut runs through triangles along that angle, so the edge is a curve, not a row of whole triangles.
+- **The material.** A copy of the material the picture lands on most, at `materials/grimoire/decal/<model>/<name>.vmat`, with the frames as its color texture. Every other texture the part reads through its UVs is replaced by its average color, because the decal has UVs of its own and the part's detail would land in the wrong place. So a picture is lit like the part but has no surface relief.
+- **Cut-outs.** If any frame has transparent pixels, the material gets `F_ALPHA_TEST` and the frames' alpha cuts the picture out. Opaque frames take the part's usual color alpha instead, which on an opaque `pbr.vfx` material is a packed mask.
+- **Frames.** `--columns`, `--rows`, `--fps` and `--rows-follow time|health|speed` work as for a flipbook, and one frame is a still picture. Each frame keeps a two-texel border of its own edge so filtering does not pull in its neighbour.
+- **Several decals.** Pass the previous addon ahead of the base game with `--vpk`, then merge the addons in order. A later decal does not land on an earlier one, and sits half an offset higher for each, so overlapping pictures do not flicker.
+
+A copied draw call must keep the type flags of the one it copies. `kv3::insert_array_element_adding` writes an inserted string plain, and the engine then refuses the model: `Tried to load resource reference ... from a value without a resource reference specific type`, followed by the ERROR placeholder in game. `insert_array_element_adding_flagged` takes the flags to write. `append_skinned_draw_call` and `set_draw_call_groups` still insert through the plain variant.
+
+Limits: placement is in the bind pose, so a box drawn over an arm follows that arm, not what the arm covers in an idle pose. A draw call that reads more than one vertex stream cannot take a picture. A 16-bit index buffer caps a part at 65535 vertices including the copies. Material groups do not know the decal's material, so it shows with every skin of the model.
+
+Verified in game on Abrams in the hideout: eight pictures on the back, chest, coat sides and sleeves, time frames, health rows, a cut-out still picture, over an installed coat skin. Not yet seen in a live match, and only on this model.
+
+![Decals on Abrams' back, coat side and chest](screenshots/decal/abrams.png)
+
 ## Moo and density
 
 `trippy-skin --style moo --scale 1.5` and `trippy-preview --style moo --scale 1.5` use the same procedural cow-print sampler. Moo has smaller asymmetric patches, narrow white gaps and antialiasing tied to output resolution. Custom palettes retain their two-to-four color roles.

@@ -446,20 +446,17 @@ fn fe_model_from_phys(root: &Value) -> Option<FeModel> {
     let rods = fe
         .get("m_Rods")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(read_rod).collect())
-        .unwrap_or_default();
+        .map_or_default(|a| a.iter().filter_map(read_rod).collect());
 
     let capsules = fe
         .get("m_TaperedCapsuleRigids")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(read_capsule).collect())
-        .unwrap_or_default();
+        .map_or_default(|a| a.iter().filter_map(read_capsule).collect());
 
     let skel_parents = fe
         .get("m_SkelParents")
         .and_then(Value::as_array)
-        .map(|a| a.iter().map(read_i32).collect())
-        .unwrap_or_default();
+        .map_or_default(|a| a.iter().map(read_i32).collect());
 
     // Named, not silently dropped: constraint types empty on necro+dynamo (element
     // shape unverifiable until a hero ships them) -- m_Quads, m_Tris, m_Twists,
@@ -505,8 +502,7 @@ fn fe_model_from_phys(root: &Value) -> Option<FeModel> {
 fn array_map<T>(fe: &Value, key: &str, f: fn(&Value) -> Option<T>) -> Vec<T> {
     fe.get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(f).collect())
-        .unwrap_or_default()
+        .map_or_default(|a| a.iter().filter_map(f).collect())
 }
 
 /// Read the `slot`-th f32 out of an optional dynamic-slot array (missing -> 0.0).
@@ -653,8 +649,7 @@ fn read_collision_tree(fe: &Value) -> Option<FeCollisionTree> {
         parents: fe
             .get("m_TreeParents")
             .and_then(Value::as_array)
-            .map(|a| a.iter().map(as_u32).collect())
-            .unwrap_or_default(),
+            .map_or_default(|a| a.iter().map(as_u32).collect()),
         children: array_map(fe, "m_TreeChildren", read_tree_children),
         masks: masks.iter().map(as_u32).collect(),
     })
@@ -747,8 +742,7 @@ fn u32_field(fe: &Value, key: &str) -> u32 {
 fn index_array(fe: &Value, key: &str) -> Vec<usize> {
     fe.get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(as_index).collect())
-        .unwrap_or_default()
+        .map_or_default(|a| a.iter().filter_map(as_index).collect())
 }
 
 /// Walk the `m_SkelParents` node tree from `start` to its terminal (parent < 0),

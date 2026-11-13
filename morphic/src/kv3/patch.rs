@@ -23,6 +23,7 @@ use super::rewrap::{
     decompress_v5_working, is_blobbed_lz4_v5, reassemble_blobbed_v5, rewrap_uncompressed,
 };
 use super::types::Value;
+use super::ValueFlags;
 use crate::error::DecodeError;
 
 const B1: usize = 0;
@@ -567,6 +568,26 @@ pub fn insert_array_element_adding(
     index: usize,
     value: &Value,
 ) -> Result<Vec<u8>, DecodeError> {
+    insert_array_element_adding_flagged(block, array_path, index, value, &ValueFlags::new())
+}
+
+/// [`insert_array_element_adding`] for a value whose members carry semantic
+/// flags, such as a resource reference. `flags` maps paths inside `value` to
+/// the flag each member is written with; a member without an entry is written
+/// plain. A copy of an existing element takes its flags from
+/// [`decode_flagged`](super::decode_flagged), with the element's own path
+/// stripped from each key.
+///
+/// The engine refuses a resource reference stored as a plain string ("Tried to
+/// load resource reference from a value without a resource reference specific
+/// type"), so a copied draw call needs its material's flag.
+pub fn insert_array_element_adding_flagged(
+    block: &[u8],
+    array_path: &[Seg],
+    index: usize,
+    value: &Value,
+    flags: &ValueFlags,
+) -> Result<Vec<u8>, DecodeError> {
     // A block that carries (or will carry, because the inserted value holds a
     // `Value::Binary`) a binary-blob section takes the compressed v5 path: the
     // engine misreads uncompressed blob framing (stale LZ4 frame table; the
@@ -574,7 +595,7 @@ pub fn insert_array_element_adding(
     // must stay in the native LZ4 form.
     let has_blobs = block.len() >= 60 && i32_at(block, 56)? != 0;
     if has_blobs || value_contains_blob(value) {
-        return insert_array_element_blob_aware(block, array_path, index, value);
+        return insert_array_element_blob_aware(block, array_path, index, value, flags);
     }
 
     let out = rewrap_uncompressed(block)?;
@@ -608,7 +629,7 @@ pub fn insert_array_element_adding(
             ));
         }
     }
-    let encoded = encode_insert_value(value, version, &strings, include_root_type)?;
+    let encoded = encode_insert_value(value, version, &strings, include_root_type, flags)?;
 
     match version {
         5 => rebuild_v5_with_insert(&with_strings, &site, &encoded),
@@ -697,6 +718,7 @@ fn insert_array_element_blob_aware(
     array_path: &[Seg],
     index: usize,
     value: &Value,
+    flags: &ValueFlags,
 ) -> Result<Vec<u8>, DecodeError> {
     const HEADER: usize = 120;
     if block.len() < HEADER {
@@ -743,7 +765,7 @@ fn insert_array_element_blob_aware(
             ));
         }
     }
-    let encoded = encode_insert_value(value, 5, &strings, include_root_type)?;
+    let encoded = encode_insert_value(value, 5, &strings, include_root_type, flags)?;
     let rebuilt = rebuild_v5_with_insert(&with_strings, &site, &encoded)?;
 
     finalize_blob_block(block, &rebuilt, blob_index, &encoded.blobs)
@@ -982,10 +1004,13 @@ fn encode_insert_value(
     version: u32,
     strings: &[String],
     include_root_type: bool,
+    flags: &ValueFlags,
 ) -> Result<EncodedInsert, DecodeError> {
     let mut enc = InsertEncoder {
         version,
         strings,
+        flags,
+        path: Vec::new(),
         out: EncodedInsert {
             b1: Vec::new(),
             b2: Vec::new(),
@@ -1003,6 +1028,10 @@ fn encode_insert_value(
 struct InsertEncoder<'a> {
     version: u32,
     strings: &'a [String],
+    /// Semantic flags by path inside the inserted value.
+    flags: &'a ValueFlags,
+    /// Where the encoder is inside the inserted value.
+    path: Vec<Seg>,
     out: EncodedInsert,
 }
 
@@ -1024,7 +1053,11 @@ impl InsertEncoder<'_> {
         use node::*;
         let t = value_wire_type(value);
         if include_type {
-            self.out.types.push(t);
+            // A flagged type is the type with its high bit set, then the flag.
+            match self.flags.get(&self.path).copied().unwrap_or(0) {
+                0 => self.out.types.push(t),
+                flag => self.out.types.extend_from_slice(&[t | 0x80, flag]),
+            }
         }
         match (t, value) {
             (
@@ -1058,8 +1091,10 @@ impl InsertEncoder<'_> {
                 let n = u32::try_from(items.len())
                     .map_err(|_| DecodeError::Kv3("inserted array too large"))?;
                 self.out.b4.extend_from_slice(&n.to_le_bytes());
-                for item in items {
+                for (i, item) in items.iter().enumerate() {
+                    self.path.push(Seg::Index(i));
                     self.value(item, true)?;
+                    self.path.pop();
                 }
             }
             (OBJECT, Value::Object(pairs)) => {
@@ -1074,7 +1109,9 @@ impl InsertEncoder<'_> {
                     self.out
                         .b4
                         .extend_from_slice(&self.string_id(key)?.to_le_bytes());
+                    self.path.push(Seg::Key(key.clone()));
                     self.value(child, true)?;
+                    self.path.pop();
                 }
             }
             (BINARY_BLOB, Value::Binary(bytes)) => {
@@ -3014,12 +3051,11 @@ mod tests {
         let attrs: Vec<String> = tree
             .get("m_renderAttributesUsed")
             .and_then(Value::as_array)
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str().map(str::to_string))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         let Some(Value::Binary(old)) = tree
             .get("m_dynamicParams")
             .and_then(Value::as_array)
@@ -3453,6 +3489,56 @@ mod tests {
             new_tree, expect,
             "v4 array insert should add exactly one element and preserve the rest"
         );
+    }
+
+    /// An inserted copy keeps the flags of the element it copies, here the
+    /// resource-reference flag on a material path, and no other value gains
+    /// or loses one.
+    #[test]
+    fn insert_array_element_keeps_the_flags_it_is_given() {
+        let format = crate::kv3::Format::from_payload(&gigawatt_data()).expect("format");
+        let draw = |material: &str| {
+            Value::Object(vec![
+                (
+                    "m_material".to_string(),
+                    Value::String(material.to_string()),
+                ),
+                ("m_nIndexCount".to_string(), Value::Int(300)),
+            ])
+        };
+        let tree = Value::Object(vec![(
+            "m_drawCalls".to_string(),
+            Value::Array(vec![draw("a.vmat")]),
+        )]);
+        let path = vec![Seg::Key("m_drawCalls".to_string())];
+        let material = |index: usize| {
+            vec![
+                Seg::Key("m_drawCalls".to_string()),
+                Seg::Index(index),
+                Seg::Key("m_material".to_string()),
+            ]
+        };
+        let mut flags = crate::kv3::ValueFlags::new();
+        flags.insert(material(0), 1);
+        let block = crate::kv3::encode_flagged(&tree, &format, &flags);
+
+        let mut copy_flags = crate::kv3::ValueFlags::new();
+        copy_flags.insert(vec![Seg::Key("m_material".to_string())], 1);
+        let patched =
+            insert_array_element_adding_flagged(&block, &path, 1, &draw("b.vmat"), &copy_flags)
+                .expect("flagged insert");
+        let (new_tree, new_flags) = crate::kv3::decode_flagged(&patched).expect("decode");
+        let mut expect = tree.clone();
+        insert_at_array(&mut expect, &path, 1, draw("b.vmat"));
+        assert_eq!(new_tree, expect);
+        flags.insert(material(1), 1);
+        assert_eq!(new_flags, flags);
+
+        // Without flags the copy is a plain string, as before.
+        let plain = insert_array_element_adding(&block, &path, 1, &draw("b.vmat")).expect("insert");
+        let (_, plain_flags) = crate::kv3::decode_flagged(&plain).expect("decode");
+        assert!(!plain_flags.contains_key(&material(1)));
+        assert!(plain_flags.contains_key(&material(0)));
     }
 
     fn obj(pairs: &[(&str, Value)]) -> Value {

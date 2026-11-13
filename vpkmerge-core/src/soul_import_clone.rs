@@ -1152,17 +1152,13 @@ fn read_glb_primitive(
         .ok_or_else(|| anyhow!("mesh primitive has no POSITION"))?
         .map(|p| gltf_to_source_point(transform_point4(node_world, p)))
         .collect();
-    let normals: Vec<[f32; 3]> = reader
-        .read_normals()
-        .map(|ns| {
-            ns.map(|n| normalize3(gltf_to_source_vector(transform_vector4(node_world, n))))
-                .collect()
-        })
-        .unwrap_or_default();
+    let normals: Vec<[f32; 3]> = reader.read_normals().map_or_default(|ns| {
+        ns.map(|n| normalize3(gltf_to_source_vector(transform_vector4(node_world, n))))
+            .collect()
+    });
     let texcoords: Vec<[f32; 2]> = reader
         .read_tex_coords(0)
-        .map(|t| t.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|t| t.into_f32().collect());
     let indices: Vec<u32> = reader
         .read_indices()
         .ok_or_else(|| anyhow!("mesh primitive has no indices"))?

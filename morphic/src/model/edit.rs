@@ -734,30 +734,20 @@ fn read_primitive(
         .read_positions()
         .ok_or(DecodeError::Model("edited glb primitive has no POSITION"))?
         .collect();
-    let normals: Vec<[f32; 3]> = reader
-        .read_normals()
-        .map(Iterator::collect)
-        .unwrap_or_default();
-    let tangents: Vec<[f32; 4]> = reader
-        .read_tangents()
-        .map(Iterator::collect)
-        .unwrap_or_default();
+    let normals: Vec<[f32; 3]> = reader.read_normals().map_or_default(Iterator::collect);
+    let tangents: Vec<[f32; 4]> = reader.read_tangents().map_or_default(Iterator::collect);
     let uv: Vec<[f32; 2]> = reader
         .read_tex_coords(0)
-        .map(|t| t.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|t| t.into_f32().collect());
     let colors0: Vec<[f32; 4]> = reader
         .read_colors(0)
-        .map(|c| c.into_rgba_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|c| c.into_rgba_f32().collect());
     let joints: Vec<[u16; 4]> = reader
         .read_joints(0)
-        .map(|j| j.into_u16().collect())
-        .unwrap_or_default();
+        .map_or_default(|j| j.into_u16().collect());
     let weights: Vec<[f32; 4]> = reader
         .read_weights(0)
-        .map(|w| w.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|w| w.into_f32().collect());
     let indices: Vec<u32> = reader
         .read_indices()
         .ok_or(DecodeError::Model("edited glb primitive has no indices"))?

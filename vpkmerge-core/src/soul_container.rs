@@ -460,14 +460,11 @@ fn extract_static_mesh(
                 .read_positions()
                 .ok_or_else(|| anyhow!("mesh primitive has no POSITION"))?
                 .collect();
-            let local_normals: Vec<[f32; 3]> = reader
-                .read_normals()
-                .map(Iterator::collect)
-                .unwrap_or_default();
+            let local_normals: Vec<[f32; 3]> =
+                reader.read_normals().map_or_default(Iterator::collect);
             let local_uvs: Vec<[f32; 2]> = reader
                 .read_tex_coords(0)
-                .map(|u| u.into_f32().collect())
-                .unwrap_or_default();
+                .map_or_default(|u| u.into_f32().collect());
             let indices: Vec<u32> = reader.read_indices().map_or_else(
                 || (0..u32::try_from(local_positions.len()).unwrap_or(0)).collect(),
                 |i| i.into_u32().collect(),

@@ -502,6 +502,65 @@ impl OnDiskBuffer {
         Ok(())
     }
 
+    /// Overwrites the first two components of the `attr` lane (a `TEXCOORD`
+    /// attribute) in-place with `uvs`, leaving every other interleaved byte
+    /// untouched. Covers the two-component formats [`vector2`] reads, apart from
+    /// the 8-bit one (too coarse to carry a remapped UV).
+    ///
+    /// [`vector2`]: Self::vector2
+    pub fn write_vector2(
+        &mut self,
+        attr: &InputLayoutField,
+        uvs: &[[f32; 2]],
+    ) -> Result<(), DecodeError> {
+        if uvs.len() != self.element_count {
+            return Err(DecodeError::Model(
+                "uv count does not match vertex count (topology change not supported)",
+            ));
+        }
+        let offset = attr.offset;
+        let stride = self.element_size;
+        for (i, uv) in uvs.iter().enumerate() {
+            let o = i * stride + offset;
+            match attr.format {
+                DxgiFormat::R32G32Float
+                | DxgiFormat::R32G32B32Float
+                | DxgiFormat::R32G32B32A32Float => {
+                    self.write_at(o, &uv[0].to_le_bytes())?;
+                    self.write_at(o + 4, &uv[1].to_le_bytes())?;
+                }
+                DxgiFormat::R16G16Float | DxgiFormat::R16G16B16A16Float => {
+                    for (k, &v) in uv.iter().enumerate() {
+                        let bits = half::f16::from_f32(v).to_bits().to_le_bytes();
+                        self.write_at(o + k * 2, &bits)?;
+                    }
+                }
+                DxgiFormat::R16G16Unorm | DxgiFormat::R16G16B16A16Unorm => {
+                    for (k, &v) in uv.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let q = (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+                        self.write_at(o + k * 2, &q.to_le_bytes())?;
+                    }
+                }
+                DxgiFormat::R16G16Snorm => {
+                    for (k, &v) in uv.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                        self.write_at(o + k * 2, &q.to_le_bytes())?;
+                    }
+                }
+                _ => {
+                    return Err(DecodeError::ModelAttributeFormat {
+                        semantic: attr.semantic_name.clone(),
+                        index: attr.semantic_index,
+                        format: attr.format.id(),
+                    })
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Copies `bytes` into `self.data` at `o`, erroring if it would run past the
     /// buffer. The shared bounds-checked write under [`write_colors`].
     fn write_at(&mut self, o: usize, bytes: &[u8]) -> Result<(), DecodeError> {
@@ -1031,6 +1090,76 @@ mod tests {
                 "post-bytes"
             );
         }
+    }
+
+    /// `write_vector2` overwrites only the UV lane, in each format it supports,
+    /// and the values read back through `vector2` within the format's quantum.
+    #[test]
+    fn write_vector2_touches_only_the_uv_lane() {
+        for (format, width, quantum) in [
+            (DxgiFormat::R32G32Float, 8usize, 0.0f32),
+            (DxgiFormat::R16G16Float, 4, 1.0 / 1024.0),
+            (DxgiFormat::R16G16Unorm, 4, 1.0 / 65535.0),
+        ] {
+            let stride = 16usize;
+            let mut data = vec![0u8; 2 * stride];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_add(1);
+            }
+            let uv = InputLayoutField {
+                semantic_name: "TEXCOORD".to_string(),
+                semantic_index: 0,
+                format,
+                offset: 4,
+            };
+            let mut buf = OnDiskBuffer {
+                data: data.clone(),
+                element_count: 2,
+                element_size: stride,
+                fields: vec![uv.clone()],
+            };
+            let new = [[0.125f32, 0.75], [0.03125, 0.5]];
+            buf.write_vector2(&uv, &new).expect("write uvs");
+            for (got, want) in buf.vector2(&uv).expect("read uvs").iter().zip(&new) {
+                for k in 0..2 {
+                    assert!(
+                        (got[k] - want[k]).abs() <= quantum,
+                        "{format:?}: {got:?} vs {want:?}"
+                    );
+                }
+            }
+            for v in 0..2 {
+                let base = v * stride;
+                assert_eq!(
+                    &buf.data[base..base + 4],
+                    &data[base..base + 4],
+                    "pre-bytes"
+                );
+                assert_eq!(
+                    &buf.data[base + 4 + width..base + stride],
+                    &data[base + 4 + width..base + stride],
+                    "post-bytes"
+                );
+            }
+        }
+    }
+
+    /// `write_vector2` rejects a count that does not match the vertex count.
+    #[test]
+    fn write_vector2_rejects_count_mismatch() {
+        let uv = InputLayoutField {
+            semantic_name: "TEXCOORD".to_string(),
+            semantic_index: 0,
+            format: DxgiFormat::R32G32Float,
+            offset: 0,
+        };
+        let mut buf = OnDiskBuffer {
+            data: vec![0u8; 8],
+            element_count: 1,
+            element_size: 8,
+            fields: vec![uv.clone()],
+        };
+        assert!(buf.write_vector2(&uv, &[[0.0; 2], [0.0; 2]]).is_err());
     }
 
     /// `write_colors` rejects a count that does not match the vertex count.

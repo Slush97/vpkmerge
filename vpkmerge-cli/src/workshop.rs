@@ -96,6 +96,52 @@ enum WorkshopCommand {
         #[arg(long)]
         encode_vpk: PathBuf,
     },
+    /// Play a grid of frames on one part of a model, like a GIF.
+    ///
+    /// The frames are PNGs in the part's UV space, laid over its color texture by their alpha.
+    /// The addon patches the model (the part's UVs move onto one cell of the grid), the material
+    /// and the part's textures. For a second part of the same model, pass the first addon ahead
+    /// of the base game with --vpk and merge the two addons.
+    Flipbook {
+        /// Source VPKs in highest-priority-first order, including base game fallback.
+        #[arg(long, required = true)]
+        vpk: Vec<PathBuf>,
+        /// The model that draws the part, e.g. `models/heroes_wip/abrams/abrams.vmdl_c`.
+        #[arg(long)]
+        model: String,
+        /// The part's material.
+        #[arg(long)]
+        entry: String,
+        /// Folder of frame PNGs, played in file name order: columns x rows of them.
+        #[arg(long)]
+        frames: PathBuf,
+        /// Cells across: 1, 2, 4, 8 or 16.
+        #[arg(long)]
+        columns: u32,
+        /// Cells down: 1, 2, 4, 8 or 16.
+        #[arg(long, default_value_t = 1)]
+        rows: u32,
+        /// Time frames per second.
+        #[arg(long, default_value_t = 8.0)]
+        fps: f64,
+        /// What picks the row. `time`: every cell is a time frame. `health`: each row is a
+        /// state, the first at full health and the last near death. `speed`: the first row
+        /// standing still, the last at --full-speed.
+        #[arg(long, value_parser = ["time", "health", "speed"], default_value = "time")]
+        rows_follow: String,
+        /// With `--rows-follow speed`: units per second that reach the last row.
+        #[arg(long, default_value_t = 400.0)]
+        full_speed: f64,
+        /// Largest edge of a grid texture, a power of two from 256 to 8192.
+        #[arg(long, default_value_t = 4096)]
+        max_texture: u32,
+        /// Keep the normal, ambient occlusion and glow textures as they are (smaller addon,
+        /// sharper surface). Uses the shader's texture transforms.
+        #[arg(long)]
+        keep_detail_maps: bool,
+        #[arg(long)]
+        encode_vpk: PathBuf,
+    },
     /// Set transparency while separating opacity from an opaque part's packed metalness.
     ///
     /// Ghost is an experimental research recipe and is not supported by the skin editor.
@@ -228,6 +274,69 @@ pub fn run(args: WorkshopArgs) -> Result<()> {
                 mask.as_deref(),
                 &encode_vpk,
             )
+        }
+        WorkshopCommand::Flipbook {
+            vpk,
+            model,
+            entry,
+            frames,
+            columns,
+            rows,
+            fps,
+            rows_follow,
+            full_speed,
+            max_texture,
+            keep_detail_maps,
+            encode_vpk,
+        } => {
+            use vpkmerge_core::workshop::flipbook::{
+                flipbook_material, FlipbookOptions, FlipbookRows,
+            };
+            let mut paths: Vec<PathBuf> = std::fs::read_dir(&frames)?
+                .filter_map(|file| file.ok().map(|file| file.path()))
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                })
+                .collect();
+            paths.sort();
+            let frames = paths
+                .iter()
+                .map(std::fs::read)
+                .collect::<std::io::Result<Vec<_>>>()?;
+            let report = flipbook_material(
+                &vpk,
+                &model,
+                &entry,
+                &frames,
+                &FlipbookOptions {
+                    columns,
+                    rows,
+                    fps,
+                    rows_follow: match rows_follow.as_str() {
+                        "health" => FlipbookRows::Health,
+                        "speed" => FlipbookRows::Speed { full: full_speed },
+                        _ => FlipbookRows::Time,
+                    },
+                    max_texture,
+                    keep_detail_maps,
+                },
+                &encode_vpk,
+            )?;
+            println!(
+                "{} vertices moved onto one of {columns} x {rows} cells ({:.2} x {:.2} tiles per cell)",
+                report.vertices, report.cell_extent[0], report.cell_extent[1]
+            );
+            for texture in &report.textures {
+                println!(
+                    "  {} {}x{}  {}",
+                    texture.slots.join("+"),
+                    texture.width,
+                    texture.height,
+                    texture.path
+                );
+            }
+            Ok(())
         }
         WorkshopCommand::Surface {
             vpk,

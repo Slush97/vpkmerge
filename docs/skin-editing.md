@@ -31,6 +31,35 @@ Glow expressions can also read the hero: `$ent_health` is the health fraction (0
 ![Rainbow glow on Vyper](screenshots/area-edits/glow-rainbow-vyper.png)
 ![Glow reading hero health: green at full, red below half](screenshots/area-edits/glow-health.png)
 
+## Flipbooks
+
+`workshop flipbook --model <VMDL> --entry <VMAT> --frames <DIR> --columns C --rows R --fps F` makes one part of a model play a grid of frames, like a GIF.
+
+`pbr.vfx` adds `fract(g_vAlbedoScrollSpeed1 * t)` to the UV of the color, tint mask and alt color textures, where `t` is the game time, rounded to steps of `g_flAlbedoScrollQuantize1` seconds when that is not zero. A texture that holds a grid of frames, a mesh whose UVs cover one cell, and a scroll of one cell per step therefore step the part through the frames. The command writes all three changes into one addon:
+
+- the model: the part's first UV set shrinks onto one cell. UV islands outside the unit square come back by whole tiles first. An island wider than a tile, or one that straddles a tile edge, makes every cell hold that much more of the texture (Abrams' coat reaches u = 1.08), which costs resolution;
+- the textures: every texture the part samples through those UVs becomes a grid at `materials/grimoire/flipbook/<material>/<slot>.vtex`, so a texture shared with another material keeps its original. Flat textures are left alone;
+- the material: the scroll speed and step, and the new texture paths.
+
+The shader scrolls the whole color texture, so the frames in `--frames` are whole-part overlays: PNGs in the part's UV space, laid over the color texture by their alpha, in file name order. A picture that changes in one spot is the same part painted once per cell.
+
+`--rows-follow` picks what the grid's rows mean:
+
+- `time` (default): every cell is a time frame, `columns * rows` of them. Only static material values; each column sits a fraction of a cell lower than the one before, because one clock moves both axes.
+- `health`: columns are time frames and each row is a state, the first at full health and the last near death.
+- `speed`: the first row standing still, the last at `--full-speed` units per second.
+
+The driven rows use dynamic expressions on the scroll speed. The shader multiplies the speed by the game time, so the expression divides the wanted offset by `$ent_gametime`, which is the same clock. `time()` is not: it counts from engine start, and a formula built on it lands on the wrong frame until the two clocks' ratio nears 1.
+
+`--keep-detail-maps` leaves the normal, ambient occlusion and self-illumination textures untouched and scales their lookups back up with `F_ENABLE_TEXTURE_TRANSFORMS` (`g_vNormalTexcoordScale1` and its siblings). The addon is about a third smaller and the part keeps its surface detail. It needs the material's shader variant with texture transforms to exist. Those transforms cannot replace the model patch: the shader computes its transform uniforms once when the material loads, so an expression on `g_vAlbedoTexcoordOffset1` picks one frame and stays there.
+
+Limits: cells share the texture, so 8 x 4 frames in a 4096 texture leave 512 x 1024 per frame (`--max-texture 8192` loads in game). A part has one flipbook; running the command on its own output is refused. A part whose vertices are shared with another material is refused. Material groups that swap the part's material see the shrunk UVs with their own textures. For a second part of the same model, pass the first addon ahead of the base game with `--vpk` and merge the two addons.
+
+Verified in game on Abrams (coat, shirt, pants, book, gun) in the hideout: time frames, health rows, speed rows, `--keep-detail-maps` and an 8192 texture. Not yet seen in a live match.
+
+![A 16-frame flipbook stepping on Abrams' coat](screenshots/flipbook/time-steps.png)
+![Rows that follow speed: standing, walking, standing](screenshots/flipbook/speed-rows.png)
+
 ## Moo and density
 
 `trippy-skin --style moo --scale 1.5` and `trippy-preview --style moo --scale 1.5` use the same procedural cow-print sampler. Moo has smaller asymmetric patches, narrow white gaps and antialiasing tied to output resolution. Custom palettes retain their two-to-four color roles.

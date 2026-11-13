@@ -2321,8 +2321,7 @@ fn run_model_live_materials(m: &ModelLiveMaterialsArgs) -> Result<()> {
         first
             .localized_name
             .as_deref()
-            .map(|s| format!(" ({s})"))
-            .unwrap_or_default(),
+            .map_or_default(|s| format!(" ({s})")),
         first.model_entry,
         materials.len()
     );
@@ -5677,7 +5676,7 @@ fn run_recolor_qa(args: &RecolorQaCmd) -> Result<()> {
             ];
             for (label, findings) in sections {
                 for f in findings {
-                    let suggest = f.suggest.map(|s| format!(" -> {s}")).unwrap_or_default();
+                    let suggest = f.suggest.map_or_default(|s| format!(" -> {s}"));
                     println!(
                         "  {label:<9} {:<13} {}{suggest}\n            {}",
                         f.kind, f.entry, f.detail

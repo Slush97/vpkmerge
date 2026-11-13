@@ -1377,7 +1377,7 @@ fn combine_primitive_sources(
                 [1.0, 0.0, 0.0, 1.0],
             );
         }
-        for channel in 0..max_texcoords {
+        for (channel, target) in out.texcoords.iter_mut().enumerate().take(max_texcoords) {
             let fallback = source
                 .vb
                 .texcoords
@@ -1391,16 +1391,16 @@ fn combine_primitive_sources(
                 .get(channel)
                 .filter(|uv| uv.len() == count)
             {
-                out.texcoords[channel].extend_from_slice(values);
+                target.extend_from_slice(values);
             } else {
-                out.texcoords[channel].extend(std::iter::repeat_n(fallback, count));
+                target.extend(std::iter::repeat_n(fallback, count));
             }
         }
-        for channel in 0..max_colors {
+        for (channel, target) in out.colors.iter_mut().enumerate().take(max_colors) {
             if let Some(values) = source.vb.colors.get(channel).filter(|c| c.len() == count) {
-                out.colors[channel].extend_from_slice(values);
+                target.extend_from_slice(values);
             } else {
-                out.colors[channel].extend(std::iter::repeat_n([1.0; 4], count));
+                target.extend(std::iter::repeat_n([1.0; 4], count));
             }
         }
         if any_joints {
@@ -1722,7 +1722,7 @@ fn material_of(dc: &Value) -> &str {
 fn vertex_buffers_of(dc: &Value) -> Vec<usize> {
     dc.get("m_vertexBuffers")
         .and_then(Value::as_array)
-        .map(|buffers| {
+        .map_or_default(|buffers| {
             buffers
                 .iter()
                 .filter_map(|b| {
@@ -1732,7 +1732,6 @@ fn vertex_buffers_of(dc: &Value) -> Vec<usize> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Reads an unsigned draw-call field, defaulting to 0 when absent (the value is

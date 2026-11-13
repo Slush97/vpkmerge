@@ -746,7 +746,7 @@ fn wrap_islands_into_unit_square(uvs: &mut [[f32; 2]], triangles: &[u32]) -> usi
     }
     #[allow(clippy::cast_possible_truncation)]
     let mut parent: Vec<u32> = (0..uvs.len() as u32).collect();
-    for tri in triangles.chunks_exact(3) {
+    for tri in triangles.as_chunks::<3>().0 {
         let a = find(&mut parent, tri[0]);
         for &v in &tri[1..] {
             let b = find(&mut parent, v);
@@ -959,30 +959,20 @@ fn read_primitive(
         .read_positions()
         .ok_or(DecodeError::Model("edited glb primitive has no POSITION"))?
         .collect();
-    let normals: Vec<[f32; 3]> = reader
-        .read_normals()
-        .map(Iterator::collect)
-        .unwrap_or_default();
-    let tangents: Vec<[f32; 4]> = reader
-        .read_tangents()
-        .map(Iterator::collect)
-        .unwrap_or_default();
+    let normals: Vec<[f32; 3]> = reader.read_normals().map_or_default(Iterator::collect);
+    let tangents: Vec<[f32; 4]> = reader.read_tangents().map_or_default(Iterator::collect);
     let uv: Vec<[f32; 2]> = reader
         .read_tex_coords(0)
-        .map(|t| t.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|t| t.into_f32().collect());
     let colors0: Vec<[f32; 4]> = reader
         .read_colors(0)
-        .map(|c| c.into_rgba_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|c| c.into_rgba_f32().collect());
     let joints: Vec<[u16; 4]> = reader
         .read_joints(0)
-        .map(|j| j.into_u16().collect())
-        .unwrap_or_default();
+        .map_or_default(|j| j.into_u16().collect());
     let weights: Vec<[f32; 4]> = reader
         .read_weights(0)
-        .map(|w| w.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|w| w.into_f32().collect());
     let indices: Vec<u32> = reader
         .read_indices()
         .ok_or(DecodeError::Model("edited glb primitive has no indices"))?

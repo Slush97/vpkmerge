@@ -156,8 +156,7 @@ pub fn recipe_for(codename: &str) -> Option<HeroRecolorRecipe> {
         r.shared_entries = SHARED_ENTRIES
             .iter()
             .find(|(c, _)| *c == r.codename)
-            .map(|(_, entries)| entries.iter().map(|s| (*s).to_string()).collect())
-            .unwrap_or_default();
+            .map_or_default(|(_, entries)| entries.iter().map(|s| (*s).to_string()).collect());
         r
     })
 }
@@ -4204,8 +4203,7 @@ fn resource_refs(bytes: &[u8]) -> Vec<String> {
         .ok()
         .and_then(|r| r.find_block(*b"RERL").map(morphic::resource::read_rerl))
         .and_then(Result::ok)
-        .map(|refs| refs.into_iter().map(|(_, n)| format!("{n}_c")).collect())
-        .unwrap_or_default()
+        .map_or_default(|refs| refs.into_iter().map(|(_, n)| format!("{n}_c")).collect())
 }
 
 #[cfg(test)]

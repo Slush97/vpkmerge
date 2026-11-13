@@ -1274,7 +1274,7 @@ pub fn audit_heroes(
 ) -> Result<QaRun> {
     let roster_pak = base.unwrap_or(vpk.as_ref());
     let unpinned_selectable = crate::localization::build_hero_roster(roster_pak, None, "english")
-        .map(|roster| {
+        .map_or_default(|roster| {
             roster
                 .into_iter()
                 .filter(|h| h.selectable)
@@ -1285,8 +1285,7 @@ pub fn audit_heroes(
                 })
                 .map(|h| format!("{} ({})", h.codename, h.name))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     let heroes = audit_pinned(vpk.as_ref(), base, codenames, probe_hue)?;
     Ok(QaRun {
         heroes,
@@ -1833,8 +1832,7 @@ fn audit_hero(
     let body_materials: BTreeSet<String> = hero
         .body_model
         .as_deref()
-        .map(|m| model_materials(vpks, m))
-        .unwrap_or_default();
+        .map_or_default(|m| model_materials(vpks, m));
     let skin_textures: BTreeSet<String> = body_materials
         .iter()
         .filter_map(|m| load_material(m))

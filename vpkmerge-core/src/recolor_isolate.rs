@@ -88,9 +88,7 @@ pub(crate) fn isolate(
         if !(entry.ends_with(".vpcf_c") || entry.ends_with(".vmat_c")) {
             return BTreeSet::new();
         }
-        current(entry)
-            .map(|b| refs(&b).into_iter().filter(|r| shared(r)).collect())
-            .unwrap_or_default()
+        current(entry).map_or_default(|b| refs(&b).into_iter().filter(|r| shared(r)).collect())
     };
 
     let mut referrer_refs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

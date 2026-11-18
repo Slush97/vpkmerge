@@ -200,12 +200,11 @@ fn build_segments(anim: &Value, channels: &[Channel]) -> Vec<Option<Segment>> {
     let decoder_names: Vec<&str> = anim
         .get("m_decoderArray")
         .and_then(Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .map(|d| d.get("m_szName").and_then(Value::as_str).unwrap_or(""))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
 
     let Some(seg_arr) = anim.get("m_segmentArray").and_then(Value::as_array) else {
         return Vec::new();

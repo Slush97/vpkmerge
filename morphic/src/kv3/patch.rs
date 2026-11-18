@@ -3014,12 +3014,11 @@ mod tests {
         let attrs: Vec<String> = tree
             .get("m_renderAttributesUsed")
             .and_then(Value::as_array)
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str().map(str::to_string))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         let Some(Value::Binary(old)) = tree
             .get("m_dynamicParams")
             .and_then(Value::as_array)

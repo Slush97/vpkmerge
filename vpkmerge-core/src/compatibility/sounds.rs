@@ -33,6 +33,10 @@ pub(super) fn repair(
     let (Some(authored), Some(stock)) = (metadata(&old.value), metadata(&current.value)) else {
         return Ok(None);
     };
+    // Props and effect models ship no game data, so the game binds no sounds.
+    if stock.trim().is_empty() {
+        return Ok(None);
+    }
     let stock_doc = document(stock)?;
     let Some(settings) = binding(&stock_doc)? else {
         return Ok(None);

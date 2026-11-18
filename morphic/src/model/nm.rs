@@ -338,12 +338,11 @@ fn nm_clip_from_value(data: &Value) -> Result<NmClip, DecodeError> {
     let compressed_pose_offsets = data
         .get("m_compressedPoseOffsets")
         .and_then(Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(|v| v.as_uint().map(|u| u as u32))
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        });
 
     let tracks = decode_frames(
         &settings,

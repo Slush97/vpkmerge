@@ -766,16 +766,13 @@ pub fn live_hero_materials(
     let mut out = Vec::with_capacity(by_material.len());
     for (material, (vertex_count, meshes)) in by_material {
         let (material_source, parsed, textures) = inspect_material_full(&vpks, has_base, &material);
-        let feature_flags = parsed
-            .as_ref()
-            .map(|mat| {
-                mat.int_params
-                    .iter()
-                    .filter(|(name, value)| name.starts_with("F_") && **value != 0)
-                    .map(|(name, value)| (name.clone(), *value))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let feature_flags = parsed.as_ref().map_or_default(|mat| {
+            mat.int_params
+                .iter()
+                .filter(|(name, value)| name.starts_with("F_") && **value != 0)
+                .map(|(name, value)| (name.clone(), *value))
+                .collect()
+        });
         let shader_name = parsed
             .as_ref()
             .and_then(|mat| (!mat.shader_name.is_empty()).then(|| mat.shader_name.clone()));

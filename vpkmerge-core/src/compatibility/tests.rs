@@ -370,16 +370,16 @@ fn sound_binding_repairs_preserve_authored_metadata_and_require_valid_game_table
     ] {
         assert!(sounds::repair(&model(authored), &stock, &mut game)?.is_none());
     }
-    let bare = resource(
+    let empty = resource(
         &object(&[(
             "m_modelInfo",
             object(&[("m_keyValueText", Value::String(String::new()))]),
         )]),
         &ValueFlags::new(),
     );
-    assert!(sounds::repair(&bare, &bare, &mut game)?.is_none());
-    assert!(sounds::repair(&source, &bare, &mut game)?.is_none());
-    assert!(sounds::repair(&bare, &stock, &mut game).is_err());
+    assert!(sounds::repair(&empty, &empty, &mut game)?.is_none());
+    assert!(sounds::repair(&source, &empty, &mut game)?.is_none());
+    assert!(sounds::repair(&empty, &stock, &mut game).is_err());
     for invalid in [
         "TaggedSoundSettings_t = {} TaggedSoundSettings_t = {}",
         "broken = [ 1 2 ]",

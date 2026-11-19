@@ -1,0 +1,211 @@
+﻿11/05 20:39:17 [RenderSystem] Creating render device for graphics adapter 0 'NVIDIA GeForce RTX 5070 Ti' [VendorId 0x10DE / DeviceId 0x2C05]: 32767.65535.65535.65535
+11/05 20:39:17 Disable asynchronous shader creation because of an old driver that might crash.
+11/05 20:39:18 [ResourceCompilerSystem] ExecutablePath: Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\bin\win64
+11/05 20:39:18 [ResourceCompilerSystem] ModGameSubdir: citadel
+11/05 20:39:18 [ResourceCompilerSystem] Search Paths:
+11/05 20:39:18 [Filesystem] ---------------
+11/05 20:39:18 [Filesystem] Path ID:             File Path:
+11/05 20:39:18 [Filesystem] ADDONS               "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\" 
+11/05 20:39:18 [Filesystem] CONTENT              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel_addons\benchmark_0919032c9cc5475a\" 
+11/05 20:39:18 [Filesystem] CONTENT              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel\" 
+11/05 20:39:18 [Filesystem] CONTENT              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\core\" 
+11/05 20:39:18 [Filesystem] CONTENTADDONS        "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel_addons\" 
+11/05 20:39:18 [Filesystem] CONTENTROOT          "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\" 
+11/05 20:39:18 [Filesystem] DEFAULT_WRITE_PATH   "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\" 
+11/05 20:39:18 [Filesystem] DEFAULT_WRITE_PATH   "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk
+11/05 20:39:18 [Filesystem] DEFAULT_WRITE_PATH   "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\" 
+11/05 20:39:18 [Filesystem] EXECUTABLE_PATH      "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\bin\win64\" 
+11/05 20:39:18 [Filesystem] EXECUTABLE_PATH      "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\bin\" 
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\" 
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\shaders_pc.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\shaders_pc.vpk
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\shaders_pc.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\shaders_pc.vpk
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\" 
+11/05 20:39:18 [Filesystem] GAME                 "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\" 
+11/05 20:39:18 [Filesystem] GAMEBIN              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\bin\win64\" 
+11/05 20:39:18 [Filesystem] GAMEBIN              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\bin\" 
+11/05 20:39:18 [Filesystem] GAMEBIN              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\bin\win64\" 
+11/05 20:39:18 [Filesystem] GAMEBIN              "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\bin\" 
+11/05 20:39:18 [Filesystem] GAMEROOT             "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\" 
+11/05 20:39:18 [Filesystem] LOCAL                "" 
+11/05 20:39:18 [Filesystem] MOD                  "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\pak01.vpk
+11/05 20:39:18 [Filesystem] MOD                  "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk
+11/05 20:39:18 [Filesystem] MOD                  "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel\" 
+11/05 20:39:18 [Filesystem] MOD                  "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\" 
+11/05 20:39:18 [Filesystem] OFFICIAL_ADDONS      "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_community_addons\" 
+11/05 20:39:18 [Filesystem] PLATFORM             "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk" (vpk) Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\pak01.vpk
+11/05 20:39:18 [Filesystem] PLATFORM             "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\core\" 
+11/05 20:39:18 [Filesystem] SHADER_SOURCE        "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\shaders\citadel\" 
+11/05 20:39:18 [Filesystem] SHADER_SOURCE        "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\shaders\core\" 
+11/05 20:39:18 [Filesystem] SHADER_SOURCE        "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\shaders\citadel_community_addons\" 
+11/05 20:39:18 [Filesystem] SHADER_SOURCE_MOD    "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\shaders\citadel\" 
+11/05 20:39:18 [Filesystem] SHADER_SOURCE_ROOT   "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\shaders\" 
+11/05 20:39:18 [ResourceCompilerSystem] ---------------
+11/05 20:39:18 [ResourceCompilerSystem] Found 1 file(s) matching nonrecursive specification "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vmap"
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vmap" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "Z:/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16.vmap"
+11/05 20:39:18 [ResourceCompilerSystem] Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vmap:
+11/05 20:39:18 [ResourceSystem] Failed loading resource "materials/tools/handle_generic_aligned.vmat_c" (ERROR_FILEOPEN: File not found)
+11/05 20:39:18 [ResourceSystem] Failed loading resource "materials/tools/handle_generic_aligned_translucent.vmat_c" (ERROR_FILEOPEN: File not found)
+11/05 20:39:18 [SteamAudio] Initialized Embree v4.04.00.
+11/05 20:39:18 [Hammer] Settling physics objects...
+11/05 20:39:18 [Hammer] no objects to settle
+11/05 20:39:18 [LightMapper] Preprocessing Lights [0....1....2....3....4....5....6....7....8....9....] Done (0.01 seconds)
+11/05 20:39:18  - Next resource strong-references: particles/environmental/campus_fireflies_01.vpcf)
+11/05 20:39:18  - Next resource strong-references: particles/environment/plaza_fog_01_.vpcf)
+11/05 20:39:18  - Next resource strong-references: _bakeresourcecache/maps/dl_benchmark_lab_16_baked/env_cubemap_37.vtex)
+11/05 20:39:18  - Next resource strong-references: particles/hideout/hideout_fireplace_fire_noshadows.vpcf)
+11/05 20:39:18  - Next resource strong-references: particles/environment/industrial_smoke_stack_thin.vpcf)
+11/05 20:39:18  - Next resource strong-references: _bakeresourcecache/maps/dl_benchmark_lab_16_baked/env_light_probe_volume_37.vtex)
+11/05 20:39:18  - Next resource strong-references: particles/endgame/endgame_amber_barrel_fire.vpcf)
+11/05 20:39:18  - Next resource strong-references: materials/tools/toolsskybox.vmat)
+11/05 20:39:18  - Next resource strong-references: materials/dev/default_sky.vmat)
+11/05 20:39:18  - Next resource strong-references: particles/environmental/street_light_glow_01.vpcf)
+11/05 20:39:18  - Next resource strong-references: particles/environment/street_steam_02.vpcf)
+11/05 20:39:18  - Next resource strong-references: materials/dev/reflectivity_30.vmat)
+11/05 20:39:18  - Next resource strong-references: particles/environment/fan_wind.vpcf)
+11/05 20:39:18  - Next resource strong-references: particles/environment/candle_flame.vpcf)
+11/05 20:39:18  - Next resource strong-references: particles/environmental/storm_glow_01.vpcf)
+11/05 20:39:18 [MapBuilderSystem] Building map "maps\dl_benchmark_lab_16"...
+11/05 20:39:18 [MapBuilderSystem] 
+
+... Building 'world'
+11/05 20:39:18 [WorldRendererBuilder] Loading Map...
+11/05 20:39:18 [WorldRendererBuilder] Done (0.00 seconds)                    
+11/05 20:39:18 [LightMapper] Building render clusters... 2 meshes, 12 triangles... 1 clusters (0.00 seconds)
+11/05 20:39:18 [WorldRendererBuilder] Created 0+0 overlay sceneobjects for 0 meshes in 0 groups, 0 materials
+11/05 20:39:18 [WorldRendererBuilder] Created 0+0 overlay sceneobjects for 0 meshes in 0 groups, 0 materials
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl:
+11/05 20:39:18  - Next resource strong-references: materials/dev/reflectivity_30.vmat)
+11/05 20:39:18  - Next resource strong-references: materials/dev/reflectivity_30.vmat)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\worldnodes\n0_lr0_c2_s_cb_mesh.vmdl_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [WorldRendererBuilder]  Mesh Memory Stats
+11/05 20:39:18 [WorldRendererBuilder]  __________ Aggregates __________
+    |  agg | fragmt | unique | instnc | meshlt ( V, T) |                vertex |                 index |       instance stream | material
+11/05 20:39:18 [WorldRendererBuilder]     |    0 |      0 |      0 |      0 |      0 ( 0, 0) |         0 (  0 bytes) |         0 (  0 bytes) |                     - | TOTAL
+11/05 20:39:18 [WorldRendererBuilder]  __________ SceneObjects __________
+11/05 20:39:18 [WorldRendererBuilder]     | obj |                vertex |                 index | material
+11/05 20:39:18 [WorldRendererBuilder]     |   1 |        20 (480 bytes) |        30 ( 60 bytes) | materials/dev/reflectivity_30.vmat
+11/05 20:39:18 [WorldRendererBuilder]     |   0 |        20 (480 bytes) |        30 ( 60 bytes) | TOTAL
+11/05 20:39:18 [WorldRendererBuilder]  Aggregate Rejections (first failing reason per object)
+11/05 20:39:18 [WorldRendererBuilder]  __________ Rejected props (0) __________
+11/05 20:39:18 [WorldRendererBuilder]  __________ Rejected meshes (0) __________
+11/05 20:39:18 [WorldRendererBuilder]     ( run with -spew_aggregate_rejects to list the individual objects )
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\worldnodes\n0.vwnod" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "Z:/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/worldnodes/n0.vwnod"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/worldnodes/n0.vwnod)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\worldnodes\n0.vwnod:
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\worldnodes\n0.vwnod_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\entities\default_ents.vents" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "Z:/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/entities/default_ents.vents"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/entities/default_ents.vents)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\entities\default_ents.vents:
+11/05 20:39:18  - Next resource weak-references: particles/environment/plaza_fog_01_.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/street_steam_02.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/industrial_smoke_stack_thin.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/candle_flame.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/endgame/endgame_amber_barrel_fire.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/hideout/hideout_fireplace_fire_noshadows.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environmental/campus_fireflies_01.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environmental/street_light_glow_01.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/fan_wind.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environmental/storm_glow_01.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/plaza_fog_01_.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/street_steam_02.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/industrial_smoke_stack_thin.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/environment/candle_flame.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/endgame/endgame_amber_barrel_fire.vpcf)
+11/05 20:39:18  - Next resource weak-references: particles/hideout/hideout_fireplace_fire_noshadows.vpcf)
+11/05 20:39:18  - Next resource weak-references: materials/dev/default_sky.vmat)
+11/05 20:39:18  - Next resource weak-references: _bakeresourcecache/maps/dl_benchmark_lab_16_baked/env_light_probe_volume_37.vtex)
+11/05 20:39:18  - Next resource weak-references: maps/dl_benchmark_lab_16/cubemaps/env_cubemap_array.vtex)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\entities\default_ents.vents_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world.vwrld" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "Z:/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/world.vwrld"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world.vwrld)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world.vwrld:
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/entities/default_ents.vents)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world.vwrld_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/worldnodes/n0.vrman" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/worldnodes/n0.vrman"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/worldnodes/n0.vrman)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/worldnodes/n0.vrman:
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/worldnodes/n0.vwnod)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\worldnodes\n0.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [MapBuilderSystem] 
+
+... Building 'phys'
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world_physics.vmdl" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "Z:/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/world_physics.vmdl"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world_physics.vmdl)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: z:\mnt\storage\csdk13-benchmark\reduced_csdk_13\content\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world_physics.vmdl:
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world_physics.vmdl_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/world_physics.vrman" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/world_physics.vrman"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world_physics.vrman)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/world_physics.vrman:
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world_physics.vmdl)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world_physics.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Split target filename "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/world.vrman" into:
+11/05 20:39:18 [ResourceCompilerSystem]   ContentRoot = "c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/"
+11/05 20:39:18 [ResourceCompilerSystem]   ModName = "citadel_addons/benchmark_0919032c9cc5475a"
+11/05 20:39:18 [ResourceCompilerSystem]   RelativePath = "maps/dl_benchmark_lab_16/world.vrman"
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world.vrman)
+11/05 20:39:18 [ResourceCompilerSystem] Handling Dependency: c:/users/steamuser/appdata/local/temp/valve/rc_mapbld_308/content/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16/world.vrman:
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world.vwrld)
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world_physics.vrman)
+11/05 20:39:18  - Next resource strong-references: maps/dl_benchmark_lab_16/world_visibility.vvis)
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16\world.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [MapBuilderSystem] --> Map build finished.
+11/05 20:39:18 [ResourceCompilerSystem]  - Wrote to: c:\users\steamuser\appdata\local\temp\valve\rc_vpk_308\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vmap_c
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] Pack dl_benchmark_lab_16.vpk (Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vpk):
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16.vmap_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/entities/default_ents.vents_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/world.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/world.vwrld_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/world_physics.vmdl_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/world_physics.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/worldnodes/n0.vrman_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/worldnodes/n0.vwnod_c
+11/05 20:39:18 [ResourceCompilerSystem]  ->  0.0MB maps/dl_benchmark_lab_16/worldnodes/n0_lr0_c2_s_cb_mesh.vmdl_c
+11/05 20:39:18 [ResourceCompilerSystem] Hashing metadata...Writing...Hashing embedded chunk (25030 bytes)
+11/05 20:39:18 Attempting to load signing keys.
+11/05 20:39:18 Couldn't load public key Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\src\devtools\bin\certificates\game\citadel/vpk.publickey.vdf, will not sign Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vpk.
+11/05 20:39:18 Not signing; keys not set.
+11/05 20:39:18 VPK: Wrote file Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vpk Length 25698 MD5 9f2487da23e0886744da4330aa9c2462 
+11/05 20:39:18 VPK: Check file Z:\mnt\storage\csdk13-benchmark\Reduced_CSDK_13\game\citadel_addons\benchmark_0919032c9cc5475a\maps\dl_benchmark_lab_16.vpk Length 25698 MD5 9f2487da23e0886744da4330aa9c2462 
+11/05 20:39:18 [ResourceCompilerSystem]  Done.
+11/05 20:39:18 [ResourceCompilerSystem] 
+11/05 20:39:18 [ResourceCompilerSystem] -----------------------------------------------------------------
+11/05 20:39:18 [ResourceCompilerSystem]  OK: 9 compiled, 0 failed, 0 skipped, 0m:01s
+11/05 20:39:18 [ResourceCompilerSystem] -----------------------------------------------------------------

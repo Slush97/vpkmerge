@@ -1,0 +1,11 @@
+{
+  "community_guide": "https://deadlockmodding.pages.dev/modding-tools/csdk-13",
+  "source_url": "https://mega.nz/file/EZJHQBiR#eD92_uB8LgCzRInhfrrt-Yfm9tWT3aoAs42bR2ahixo",
+  "archive": "Reduced_CSDK_13.7z",
+  "archive_bytes": 1688801661,
+  "sha256": "32c64c4e3a6e3f17ed92e89e8941e2f0034696900d762e1370f682780f888386",
+  "archive_test": "7z t: Everything is Ok",
+  "extracted_bytes": 5712310040,
+  "extraction_root": "/mnt/storage/csdk13-benchmark",
+  "retrieved_date": "2026-11-05"
+}

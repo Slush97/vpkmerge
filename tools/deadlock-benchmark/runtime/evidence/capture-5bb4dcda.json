@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "run_id": "5bb4dcda75644533897896341bbd095c",
+  "recorded_utc": "2026-11-08T03:59:24.059156+00:00",
+  "configuration_hash": "399741947240fe6952e6c28e6c0a5f8d231d42b3680a328bd512f59d9a021bcf",
+  "runtime_result": "completed",
+  "capture_status": "captured",
+  "raw_frame_rows": 46659,
+  "raw_sha256": "9d62b3660de7ec4630ab2a1d3d742ececbbb827e160e1aab3461d0af2713f378",
+  "metric_version": "1.1",
+  "diagnostic_metrics": {
+    "frame_count": 46658,
+    "duration_seconds": 184.33334918999998,
+    "average_fps": 253.11751891356175,
+    "one_percent_low_fps": 58.348151608583635,
+    "one_percent_sample_count": 467,
+    "p95_frame_time_ms": 6.70384,
+    "p99_frame_time_ms": 8.48081,
+    "maximum_frame_time_ms": 1306.25
+  },
+  "metric_scope": "entire capture after first event, INCLUDING loading, setup and warm-up; NOT measured passes",
+  "measurement_valid": false,
+  "comparison_eligible": false,
+  "limitations": [
+    "client/capture clock alignment is unverified",
+    "presentation/display semantics are unverified",
+    "recorder overhead has not been measured",
+    "scenario cast and pose differences remain"
+  ],
+  "ledger": "/home/esoc/.cache/deadlock-benchmark-capture-tests/grimoire-benchmark-ui-Q8T6jt/benchmark/ledger.sqlite3",
+  "readable_export": "/home/esoc/.cache/deadlock-benchmark-capture-tests/grimoire-benchmark-ui-Q8T6jt/benchmark/reports/run-5bb4dcda.json",
+  "evidence_directory": "/home/esoc/.cache/deadlock-benchmark-capture-tests/grimoire-benchmark-ui-Q8T6jt/benchmark/session-20261107-195922-529375",
+  "artifact_integrity": "all registered artifacts verified",
+  "tests": {
+    "python": 43,
+    "grimoire": 5281,
+    "grimoire_skipped": 3,
+    "live_capture": true,
+    "automatic_shutdown": true,
+    "stop_button": true
+  },
+  "backends": {
+    "linux_mangohud_0.8.4": "live capture tested",
+    "windows_presentmon": "scaffold only",
+    "macos_metal": "scaffold only"
+  }
+}

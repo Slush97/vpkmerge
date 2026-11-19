@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "recorded_utc": "2026-11-08T06:23:00.627584+00:00",
+  "experiment_directory": "/mnt/storage/vpkmerge-benchmarks/config-comparison-20261108",
+  "report": "/mnt/storage/vpkmerge-benchmarks/config-comparison-20261108/comparison-report.html",
+  "hardware": {
+    "os": "Arch Linux",
+    "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
+    "ram": "31878044",
+    "kernel": "7.1.6-arch1-1",
+    "driver": "",
+    "cpuscheduler": "powersave"
+  },
+  "summary": {
+    "sqooky-default": {
+      "name": "Sqooky Default",
+      "independent_launches": 3,
+      "attempts": 4,
+      "failed_attempts": 1,
+      "version": "1dbf6794",
+      "upstream": {
+        "repo": "Sqooky/OptimizationLock",
+        "url": "https://github.com/Sqooky/OptimizationLock",
+        "path": "Sqooky's .gi/gameinfo.gi",
+        "license": "GPL-3.0",
+        "credit": "OptimizationLock by Sqooky and contributors",
+        "ref": "1dbf6794",
+        "refKind": "prose",
+        "commit": "1dbf67941fff4c92881119f92b548f13c5175225"
+      },
+      "gameinfo_sha256": "3528a3c1809062d2e4bca0c32cd67bb4ef1a082b27fd4dcd1bc83312b811ee8a",
+      "video_sha256": "56356fedce9108f9800d3dc19e49897bee492158a11fa09926ddca3eb2b5508b",
+      "metrics": {
+        "average_fps": {
+          "median": 297.9126401412552,
+          "min": 297.1079003465191,
+          "max": 298.40934273048225,
+          "timestamp_sensitivity_median_range": [
+            297.0967690647502,
+            299.15064527182693
+          ]
+        },
+        "one_percent_low_fps": {
+          "median": 159.34803283525565,
+          "min": 153.97968186771195,
+          "max": 161.50242977299777,
+          "timestamp_sensitivity_median_range": [
+            158.84497384261124,
+            159.94065299544545
+          ]
+        },
+        "p99_frame_time_ms": {
+          "median": 5.96313,
+          "min": 5.87922,
+          "max": 5.96836,
+          "timestamp_sensitivity_median_range": [
+            5.93545,
+            5.97782
+          ]
+        },
+        "maximum_frame_time_ms": {
+          "median": 8.35758,
+          "min": 7.84889,
+          "max": 13.563,
+          "timestamp_sensitivity_median_range": [
+            8.35758,
+            8.35758
+          ]
+        }
+      },
+      "total_observation_seconds": 77.99268888,
+      "hitch_counts": {
+        "16.666666667": 0,
+        "33.333333333": 0,
+        "50": 0,
+        "100": 0
+      }
+    },
+    "optilock-fps": {
+      "name": "Dacooder OptiLock FPS",
+      "independent_launches": 4,
+      "attempts": 4,
+      "failed_attempts": 0,
+      "version": "6.1d",
+      "upstream": {
+        "repo": "dacooderr/OptiLock",
+        "url": "https://github.com/dacooderr/OptiLock",
+        "path": "OptiLock FPS Config (Recommended)/gameinfo.gi",
+        "verbatimVideo": true,
+        "license": "GPL-3.0",
+        "credit": "OptiLock by dacooder and contributors",
+        "ref": "v6.1d",
+        "refKind": "tag",
+        "commit": "77489664c3e2367c486a81ffd62b0f3f28d3454d"
+      },
+      "gameinfo_sha256": "2195eb77f47670bf1e5e1d769fc6685d94fed30d8f614d6e92dee11265b6b299",
+      "video_sha256": "705846d39aa44032b57f8a4ff41e4c596f3d4a673a5ab9288b3749063bfa733d",
+      "metrics": {
+        "average_fps": {
+          "median": 298.65364744505587,
+          "min": 296.93259706558973,
+          "max": 301.40794548905853,
+          "timestamp_sensitivity_median_range": [
+            298.1122176078086,
+            299.40794860493133
+          ]
+        },
+        "one_percent_low_fps": {
+          "median": 161.2792011518376,
+          "min": 160.8285756254314,
+          "max": 163.33247201298093,
+          "timestamp_sensitivity_median_range": [
+            161.19921133388763,
+            161.42342692784382
+          ]
+        },
+        "p99_frame_time_ms": {
+          "median": 5.80577,
+          "min": 5.78912,
+          "max": 5.84088,
+          "timestamp_sensitivity_median_range": [
+            5.80577,
+            5.817405
+          ]
+        },
+        "maximum_frame_time_ms": {
+          "median": 7.73815,
+          "min": 7.20982,
+          "max": 7.96644,
+          "timestamp_sensitivity_median_range": [
+            7.73815,
+            7.73815
+          ]
+        }
+      },
+      "total_observation_seconds": 103.98381262000001,
+      "hitch_counts": {
+        "16.666666667": 0,
+        "33.333333333": 0,
+        "50": 0,
+        "100": 0
+      }
+    }
+  },
+  "optilock_vs_sqooky_percent": {
+    "average_fps": 0.2487330861320025,
+    "one_percent_low_fps": 1.2119185171106217
+  },
+  "runs": [
+    {
+      "index": 1,
+      "preset": "sqooky-default",
+      "run_id": "0b7888b5ba3a4ddbafe2d7cf31615143",
+      "protocol_checks_passed": false,
+      "launcher_exit_code": 1
+    },
+    {
+      "index": 2,
+      "preset": "optilock-fps",
+      "run_id": "c4bd5186190d46f9afed1ddca02ea3db",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 3,
+      "preset": "optilock-fps",
+      "run_id": "bd1b9fca22bb4242983289360643a67a",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 4,
+      "preset": "sqooky-default",
+      "run_id": "eeda1ce931a4475c8241b03a56f1c150",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 5,
+      "preset": "optilock-fps",
+      "run_id": "a8bb1a6c936b4c4799e4924ccd6c9485",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 6,
+      "preset": "sqooky-default",
+      "run_id": "6ba9a5a695cb43c59a17f22ac67f5f2e",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 7,
+      "preset": "sqooky-default",
+      "run_id": "97dd68d7d2f54245a0a8d762320f7f2e",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 8,
+      "preset": "optilock-fps",
+      "run_id": "68ce48ef4ffa4d968a229070a0237838",
+      "protocol_checks_passed": true,
+      "launcher_exit_code": 0
+    }
+  ],
+  "limitations": [
+    "Exploratory Modlock reconstruction, not original replay or live match performance.",
+    "Approximate phase mapping from server wall marker and MangoHud filename second; sensitivity is not a guaranteed error bound.",
+    "Same display/render scale/cap/aspect controls, but author visual-quality and camera settings otherwise differ.",
+    "Sqooky supplies no sibling video.txt in the selected preset; baseline video options remain. OptiLock supplies its own video options. This is not an equal-image-quality comparison.",
+    "Grimoire filters applied, including known incompatible settings; author VPK bundles were not installed.",
+    "Four fixed attempts per preset; failures retained without FPS scores. Performance summaries are conditional on successful capture.",
+    "Both presets have had client.dll+0x17349c6 access violations across attempts; cause is unresolved and may involve the shared harness.",
+    "One Linux/Proton machine; sampled foreground checks, shared OS/driver caches.",
+    "Synthetic gunfire and inferred casts; requested/rejected/observed counts remain available per run."
+  ],
+  "crashes": [
+    {
+      "dump": "deadlock_2026_1107_215947_0_accessviolation.mdmp",
+      "sha256": "0035a2badff5140ec0bc601afd2cadc1ece32c95678b17612c7eab3a23f01cf9",
+      "exception_code": "0xc0000005",
+      "module": "client.dll",
+      "module_offset": "0x17349c6",
+      "run_id": "7056eed639f249898cf82dcd814d8636",
+      "cause": "unresolved"
+    },
+    {
+      "dump": "deadlock_2026_1107_220451_0_accessviolation.mdmp",
+      "sha256": "9c209eb2da5d5c7d0d5fc194a27fd52f493cf4348874e43240300363d7c0c3b2",
+      "exception_code": "0xc0000005",
+      "module": "client.dll",
+      "module_offset": "0x17349c6",
+      "run_id": "0b7888b5ba3a4ddbafe2d7cf31615143",
+      "cause": "unresolved"
+    }
+  ],
+  "comparison_eligible": false,
+  "measurement_valid": false
+}

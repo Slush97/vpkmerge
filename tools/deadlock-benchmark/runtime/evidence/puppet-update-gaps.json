@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "recorded_utc": "2026-11-08T05:42:58.796817+00:00",
+  "run_id": "1435bb357c1b489cb76b6c9d4174f6af",
+  "scope": "Isolated Modlock0.1.74 with corrected frame clock and update telemetry; Grimoire bundle unchanged",
+  "passes": [
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=59 hits=22 max_drift=0.0 max_tick_skew=0 game_time=96.96875 repetition=1/3",
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=59 hits=22 max_drift=0.0 max_tick_skew=0 game_time=140.984375 repetition=2/3",
+    "[replay-fight-probe] REPLAY PROBE BENCH END requested_casts=88 rejected_casts=3 observed_hero_casts=58 hits=23 max_drift=0.0 max_tick_skew=0 game_time=185 repetition=3/3"
+  ],
+  "update_summaries": [
+    "[replay-fight-probe] REPLAY PROBE update_summary pass=warmup simulation_gaps=2 wall_gaps_over_50ms=0 max_simulation_gap_ms=62.5 max_wall_gap_ms=39 scope=lead_in_and_playback",
+    "[replay-fight-probe] REPLAY PROBE update_summary pass=measured simulation_gaps=0 wall_gaps_over_50ms=0 max_simulation_gap_ms=15.625 max_wall_gap_ms=22 scope=lead_in_and_playback",
+    "[replay-fight-probe] REPLAY PROBE update_summary pass=measured simulation_gaps=0 wall_gaps_over_50ms=0 max_simulation_gap_ms=15.625 max_wall_gap_ms=20 scope=lead_in_and_playback",
+    "[replay-fight-probe] REPLAY PROBE update_summary pass=measured simulation_gaps=0 wall_gaps_over_50ms=0 max_simulation_gap_ms=15.625 max_wall_gap_ms=21 scope=lead_in_and_playback"
+  ],
+  "update_gaps": [
+    "[replay-fight-probe] REPLAY PROBE update_gap pass=warmup tick=471 engine_time=26.421875 wall_time_ms=1794116370929 simulation_gap_ms=31.25 wall_gap_ms=26",
+    "[replay-fight-probe] REPLAY PROBE update_gap pass=warmup tick=1057 engine_time=35.578125 wall_time_ms=1794116380078 simulation_gap_ms=62.5 wall_gap_ms=39"
+  ],
+  "transitions": [
+    "[replay-fight-probe] REPLAY PROBE transition=restore engine_clock_pending=true wall_time_ms=1794116354600",
+    "[replay-fight-probe] REPLAY PROBE transition=restore engine_clock_pending=true wall_time_ms=1794116398565",
+    "[replay-fight-probe] REPLAY PROBE transition=restore engine_clock_pending=true wall_time_ms=1794116442581",
+    "[replay-fight-probe] REPLAY PROBE transition=restore engine_clock_pending=true wall_time_ms=1794116486597"
+  ],
+  "client_after_first20_seconds": {
+    "frames": 44503,
+    "max_frame_ms": 19.0777,
+    "over33ms": 0,
+    "phase_alignment_verified": false
+  },
+  "conclusion": "No skipped simulation updates in the three measured passes including lead-in. Two gaps during warmup. Repeated nine-second restoration and rewind occur between runs of the SAME fight, not different replay segments. Does not prove all visible stutter resolved.",
+  "limitations": [
+    "Foreground focus not continuous",
+    "Wall clock not monotonic",
+    "Capture phase alignment unverified",
+    "Detailed gap logging bounded",
+    "3 rejected casts per pass; observed cast count varies"
+  ],
+  "finalization": "Supervisor role-label conflict recovered without altering registered artifact contents or roles; integrity verified",
+  "comparison_eligible": false
+}

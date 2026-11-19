@@ -1,0 +1,8 @@
+  pEngineName: DXVK
+  pApplicationName: deadlock.exe
+  pEngineName: DXVK
+  pApplicationName: deadlock.exe
+  pEngineName: DXVK
+[Gamescope WSI] Creating swapchain for xid: 0x2400060 - oldSwapchain: (nil) - provided minImageCount: 4 - minImageCount: 4 - format: VK_FORMAT_R8G8B8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true
+[Gamescope WSI] Created swapchain for xid: 0x2400060 swapchain: 0x7fcbf8018c30 - imageCount: 4
+[Gamescope WSI] Swapchain received new refresh cycle: 16.67ms

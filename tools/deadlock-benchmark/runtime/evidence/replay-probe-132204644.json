@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-11-08T03:14:02.721648+00:00",
+  "match_id": 132204644,
+  "source_sha256": "181fe88444fdf271a4f5a3e230397ff492ddc20b3ff3465729832cdd0014c593",
+  "client_version": 6860,
+  "status": "native-playback-and-three-reconstruction-passes-completed; not-score-eligible",
+  "native_playback_tested": true,
+  "runtime_repeatability_tested": true,
+  "score_eligible": false,
+  "package": "/home/esoc/.cache/deadlock-benchmark-replay/night-shift-20261106/132204644.scenario-v7",
+  "actor_count": 12,
+  "scheduled_hero_casts": 88,
+  "selected_fight": {
+    "start_tick": 136320,
+    "measurement_start_tick": 136640,
+    "end_tick": 138560,
+    "lead_in_seconds": 5,
+    "duration_seconds": 30,
+    "anchor": [
+      -6076.625,
+      1831.8125,
+      967.34375
+    ],
+    "radius_units": 2500,
+    "combat_slots": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "local_damage_events": 937,
+    "local_damage": 26977,
+    "time_basis": "demo ticks; not the displayed match clock",
+    "source_sha256": "181fe88444fdf271a4f5a3e230397ff492ddc20b3ff3465729832cdd0014c593"
+  },
+  "planned_measured_repetitions": 3,
+  "planned_warmup_passes": 1,
+  "python_tests_passed": 33,
+  "go_vet": "passed",
+  "modlock_build": "passed",
+  "package_regeneration_identical": "17 generated source/data files identical across two fresh packaging runs; bundled scenario matches.",
+  "equivalent_duplicate_samples": 11,
+  "dead_pose_held_ticks_per_actor": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 920,
+    "10": 0,
+    "11": 0,
+    "12": 0
+  },
+  "recommended_suite": {
+    "scenes": 3,
+    "seconds_per_measured_scene": 30,
+    "measured_repetitions_per_scene": 3,
+    "warmup_passes_per_scene": 1,
+    "lead_in_seconds_per_pass": 5,
+    "estimated_total_minutes": [
+      8,
+      10
+    ],
+    "quick_single_scene_minutes": 3,
+    "note": "Duration is a starting experiment design, not an established sufficiency threshold. Extend noisy scenes and validate native playback and capture alignment before scoring."
+  },
+  "runtime_logs": "/home/esoc/.cache/deadlock-benchmark-replay/night-shift-20261106/grimoire-test-20261107/session-20261107-190924-568163",
+  "passes": [
+    {
+      "phase": "WARMUP END",
+      "requested_casts": 88,
+      "rejected_casts": 3,
+      "observed_hero_casts": 58,
+      "hits": 19,
+      "maximum_pose_difference_units": 0.0,
+      "end_game_time": 51.953125,
+      "repetition": 0
+    },
+    {
+      "phase": "BENCH END",
+      "requested_casts": 88,
+      "rejected_casts": 3,
+      "observed_hero_casts": 60,
+      "hits": 24,
+      "maximum_pose_difference_units": 1284.3,
+      "end_game_time": 95.96875,
+      "repetition": 1
+    },
+    {
+      "phase": "BENCH END",
+      "requested_casts": 88,
+      "rejected_casts": 3,
+      "observed_hero_casts": 60,
+      "hits": 22,
+      "maximum_pose_difference_units": 1284.3,
+      "end_game_time": 139.984375,
+      "repetition": 2
+    },
+    {
+      "phase": "BENCH END",
+      "requested_casts": 88,
+      "rejected_casts": 3,
+      "observed_hero_casts": 59,
+      "hits": 22,
+      "maximum_pose_difference_units": 1284.3,
+      "end_game_time": 184.0,
+      "repetition": 3
+    }
+  ],
+  "reference_playback": {
+    "success": true,
+    "seek_tick": 136320,
+    "played_beyond_tick": 138560,
+    "visual_evidence": "/home/esoc/.cache/deadlock-benchmark-replay/night-shift-20261106/native-test/fight-follow.png"
+  },
+  "runtime_limitations": [
+    "Three passes observed 60, 60, 59 hero casts for 88 inferred scheduled events (including lead-in).",
+    "Three cast attempts were rejected per pass.",
+    "Maximum sampled pose difference reached 1284.3 world units after warm-up.",
+    "Actors are restored in stable controller slots, but world state and active effects are not fully reset.",
+    "No aligned per-frame capture or valid FPS score."
+  ],
+  "launch_cleanup": "supervisor stopped server and client automatically",
+  "grimoire_ui_validation": {
+    "evidence": "/home/esoc/.cache/deadlock-benchmark-replay/night-shift-20261106/grimoire-test-20261107",
+    "launch_button": true,
+    "automatic_spectator": true,
+    "completed_passes": 3,
+    "automatic_cleanup": true,
+    "early_cancel": true,
+    "window_1920x1080_verified": true,
+    "score_eligible": false,
+    "window_2560x1440_game_settings_verified": true,
+    "warmup_cancel": true
+  }
+}

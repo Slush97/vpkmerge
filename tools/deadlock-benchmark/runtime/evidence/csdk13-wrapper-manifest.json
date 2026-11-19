@@ -1,0 +1,50 @@
+{
+  "stage": "/mnt/storage/csdk13-benchmark/Reduced_CSDK_13",
+  "addon": "benchmark_0919032c9cc5475a",
+  "archive_sha256": "32c64c4e3a6e3f17ed92e89e8941e2f0034696900d762e1370f682780f888386",
+  "cohort_sha256": {
+    "game/bin/win64/resourcecompiler.exe": "8c1acca77f87bc28e623641f684c0fbb44cb6c506287f07e697dd8bfccc08729",
+    "game/bin/win64/resourcecompiler.dll": "4de67c6c388dedef53e7366399eee0051d0847723cd513935642cfcfc7bdb993",
+    "game/bin/win64/tier0.dll": "666c9022739190d571a67161646d1a55511e130b62c3a93f8c95b47beaede433",
+    "game/bin/win64/modeldoc_utils.dll": "ec589d9e617e4b4102759b5f498d04ac51cbdc108ddd0c301c9b251ace13a3b1",
+    "game/citadel/readonly_tools_asset_info.bin": "ea477d3e091601fcbcf4e427aa44f5cc32da2fc302adec4f3c4b1eaf84ad8f0c",
+    "game/citadel/steam.inf": "cad3d46464ff89377e1323d52a18d133706693826b62252e27d0d8d975a4ca54"
+  },
+  "stage_steam_inf": "ClientVersion=6836\nServerVersion=6836\nProductName=citadel\nappID=1422450\nServerAppID=1422460\nToolsAppID=211\nSourceRevision=11193655\nVersionDate=Oct 31 2026\nVersionTime=06:55:04\n",
+  "flags": [
+    "-world",
+    "-phys",
+    "-nolightmaps",
+    "-threads",
+    "8"
+  ],
+  "runtime_compatibility": "unverified",
+  "runs": [
+    {
+      "map": "dl_benchmark_lab_0",
+      "source_sha256": "7ac4c03b8bdb8f566a9279ba20b445acb0c88226b0b63c1ab8915f566cda15ea",
+      "log": "/tmp/deadlock-benchmark-wrapper-no-override/dl_benchmark_lab_0.log",
+      "output": "/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/game/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_0.vpk",
+      "exit_code": 0,
+      "summary": [
+        "9",
+        "0"
+      ],
+      "output_sha256": "3474bdeea13d0b0c62a9ad5a87925b41933a92de382964270e8ffa38217a705a",
+      "success": true
+    },
+    {
+      "map": "dl_benchmark_lab_16",
+      "source_sha256": "4dd8a32e9aa974226eaa9ce07e7958df3ccee1a46e1d226d0091fe1d8e1026fb",
+      "log": "/tmp/deadlock-benchmark-wrapper-no-override/dl_benchmark_lab_16.log",
+      "output": "/mnt/storage/csdk13-benchmark/Reduced_CSDK_13/game/citadel_addons/benchmark_0919032c9cc5475a/maps/dl_benchmark_lab_16.vpk",
+      "exit_code": 0,
+      "summary": [
+        "9",
+        "0"
+      ],
+      "output_sha256": "66f8d541de3e2f0493cc9354b00e109d8ae9cc06f5a02b06deb4c3c483b68c37",
+      "success": true
+    }
+  ]
+}
